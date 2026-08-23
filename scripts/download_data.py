@@ -68,7 +68,11 @@ def fetch(name: str, size: int) -> tuple[str, str]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["kaggle", "competitions", "download", "-c", COMPETITION, "-f", name, "-p", str(dest.parent), "--force"]
     for attempt in range(6):
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:  # hung CLI (network stall): kill and retry
+            time.sleep(15 * (attempt + 1))
+            continue
         if r.returncode == 0:
             break
         if "429" in (r.stderr + r.stdout):  # Kaggle rate limit: back off and retry
@@ -76,7 +80,7 @@ def fetch(name: str, size: int) -> tuple[str, str]:
             continue
         return name, f"FAIL rc={r.returncode}: {r.stderr.strip()[-200:]}"
     else:
-        return name, "FAIL rate-limited (429) after 6 attempts"
+        return name, "FAIL rate-limited/timed-out after 6 attempts"
     if not dest.exists() or dest.stat().st_size != size:
         return name, f"FAIL size mismatch (have {dest.stat().st_size if dest.exists() else 'none'}, want {size})"
     return name, "ok"

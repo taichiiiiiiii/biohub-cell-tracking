@@ -246,11 +246,17 @@ def main() -> None:
     stems = sorted(p.name[: -len(".geff")] for p in args.train_dir.glob("*.geff"))
     rows = []
     intensity_rows: list[dict] = []
+    skipped: list[str] = []
     for stem in stems:
         zarr_path = args.zarr_dir / f"{stem}.zarr"
         has_zarr = zarr_path.exists()
         scale = read_scale(zarr_path) if has_zarr else DEFAULT_SCALE
-        r = stats_for_video(stem, args.train_dir / f"{stem}.geff", scale)
+        try:
+            r = stats_for_video(stem, args.train_dir / f"{stem}.geff", scale)
+        except (ValueError, KeyError, OSError) as exc:
+            skipped.append(stem)
+            print(f"{stem}: SKIP (incomplete/corrupt geff: {type(exc).__name__})")
+            continue
         rows.append(r)
         print(f"{stem}: scale={scale} nodes={r['n_nodes']} edges={r['n_edges']}")
         if has_zarr:
@@ -259,6 +265,7 @@ def main() -> None:
 
     lines = [
         "# GT statistics (Issue #5)\n",
+        f"skipped {len(skipped)} incomplete geffs: {skipped}\n" if skipped else "",
         f"5 GT graphs from `{args.train_dir}` (4 have a matching zarr in `{args.zarr_dir}`; "
         "`6bba_c328f2fd` is GT-only and its scale/volume shape are assumed identical to the other "
         "4 videos, confirmed equal amongst themselves). Scale (Z,Y,X) = "
