@@ -23,8 +23,10 @@ except ModuleNotFoundError:  # default script image lacks zarr; internet is enab
 import numpy as np
 
 INPUT = Path("/kaggle/input")
-COMP = next(p for p in INPUT.iterdir() if (p / "train").exists())
-TRAIN = COMP / "train"
+_train_dirs = sorted(INPUT.glob("*/train")) or sorted(INPUT.glob("*/*/train"))
+assert _train_dirs, f"no train dir under {INPUT}: {[str(q) for q in INPUT.rglob('*')][:20]}"
+TRAIN = _train_dirs[0]
+print("TRAIN =", TRAIN)
 RZ, RXY = 2, 12
 NEG_PER_VIDEO = 12
 RNG = np.random.default_rng(20260824)
