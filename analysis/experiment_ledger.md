@@ -158,7 +158,7 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
    - **cap 掃引（prior ランキング+border≥15 µm+sister≥7.5）**: cap50 = 0.8863（div FP 11、TP 0＝**逆効果**）／cap200 = 0.8907（**div TP 1** 入るが div FP 14・edge FP +6 で純益 +0.0017 のみ）。広く養子縁組は「ほぼ無料」ではない（採用の ~7% が div FP 化）。
    - **特徴分離度の実測（6bba_05db0fb1、候補 ~3,000 対 実 1-3）**: ①境界距離: real 28 µm vs fake med 9.8（p10=0）＝**有効**（~2-3× 削減）②娘ペア対称性 |P−midpoint(C1,C2)|/sister: real 0.35 = fake の 7.6 pctile＝**有効**（13× 削減、229/2995 残存）③orphan 初速・後方外挿: 分離せず ④**輝度（染色質凝縮仮説）: n=3 で pctile 12/63/34 とバラバラ＝分離せず**（t=24 の「暗い重心」は一般化しなかった）。
 6. **判定（中間）**: 機構は実証済・選別が未解決。幾何+トラック特徴のスタックで ~50:1 まで削減可能だが精度不足。n=1-3 での閾値調整は過学習なので、**eval_train_raw の 12 本（GT division 選抜）で特徴を再測定してから**候補ランキングを確定する。それでも足りなければ学習型 division 検出器（3D patch 分類器、train GT ~151 陽性、Kaggle GPU 学習）＝全公開 NB が div TP=0 の中の真の差別化要素。
-7. **学び（設計段階）**: n=12 の分布は暫定。全 199 geff の DL 完了後に census を更新し、しきい値は最終分布で引き直す。**「1 division = +0.017」は division 項が少数イベントの micro 平均であるため**＝復元 1 本の価値がエッジ数百本分に相当する。rewire は edge TP を壊すリスクと表裏（既存エッジが GT TP なら −1TP+1FN）。
+7. **学び（設計段階→全数確定 08-24）**: **全 199 geff census: 151 divisions / 87 動画（0.76/動画）**。形態（n=151）: d_child_min med 4.08/p90 6.86、d_child_max med 7.13/p90 10.05/max 13.53、sister med 10.57/**p10 6.36**/p90 14.36/**max 20.30** µm、t は 0〜97 全域（med 48）。n=12 暫定との差: sister の裾が両側に広い → ゲートは sister∈[5.5,21]・d_pc≤14 に改訂。44b6 系は 26 divisions/71 本、6bba 系は 125/128 本。**規模感: hidden ≈150 divisions、現行 div FP ≈0.75/動画も同規模 → 完全復元+FP 半減で division_J ~0.5 = LB +0.05**（首位との差 0.047 に相当）＝**division が本コンペの差別化軸**という E6 の作業仮説を定量確認。**「1 division = +0.017」は division 項が少数イベントの micro 平均であるため**＝復元 1 本の価値がエッジ数百本分に相当する。rewire は edge TP を壊すリスクと表裏（既存エッジが GT TP なら −1TP+1FN）。
 
 ---
 
