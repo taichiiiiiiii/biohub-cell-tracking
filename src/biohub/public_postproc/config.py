@@ -367,3 +367,20 @@ def build_config(overrides: dict[str, str] | None = None, test_dir: Path | str =
 
 def config_field_names() -> list[str]:
     return [f.name for f in fields(PostprocConfig)]
+
+
+def parse_set_overrides(pairs: list[str]) -> dict[str, str]:
+    """Parse repeated ``--set NAME=VALUE`` CLI args into a ``BIOHUB_*`` override dict.
+
+    ``NAME`` may omit the ``BIOHUB_`` prefix for brevity.
+    """
+    overrides: dict[str, str] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise SystemExit(f"--set expects NAME=VALUE, got: {pair!r}")
+        name, value = pair.split("=", 1)
+        name = name.strip()
+        if not name.startswith("BIOHUB_"):
+            name = f"BIOHUB_{name}"
+        overrides[name] = value.strip()
+    return overrides

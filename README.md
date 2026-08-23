@@ -3,10 +3,12 @@
 作業リポジトリ。運用規則は [CLAUDE.md](CLAUDE.md)、進行順は [CHECKLIST.md](CHECKLIST.md)、
 一次記録は [analysis/experiment_ledger.md](analysis/experiment_ledger.md)、教訓は [docs/LESSONS.md](docs/LESSONS.md)。
 
-## Status（2026-08-24）
+## Status（2026-08-24 02:45）
 
-環境構築済・**未提出**。ベースライン = smoke NN スターター（公開 test 4 本でローカル公式 score 0.0446、台帳 E0）。
-雑音床・hidden test 本数は未測定（Issue #2）。
+**ベースライン = base1**（公式 UNet+Transformer+ILP、`yusuketogashi/clean-approach…` の clean 再現、自称 LB 0.908）。
+自カーネル `taichiiiii/biohub-base1-clean-unet-ilp` v1 が Kaggle 実行済・ローカル公式 score **0.8890**（元 NB と TP/FP/FN 一致、台帳 E2）。**LB 未提出**（提出コマンドは user 実行が必要）。
+base2（dual-seed + harmonic、0.915 構成の再現）を実行中（E3）。後処理スタックはローカル移植済（ゲート一致）で、linefit スイープ（E5）から改善ループ開始。
+hidden ≈ train 同規模（≈200 本）・公開 test 4 本はダミー（Discussion 出典、台帳前提表）。雑音床は桁のみ（SD 0.008–0.014）。
 
 | 項目 | 値 |
 |---|---|

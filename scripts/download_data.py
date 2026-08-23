@@ -25,6 +25,7 @@ import argparse
 import csv
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -66,9 +67,16 @@ def fetch(name: str, size: int) -> tuple[str, str]:
         return name, "skip"
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["kaggle", "competitions", "download", "-c", COMPETITION, "-f", name, "-p", str(dest.parent), "--force"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
+    for attempt in range(6):
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0:
+            break
+        if "429" in (r.stderr + r.stdout):  # Kaggle rate limit: back off and retry
+            time.sleep(15 * (attempt + 1))
+            continue
         return name, f"FAIL rc={r.returncode}: {r.stderr.strip()[-200:]}"
+    else:
+        return name, "FAIL rate-limited (429) after 6 attempts"
     if not dest.exists() or dest.stat().st_size != size:
         return name, f"FAIL size mismatch (have {dest.stat().st_size if dest.exists() else 'none'}, want {size})"
     return name, "ok"

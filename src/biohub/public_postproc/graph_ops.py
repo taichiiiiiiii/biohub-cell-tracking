@@ -106,7 +106,7 @@ def motion_relink_edges(
                 cost[i, j] = motion + 0.05 * raw - cfg.MOTION_RELINK_LEARNED_BONUS * prob
         row_ind, col_ind = linear_sum_assignment(cost)
         matches: list[tuple[int, int, float, float, float]] = []
-        for r, c in zip(row_ind, col_ind):
+        for r, c in zip(row_ind, col_ind, strict=True):
             if cost[r, c] >= big:
                 continue
             matches.append((
@@ -283,7 +283,7 @@ def close_single_frame_gaps(
             cost = np.where(adaptive_allowed, d, big)
             row_ind, col_ind = linear_sum_assignment(cost)
 
-            for r, c in zip(row_ind, col_ind):
+            for r, c in zip(row_ind, col_ind, strict=True):
                 if not adaptive_allowed[r, c]:
                     continue
                 if not base_allowed[r, c]:
@@ -492,7 +492,7 @@ def recover_strict_gap2(
     next_id = next_node_id(nodes_by_id)
     frame_cache: dict[int, np.ndarray] = {}
     new_edges: list[dict[str, object]] = []
-    for _, end_id, start_id, t, _ in selected:
+    for _, end_id, start_id, _t, _ in selected:
         source = nodes_by_id[end_id]
         target = nodes_by_id[start_id]
         previous_id = end_id
@@ -583,7 +583,7 @@ def filter_short_track_components(
             component_edges.setdefault(find(source_id), []).append(edge)
 
     keep: set[int] = set()
-    for root, members in components.items():
+    for _root, members in components.items():
         has_division = any(out_count.get(node_id, 0) >= 2 for node_id in members)
         if len(members) >= cfg.OUTPUT_MIN_TRACK_LEN or (cfg.OUTPUT_KEEP_DIVISION_COMPONENTS and has_division):
             keep.update(members)

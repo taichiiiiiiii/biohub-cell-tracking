@@ -1,12 +1,23 @@
 """Orchestrates the post-processing stack, ported verbatim from the notebook's
 ``filter_output_graph`` function and the CSV-writing loop that calls it once
 per prediction ``.geff``.
+
+Also provides a checkpoint split at the linefit-smoothing boundary
+(:func:`filter_output_graph_pre_linefit` / :func:`save_prelinefit_checkpoint`
+/ :func:`run_relinefit`): the stack up to and including
+``filter_short_track_components`` fixes final graph *topology* (node/edge
+sets); ``linefit_smooth_output_graph`` only nudges node coordinates. Sweeping
+``BIOHUB_OUTPUT_LINEFIT_*`` therefore never needs to redo the expensive
+motion-relink / gap-close / safe-division passes.
 """
 from __future__ import annotations
 
+import json
+import pickle
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from biohub.io import load_geff_graph
 from biohub.public_postproc.config import PostprocConfig
@@ -21,6 +32,8 @@ from biohub.public_postproc.graph_ops import (
     motion_relink_edges,
     recover_strict_gap2,
 )
+
+CHECKPOINT_MANIFEST_NAME = "manifest.json"
 
 
 def new_stats() -> dict[str, int]:
@@ -91,13 +104,19 @@ def new_stats() -> dict[str, int]:
     }
 
 
-def filter_output_graph(
+def filter_output_graph_pre_linefit(
     cfg: PostprocConfig,
     nodes_by_id: dict[int, dict[str, object]],
     raw_edges: list[dict[str, object]],
     dataset: str | None = None,
     deepcenter_bundle: dict[str, object] | None = None,
 ) -> tuple[dict[int, dict[str, object]], list[dict[str, object]], dict[str, int]]:
+    """Everything ``filter_output_graph`` does *except* the final linefit-smoothing call.
+
+    This is the checkpoint boundary: final node/edge topology is fixed here
+    (``filter_short_track_components`` already ran); only coordinates can
+    still move.
+    """
     stats = new_stats()
     stats["raw_edges"] = len(raw_edges)
 
@@ -226,9 +245,89 @@ def filter_output_graph(
             edges = [edge for edge in edges if int(edge["source_id"]) in nodes_by_id and int(edge["target_id"]) in nodes_by_id]
 
     nodes_by_id, edges = filter_short_track_components(cfg, nodes_by_id, edges, stats)
-    nodes_by_id = linefit_smooth_output_graph(cfg, nodes_by_id, edges, stats)
 
     return nodes_by_id, edges, stats
+
+
+def filter_output_graph(
+    cfg: PostprocConfig,
+    nodes_by_id: dict[int, dict[str, object]],
+    raw_edges: list[dict[str, object]],
+    dataset: str | None = None,
+    deepcenter_bundle: dict[str, object] | None = None,
+) -> tuple[dict[int, dict[str, object]], list[dict[str, object]], dict[str, int]]:
+    nodes_by_id, edges, stats = filter_output_graph_pre_linefit(
+        cfg, nodes_by_id, raw_edges, dataset=dataset, deepcenter_bundle=deepcenter_bundle
+    )
+    nodes_by_id = linefit_smooth_output_graph(cfg, nodes_by_id, edges, stats)
+    return nodes_by_id, edges, stats
+
+
+def _load_geff_as_dicts(geff_path: Path) -> tuple[dict[int, dict[str, object]], list[dict[str, object]]]:
+    graph = load_geff_graph(geff_path)
+
+    nodes_by_id: dict[int, dict[str, object]] = {}
+    for row in graph.node_attrs().iter_rows(named=True):
+        node_id = int(row["node_id"])
+        nodes_by_id[node_id] = {
+            "node_id": node_id,
+            "t": int(row["t"]),
+            "z": float(row["z"]),
+            "y": float(row["y"]),
+            "x": float(row["x"]),
+        }
+
+    raw_edges: list[dict[str, object]] = []
+    for row in graph.edge_attrs().iter_rows(named=True):
+        edge_prob = row.get("edge_prob") if hasattr(row, "get") else None
+        raw_edges.append({
+            "source_id": int(row["source_id"]),
+            "target_id": int(row["target_id"]),
+            "edge_prob": None if edge_prob is None else float(edge_prob),
+        })
+    return nodes_by_id, raw_edges
+
+
+def _dataset_stats_row(
+    dataset: str,
+    nodes_by_id: dict[int, dict[str, object]],
+    edges: list[dict[str, object]],
+    stats: dict[str, int],
+    raw_node_count: int,
+    division_sources: dict[int, int],
+) -> dict[str, object]:
+    node_count = len(nodes_by_id)
+    edge_count = len(edges)
+    return {
+        "dataset": dataset,
+        "raw_nodes": raw_node_count,
+        "nodes": node_count,
+        "raw_edges": stats["raw_edges"],
+        "edges": edge_count,
+        "division_like_sources": sum(1 for count in division_sources.values() if count >= 2),
+        "edge_to_node_ratio": edge_count / max(node_count, 1),
+        "gap_added_nodes_frac": stats.get("gap_added_nodes", 0) / max(raw_node_count, 1),
+        **stats,
+    }
+
+
+def _finish_run(
+    writer: SubmissionCsvWriter,
+    stats_rows: list[dict[str, object]],
+    total_nodes: int,
+    total_edges: int,
+    cfg: PostprocConfig,
+    run_stats_path: Path,
+    predict_seconds: float,
+) -> pd.DataFrame:
+    assert writer.row_id == total_nodes + total_edges, "Internal row counter mismatch"
+    assert total_nodes > 0, "No node rows produced"
+
+    stats_rows_with_meta = [
+        {**row, "predict_minutes_total": predict_seconds / 60.0, "experiment_tag": cfg.EXPERIMENT_TAG}
+        for row in stats_rows
+    ]
+    return write_run_stats(stats_rows_with_meta, run_stats_path)
 
 
 def run_postproc(
@@ -260,27 +359,7 @@ def run_postproc(
 
         for geff_path in geffs:
             dataset = geff_path.stem
-            graph = load_geff_graph(geff_path)
-
-            nodes_by_id: dict[int, dict[str, object]] = {}
-            for row in graph.node_attrs().iter_rows(named=True):
-                node_id = int(row["node_id"])
-                nodes_by_id[node_id] = {
-                    "node_id": node_id,
-                    "t": int(row["t"]),
-                    "z": float(row["z"]),
-                    "y": float(row["y"]),
-                    "x": float(row["x"]),
-                }
-
-            raw_edges: list[dict[str, object]] = []
-            for row in graph.edge_attrs().iter_rows(named=True):
-                edge_prob = row.get("edge_prob") if hasattr(row, "get") else None
-                raw_edges.append({
-                    "source_id": int(row["source_id"]),
-                    "target_id": int(row["target_id"]),
-                    "edge_prob": None if edge_prob is None else float(edge_prob),
-                })
+            nodes_by_id, raw_edges = _load_geff_as_dicts(geff_path)
 
             raw_node_count = len(nodes_by_id)
             nodes_by_id, edges, filter_stats = filter_output_graph(
@@ -292,33 +371,125 @@ def run_postproc(
             writer.write_nodes(dataset, nodes_by_id)
             division_sources = writer.write_edges(dataset, nodes_by_id, edges)
 
-            node_count = len(nodes_by_id)
-            edge_count = len(edges)
-            total_nodes += node_count
-            total_edges += edge_count
-            stats_rows.append({
-                "dataset": dataset,
-                "raw_nodes": raw_node_count,
-                "nodes": node_count,
-                "raw_edges": filter_stats["raw_edges"],
-                "edges": edge_count,
-                "division_like_sources": sum(1 for count in division_sources.values() if count >= 2),
-                "edge_to_node_ratio": edge_count / max(node_count, 1),
-                "gap_added_nodes_frac": filter_stats.get("gap_added_nodes", 0) / max(raw_node_count, 1),
-                **filter_stats,
-            })
+            total_nodes += len(nodes_by_id)
+            total_edges += len(edges)
+            stats_rows.append(_dataset_stats_row(dataset, nodes_by_id, edges, filter_stats, raw_node_count, division_sources))
 
-    assert writer.row_id == total_nodes + total_edges, "Internal row counter mismatch"
-    assert total_nodes > 0, "No node rows produced"
-
-    stats_rows_with_meta = [
-        {**row, "predict_minutes_total": predict_seconds / 60.0, "experiment_tag": cfg.EXPERIMENT_TAG}
-        for row in stats_rows
-    ]
-    stats_frame = write_run_stats(stats_rows_with_meta, run_stats_path or out_csv.parent / "run_stats.csv")
+    stats_frame = _finish_run(
+        writer, stats_rows, total_nodes, total_edges, cfg, run_stats_path or out_csv.parent / "run_stats.csv", predict_seconds
+    )
 
     return {
         "datasets": [p.stem for p in geffs],
+        "total_nodes": total_nodes,
+        "total_edges": total_edges,
+        "total_rows": writer.row_id,
+        "run_stats": stats_frame,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pre-linefit checkpoint: run the expensive part once, then iterate on
+# BIOHUB_OUTPUT_LINEFIT_* (or anything else that only needs final topology +
+# coordinates) without redoing motion-relink / gap-close / safe-divisions.
+# ---------------------------------------------------------------------------
+def save_prelinefit_checkpoint(geff_dir: Path, checkpoint_dir: Path, cfg: PostprocConfig) -> dict[str, object]:
+    """Run the stack up to (excluding) linefit smoothing; pickle one file per dataset.
+
+    Each ``<dataset>.pkl`` holds ``{"dataset", "raw_node_count", "nodes_by_id",
+    "edges", "stats"}`` -- the exact ``nodes_by_id``/``edges``/``stats`` that
+    :func:`filter_output_graph_pre_linefit` returned, coordinates as the
+    float64 Python floats they already are (pickle round-trips them exactly).
+    A ``manifest.json`` records the dataset order (matches ``sorted(*.geff)``).
+    """
+    geffs = sorted(geff_dir.glob("*.geff"))
+    if not geffs:
+        raise RuntimeError(f"no *.geff files found in {geff_dir}")
+
+    deepcenter_detector = load_deepcenter_veto_detector(cfg)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    datasets: list[str] = []
+    for geff_path in geffs:
+        dataset = geff_path.stem
+        nodes_by_id, raw_edges = _load_geff_as_dicts(geff_path)
+        raw_node_count = len(nodes_by_id)
+        nodes_by_id, edges, stats = filter_output_graph_pre_linefit(
+            cfg, nodes_by_id, raw_edges, dataset=dataset, deepcenter_bundle=deepcenter_detector
+        )
+        if not nodes_by_id:
+            raise AssertionError(f"{dataset}: post-processing removed every node")
+        payload = {
+            "dataset": dataset,
+            "raw_node_count": raw_node_count,
+            "nodes_by_id": nodes_by_id,
+            "edges": edges,
+            "stats": stats,
+        }
+        with (checkpoint_dir / f"{dataset}.pkl").open("wb") as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        datasets.append(dataset)
+
+    manifest = {"geff_dir": str(geff_dir), "datasets": datasets}
+    (checkpoint_dir / CHECKPOINT_MANIFEST_NAME).write_text(json.dumps(manifest, indent=2))
+    return manifest
+
+
+def run_relinefit(
+    checkpoint_dir: Path,
+    out_csv: Path,
+    cfg: PostprocConfig,
+    run_stats_path: Path | None = None,
+    predict_seconds: float = 0.0,
+) -> dict[str, object]:
+    """Load a :func:`save_prelinefit_checkpoint` checkpoint, apply linefit smoothing, write the CSV.
+
+    ``cfg`` only needs to change ``BIOHUB_OUTPUT_LINEFIT_*`` between calls;
+    every other post-processing pass has already been baked into the
+    checkpoint and is not re-run.
+    """
+    manifest_path = checkpoint_dir / CHECKPOINT_MANIFEST_NAME
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"no {CHECKPOINT_MANIFEST_NAME} in {checkpoint_dir} (run --save-prelinefit first)")
+    manifest = json.loads(manifest_path.read_text())
+    datasets: list[str] = manifest["datasets"]
+    if not datasets:
+        raise RuntimeError(f"{manifest_path}: empty dataset list")
+
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    stats_rows: list[dict[str, object]] = []
+    total_nodes = 0
+    total_edges = 0
+
+    with out_csv.open("w", newline="") as handle:
+        writer = SubmissionCsvWriter(handle)
+
+        for dataset in datasets:
+            checkpoint_path = checkpoint_dir / f"{dataset}.pkl"
+            with checkpoint_path.open("rb") as f:
+                payload = pickle.load(f)  # noqa: S301 - our own checkpoint, not untrusted input
+
+            nodes_by_id = payload["nodes_by_id"]
+            edges = payload["edges"]
+            stats = dict(payload["stats"])  # copy: don't mutate the on-disk checkpoint's stats in memory
+
+            nodes_by_id = linefit_smooth_output_graph(cfg, nodes_by_id, edges, stats)
+
+            writer.write_nodes(dataset, nodes_by_id)
+            division_sources = writer.write_edges(dataset, nodes_by_id, edges)
+
+            total_nodes += len(nodes_by_id)
+            total_edges += len(edges)
+            stats_rows.append(
+                _dataset_stats_row(dataset, nodes_by_id, edges, stats, payload["raw_node_count"], division_sources)
+            )
+
+    stats_frame = _finish_run(
+        writer, stats_rows, total_nodes, total_edges, cfg, run_stats_path or out_csv.parent / "run_stats.csv", predict_seconds
+    )
+
+    return {
+        "datasets": datasets,
         "total_nodes": total_nodes,
         "total_edges": total_edges,
         "total_rows": writer.row_id,

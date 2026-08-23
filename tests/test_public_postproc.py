@@ -121,7 +121,9 @@ def test_linefit_smoothing_moves_points_but_not_topology(tmp_path: Path):
     node_ids_before = set(nodes)
     original_x = {nid: node["x"] for nid, node in nodes.items()}
 
-    cfg = _cfg(tmp_path, BIOHUB_OUTPUT_LINEFIT_SMOOTH="1", BIOHUB_OUTPUT_LINEFIT_WEIGHT="0.8", BIOHUB_OUTPUT_LINEFIT_WINDOW="2")
+    cfg = _cfg(
+        tmp_path, BIOHUB_OUTPUT_LINEFIT_SMOOTH="1", BIOHUB_OUTPUT_LINEFIT_WEIGHT="0.8", BIOHUB_OUTPUT_LINEFIT_WINDOW="2"
+    )
     stats: dict[str, int] = {"linefit_smoothed_nodes": 0, "linefit_skipped_nodes": 0}
 
     smoothed = linefit_smooth_output_graph(cfg, nodes, edges, stats)

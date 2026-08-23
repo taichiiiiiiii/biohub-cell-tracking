@@ -12,6 +12,16 @@ repeated ``--set NAME=VALUE``.
 
     uv run python scripts/postproc_geffs.py --geff-dir <dir> --out <csv> \\
         --set BIOHUB_GAP_CLOSE_UM=7.0 --set BIOHUB_OUTPUT_MIN_TRACK_LEN=4
+
+Checkpoint mode -- for sweeping BIOHUB_OUTPUT_LINEFIT_* without redoing the
+expensive motion-relink / gap-close / safe-division passes, run once with
+``--save-prelinefit`` (topology-only knobs must match the sweep you intend to
+run) and then use ``scripts/relinefit.py`` to iterate:
+
+    uv run python scripts/postproc_geffs.py --geff-dir <dir> \\
+        --save-prelinefit outputs/port_check/prelinefit
+    uv run python scripts/relinefit.py --prelinefit outputs/port_check/prelinefit \\
+        --out outputs/port_check/submission.csv
 """
 from __future__ import annotations
 
@@ -22,29 +32,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from biohub.public_postproc.config import build_config  # noqa: E402
-from biohub.public_postproc.pipeline import run_postproc  # noqa: E402
-
-
-def _parse_set(pairs: list[str]) -> dict[str, str]:
-    overrides: dict[str, str] = {}
-    for pair in pairs:
-        if "=" not in pair:
-            raise SystemExit(f"--set expects NAME=VALUE, got: {pair!r}")
-        name, value = pair.split("=", 1)
-        name = name.strip()
-        if not name.startswith("BIOHUB_"):
-            name = f"BIOHUB_{name}"
-        overrides[name] = value.strip()
-    return overrides
+from biohub.public_postproc.config import build_config, parse_set_overrides  # noqa: E402
+from biohub.public_postproc.pipeline import run_postproc, save_prelinefit_checkpoint  # noqa: E402
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--geff-dir", type=Path, required=True, help="directory of prediction *.geff files")
-    ap.add_argument("--test-dir", type=Path, default=ROOT / "data" / "test", help="zarr volumes for gap-refinement pixel lookups")
-    ap.add_argument("--out", type=Path, required=True, dest="out_csv", help="submission CSV to write")
+    ap.add_argument(
+        "--test-dir", type=Path, default=ROOT / "data" / "test", help="zarr volumes for gap-refinement pixel lookups"
+    )
+    ap.add_argument("--out", type=Path, default=None, dest="out_csv", help="submission CSV to write")
     ap.add_argument("--run-stats", type=Path, default=None, help="default: run_stats.csv next to --out")
+    ap.add_argument(
+        "--save-prelinefit",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="checkpoint mode: run the stack up to (excluding) linefit smoothing and pickle "
+        "one <dataset>.pkl + a manifest.json per dataset into DIR, instead of writing a CSV",
+    )
     ap.add_argument(
         "--set",
         action="append",
@@ -55,7 +62,10 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    overrides = _parse_set(args.overrides)
+    if args.save_prelinefit is None and args.out_csv is None:
+        raise SystemExit("need --out (normal mode) or --save-prelinefit DIR (checkpoint mode)")
+
+    overrides = parse_set_overrides(args.overrides)
     try:
         cfg = build_config(overrides, test_dir=args.test_dir)
     except KeyError as exc:
@@ -65,6 +75,14 @@ def main() -> None:
     print(f"test-dir: {args.test_dir}")
     if overrides:
         print(f"overrides: {overrides}")
+
+    if args.save_prelinefit is not None:
+        if args.out_csv is not None:
+            print("--out is ignored in --save-prelinefit checkpoint mode")
+        manifest = save_prelinefit_checkpoint(args.geff_dir, args.save_prelinefit, cfg)
+        print(f"datasets: {manifest['datasets']}")
+        print(f"wrote pre-linefit checkpoint to {args.save_prelinefit} ({len(manifest['datasets'])} datasets)")
+        return
 
     result = run_postproc(
         geff_dir=args.geff_dir,
