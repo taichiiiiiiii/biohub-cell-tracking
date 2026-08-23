@@ -120,6 +120,57 @@ def candidates_for_video(nodes: pl.DataFrame, edges: pl.DataFrame, divs: list[di
     return out
 
 
+def forensic_for_video(
+    nodes: pl.DataFrame, edges: pl.DataFrame, divs: list[dict]
+) -> list[str]:
+    """Classify each GT division by failure mode in the prediction."""
+    pos = {int(r["node_id"]): np.array([r["z"], r["y"], r["x"]]) * SCALE for r in nodes.iter_rows(named=True)}
+    tof = {int(r["node_id"]): int(r["t"]) for r in nodes.iter_rows(named=True)}
+    in_deg: dict[int, int] = {}
+    out_deg: dict[int, int] = {}
+    for r in edges.iter_rows(named=True):
+        s, tt = int(r["source_id"]), int(r["target_id"])
+        out_deg[s] = out_deg.get(s, 0) + 1
+        in_deg[tt] = in_deg.get(tt, 0) + 1
+    by_t: dict[int, list[int]] = {}
+    for n in pos:
+        by_t.setdefault(tof[n], []).append(n)
+
+    def nearest(target: np.ndarray, frame: int) -> tuple[int | None, float]:
+        best, bd = None, float("inf")
+        for n in by_t.get(frame, []):
+            d = float(np.linalg.norm(pos[n] - target))
+            if d < bd:
+                best, bd = n, d
+        return best, bd
+
+    modes: list[str] = []
+    for d in divs:
+        pn, pd = nearest(d["parent_pos"], d["t"])
+        if pn is None or pd > MATCH_UM:
+            modes.append("parent_undetected")
+            continue
+        if out_deg.get(pn, 0) >= 2:
+            modes.append("already_fork")
+            continue
+        child_states = []
+        for cp in d["child_pos"]:
+            cn, cd = nearest(cp, d["t"] + 1)
+            if cn is None or cd > MATCH_UM:
+                child_states.append("undetected")
+            elif in_deg.get(cn, 0) == 0:
+                child_states.append("orphan")
+            else:
+                child_states.append("linked")
+        if "undetected" in child_states:
+            modes.append("daughter_undetected")
+        elif "orphan" in child_states:
+            modes.append("orphan_recoverable")
+        else:
+            modes.append("steal_needed")
+    return modes
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pred-csv", type=Path, required=True)
@@ -129,6 +180,7 @@ def main() -> None:
 
     df = pl.read_csv(args.pred_csv)
     rows: list[dict] = []
+    all_modes: list[str] = []
     n_divs_total = 0
     for (name,), g in sorted(df.group_by("dataset"), key=lambda kv: kv[0][0]):
         geff = args.gt_dir / f"{name}.geff"
@@ -137,19 +189,23 @@ def main() -> None:
             continue
         divs = gt_divisions(geff)
         n_divs_total += len(divs)
-        cands = candidates_for_video(
-            g.filter(pl.col("row_type") == "node"), g.filter(pl.col("row_type") == "edge"), divs
-        )
+        nodes_df = g.filter(pl.col("row_type") == "node")
+        edges_df = g.filter(pl.col("row_type") == "edge")
+        cands = candidates_for_video(nodes_df, edges_df, divs)
         for c in cands:
             c["dataset"] = name
         rows += cands
-        print(f"{name}: GT_div={len(divs)} candidates={len(cands)} real={sum(c['real'] for c in cands)}")
+        modes = forensic_for_video(nodes_df, edges_df, divs)
+        all_modes.extend(modes)
+        print(f"{name}: GT_div={len(divs)} candidates={len(cands)} real={sum(c['real'] for c in cands)} modes={modes}")
     out = pl.DataFrame(rows)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     out.write_csv(args.out)
     n_real = int(out["real"].sum()) if out.height else 0
-    print(f"\nTOTAL: GT divisions={n_divs_total} candidates={out.height} real-in-pool={n_real} "
-          f"(orphan-recoverable rate {n_real}/{n_divs_total})")
+    from collections import Counter
+
+    print(f"\nTOTAL: GT divisions={n_divs_total} candidates={out.height} real-in-pool={n_real}")
+    print(f"failure modes: {dict(Counter(all_modes))}")
     if n_real:
         fake = out.filter(~pl.col("real"))
         real = out.filter(pl.col("real"))
