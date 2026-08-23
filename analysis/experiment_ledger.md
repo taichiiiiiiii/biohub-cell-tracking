@@ -151,9 +151,12 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 2. **実装案**: eval_train_raw の train 12 本 raw geff（division 含む選抜）に対し、ローカル checkpoint ループで division 候補生成→2 子エッジ付与→公式 division_jaccard を直接測る。候補幾何は GT 分布から: sister ≤ 18 µm、child 変位 ≤ 14 µm、親は t、子は t+1。
 3. **事前登録した判定規則**: train 12 本で division_TP ≥ 3 かつ adj_edge_jaccard の劣化 ≤ 0.001（division エッジ追加は edge FP にもなり得るため差引で判定）。score 合成 Δ ≥ +0.003 で LB 検証候補。**div FP の増加数も必ず記録**（division_J = TP/(TP+FP+FN)）。
 4. **対照**: 現行 safe-div（sister 8.5）を同一 raw geff に適用した場合の div TP/FP。
-5. **結果**: （未着 — eval_train_raw v2 の raw geff 待ち）
-6. **判定**: （未着）
-7. **学び（設計段階）**: n=12 の分布は暫定。全 199 geff の DL 完了後に census を更新し、しきい値は最終分布で引き直す。
+5. **結果（中間・2026-08-24 プロトタイプ、公開 test 4 本）**:
+   - **標的注入検証**: 6bba_05db0fb1 の t=24 division の正しい第 2 子エッジを 1 本だけ追加 → score 0.8890 → **0.9061（+0.0171）**（div TP=1、division_J 0→0.1667、そのエッジ自体も edge TP +1）。**メトリクス機構は orphan 養子縁組を div TP として受理する**ことを実証。1 復元 ≈ +0.017（この 4 本セット）。
+   - **GT 診断（3 division の失敗様態）**: ①t=24 = 第 2 娘が pred に orphan（in=0、0.91 µm 一致）として存在＝養子縁組で復元可能 ②t=52/62 = 両娘とも既に他トラックへ in=1 リンク済＝**エッジ奪取（rewire）が必要**（in-deg≤1 制約下で既存エッジ削除+追加）。
+   - **幾何のみの候補選別は基底率で敗北**: 事前分布に完全適合（sister≈10-11、d_pc≈7）する偽候補が 1 動画に 13+ 本あり、cap を実例が勝ち取れない。3 通りのランキング（near-first / sister下限 / prior-fit）全て div TP=0。偽 orphan の大半はメトリクス不可視（端点が GT 未マッチ）で edge へは無害、しかし div TP も取れない。
+6. **判定（中間）**: 機構は実証済・選別が未解決。次: eval_train_raw の 12 本（GT division 選抜）で track 特徴（orphan 初速・後方外挿の親指向性・境界距離）の分離度を測る。不足なら zarr 輝度特徴（分裂前の染色質凝縮）を追加。
+7. **学び（設計段階）**: n=12 の分布は暫定。全 199 geff の DL 完了後に census を更新し、しきい値は最終分布で引き直す。**「1 division = +0.017」は division 項が少数イベントの micro 平均であるため**＝復元 1 本の価値がエッジ数百本分に相当する。rewire は edge TP を壊すリスクと表裏（既存エッジが GT TP なら −1TP+1FN）。
 
 ---
 
