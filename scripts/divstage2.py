@@ -33,6 +33,9 @@ SISTER_MIN_UM = 4.0          # sisters p10=8.54; guard against duplicate detecti
 ORPHAN_MIN_TRACK_LEN = 3     # the adopted track must persist (noise guard)
 PARENT_MIN_TRACK_LEN = 2     # the parent must have history
 MAX_PER_VIDEO_FRAC = 0.02    # cap: adopted divisions <= 2% of GT-estimated node count / 100
+CAP_OVERRIDE = 0
+BORDER_MIN_UM = 15.0         # daughters are interior; ~half of fake orphans hug the border
+VOLUME_EXTENT_VOX = (64, 256, 256)  # (Z,Y,X): constant across all competition videos
 
 
 def track_lengths(nodes: pl.DataFrame, edges: pl.DataFrame) -> dict[int, int]:
@@ -75,10 +78,15 @@ def process_video(nodes: pl.DataFrame, edges: pl.DataFrame, scale: np.ndarray) -
     tof = {int(r["node_id"]): int(r["t"]) for r in nodes.iter_rows(named=True)}
 
     # orphan track-starts by frame (in-deg 0, has at least one child = track persists)
+    ext = np.array(VOLUME_EXTENT_VOX) * scale
     orphans_by_t: dict[int, list[int]] = {}
     for n in pos:
-        if in_deg.get(n, 0) == 0 and tlen.get(n, 1) >= ORPHAN_MIN_TRACK_LEN:
-            orphans_by_t.setdefault(tof[n], []).append(n)
+        if in_deg.get(n, 0) != 0 or tlen.get(n, 1) < ORPHAN_MIN_TRACK_LEN:
+            continue
+        border = min(float(np.min(pos[n])), float(np.min(ext - pos[n])))
+        if border < BORDER_MIN_UM:  # likely a cell entering the field of view
+            continue
+        orphans_by_t.setdefault(tof[n], []).append(n)
 
     cands: list[tuple[float, int, int, dict]] = []
     for p_id, kids in child_of.items():
@@ -110,7 +118,7 @@ def process_video(nodes: pl.DataFrame, edges: pl.DataFrame, scale: np.ndarray) -
     used_p: set[int] = set()
     used_c: set[int] = set()
     picked: list[tuple[int, int, dict]] = []
-    cap = max(3, int(len(pos) * MAX_PER_VIDEO_FRAC / 100))
+    cap = CAP_OVERRIDE if CAP_OVERRIDE > 0 else max(3, int(len(pos) * MAX_PER_VIDEO_FRAC / 100))
     for _, p_id, c2, info in cands:
         if p_id in used_p or c2 in used_c:
             continue
@@ -123,7 +131,7 @@ def process_video(nodes: pl.DataFrame, edges: pl.DataFrame, scale: np.ndarray) -
 
 
 def main() -> None:
-    global PARENT_CHILD_MAX_UM, SISTER_MAX_UM, SISTER_MIN_UM, ORPHAN_MIN_TRACK_LEN
+    global PARENT_CHILD_MAX_UM, SISTER_MAX_UM, SISTER_MIN_UM, ORPHAN_MIN_TRACK_LEN, BORDER_MIN_UM
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--in-csv", type=Path, required=True)
     ap.add_argument("--out-csv", type=Path, required=True)
@@ -135,12 +143,17 @@ def main() -> None:
     ):
         ap.add_argument(name, type=float, default=default)
     ap.add_argument("--orphan-min-len", type=int, default=ORPHAN_MIN_TRACK_LEN)
+    ap.add_argument("--cap", type=int, default=0, help="fixed per-video adoption cap (0 = frac-based default)")
+    ap.add_argument("--border-min-um", type=float, default=BORDER_MIN_UM)
     args = ap.parse_args()
 
     PARENT_CHILD_MAX_UM = args.parent_child_max_um
     SISTER_MAX_UM = args.sister_max_um
     SISTER_MIN_UM = args.sister_min_um
     ORPHAN_MIN_TRACK_LEN = args.orphan_min_len
+    BORDER_MIN_UM = args.border_min_um
+    global CAP_OVERRIDE
+    CAP_OVERRIDE = args.cap
 
     scale = np.array(DEFAULT_SCALE)
     df = pl.read_csv(args.in_csv)
