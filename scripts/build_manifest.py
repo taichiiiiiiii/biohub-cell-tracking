@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """Enumerate every competition file (name, size) into data/manifest.csv.
 
-The Kaggle CLI paginates; this walks every page. Takes ~2-3 minutes for the
-~25k chunk files of this competition. Re-run only if the dataset changes.
+The Kaggle CLI paginates (200 files/page); this walks every page. Takes ~10
+minutes for the ~25k files (125 pages) of this competition. Re-run only if the
+dataset changes.
 """
 from __future__ import annotations
 

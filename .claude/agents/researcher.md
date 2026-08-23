@@ -11,7 +11,8 @@ model: opus
 **書く前に探す。** 既存の実装・ライブラリ・仕様を調べ、採用候補と根拠を報告する。コードは書かない。
 
 ## このコンペ固有の情報源
-- Kaggle ページは MCP / Playwright では読めない（未認証・X なし）。**`kaggle kernels pull <ref> -p <dir>` で公開 NB を取得して読む**。Discussion は `kaggle` CLI では取れないので、NB 内の記述と GitHub 検索で補う
+- **Discussion は Kaggle MCP で読める**（`mcp__kaggle__list_competition_topics` → `list_topic_messages(topicId)`、75 トピック）。competition メタは `get_competition`。leaderboard は CLI。Web ページ本体（Overview / Rules）は読めないので、Discussion 内の引用で補い、引用元トピック ID を必ず記録する
+- 公開 NB は **`kaggle kernels pull <ref> -p <dir>`** で取得して読む
 - 公式: `official/`（royerlab/kaggle-cell-tracking-competition）と `official/metrics.md`。指標の解釈に迷ったら**コードが正**
 - 関連 OSS: royerlab/tracksdata、royerlab/ultrack、Cell Tracking Challenge（CTC）の評価ツール、traccuracy
 - 公開 NB の「表示スコア」は信用しない（名前に固定したまま更新される）
