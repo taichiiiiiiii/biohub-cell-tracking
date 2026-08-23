@@ -3,12 +3,12 @@
 作業リポジトリ。運用規則は [CLAUDE.md](CLAUDE.md)、進行順は [CHECKLIST.md](CHECKLIST.md)、
 一次記録は [analysis/experiment_ledger.md](analysis/experiment_ledger.md)、教訓は [docs/LESSONS.md](docs/LESSONS.md)。
 
-## Status（2026-08-24 02:45）
+## Status（2026-08-24 04:35）
 
-**ベースライン = base1**（公式 UNet+Transformer+ILP、`yusuketogashi/clean-approach…` の clean 再現、自称 LB 0.908）。
-自カーネル `taichiiiii/biohub-base1-clean-unet-ilp` v1 が Kaggle 実行済・ローカル公式 score **0.8890**（元 NB と TP/FP/FN 一致、台帳 E2）。**LB 未提出**（提出コマンドは user 実行が必要）。
-base2（dual-seed + harmonic、0.915 構成の再現）を実行中（E3）。後処理スタックはローカル移植済（ゲート一致）で、linefit スイープ（E5）から改善ループ開始。
-hidden ≈ train 同規模（≈200 本）・公開 test 4 本はダミー（Discussion 出典、台帳前提表）。雑音床は桁のみ（SD 0.008–0.014）。
+**ベースライン = base1 0.8890 確立**（E2、元 NB とビット一致）／base2 0.8907・199 本 7.7h<12h ✅（E3）／E5 linefit: win2/w1.0 ローカル +0.0041 だが実質 n=1（効果は最大動画 1 本に集中）→ base1 v2 実行済 0.8931=掃引一致・LB 対提出待ち。
+**E6 division（0.1 項の空席、全公開 NB が div TP=0）が主戦線**: 正しい養子縁組エッジ 1 本 = **+0.0171** を実証（標的注入）。全 GT census **151 divisions/87 動画**・sister med 10.57 µm > 現行 safe-div 上限 8.5（div TP=0 の機序）。幾何のみの選別は基底率 9,079:1 で敗北 → train 12 本 eval セット（`eval_train_raw` 実行中）で特徴確定へ。
+**提出キュー（user 実行待ち・5/日）**: ①base1 v1（E2）②base2 v3（E3）③base1 v1 再（E4 雑音）④base1 v2（E5）。コマンドは Issue #5 コメント。
+一次記録は台帳 E0〜E6。全 199 GT geff はローカル取得済（CPU カーネル tar 方式）。
 
 | 項目 | 値 |
 |---|---|
