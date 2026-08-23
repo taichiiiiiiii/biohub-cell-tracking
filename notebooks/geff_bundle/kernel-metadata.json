@@ -1,0 +1,13 @@
+{
+  "id": "taichiiiii/biohub-geff-bundle",
+  "title": "biohub-geff-bundle",
+  "code_file": "geff_bundle.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_internet": "false",
+  "competition_sources": ["biohub-cell-tracking-during-development"],
+  "dataset_sources": [],
+  "kernel_sources": []
+}
