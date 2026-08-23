@@ -1,0 +1,14 @@
+{
+  "id": "taichiiiii/biohub-div-classifier",
+  "title": "biohub-div-classifier",
+  "code_file": "div_classifier.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "enable_internet": "false",
+  "competition_sources": [],
+  "dataset_sources": [],
+  "kernel_sources": ["taichiiiii/biohub-div-patches"]
+}
