@@ -21,8 +21,8 @@ model: sonnet
 ### カーネル（`notebooks/<name>/`）
 6. `kernel-metadata.json`: `competition_sources` にコンペ slug、`enable_internet: false`、`is_private: true`、GPU が要るなら `"machine_shape": "NvidiaTeslaT4"`
 7. `main.py` が `/kaggle/input/competitions/<slug>/test` を読み、`/kaggle/working/submission.csv` を書く。test ディレクトリのファイル名に依存していない（hidden test は別の動画）
-8. 依存が Kaggle 既定イメージ＋添付 dataset で閉じている（`BIOHUB_ALLOW_PIP_INSTALL` 相当の経路が無い）
-9. 実行時間の見積もりが枠内（CPU 12h / GPU 9h、hidden test の本数は不明なので 1 動画あたりの時間を報告）
+8. 依存が Kaggle 既定イメージ＋添付 dataset で閉じている（`pip install` の呼び出しが無く、`enable_internet` が `false`）
+9. 実行時間の見積もり（上限は台帳の前提表の値。未記入なら「要確認」と書く。hidden test の本数は不明なので 1 動画あたりの時間を報告）
 
 ## 出力形式
 ```
