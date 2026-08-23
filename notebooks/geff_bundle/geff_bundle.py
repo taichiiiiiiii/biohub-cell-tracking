@@ -2,11 +2,20 @@
 import subprocess
 from pathlib import Path
 
-SRC = Path("/kaggle/input/biohub-cell-tracking-during-development/train")
-geffs = sorted(SRC.glob("*.geff"))
-print(f"{len(geffs)} geff dirs")
+INPUT = Path("/kaggle/input")
+print("input roots:", [p.name for p in INPUT.iterdir()])
+for root in INPUT.iterdir():
+    for sub in sorted(root.iterdir()):
+        print(" ", root.name + "/" + sub.name)
+
+geffs = sorted(INPUT.glob("*/train/*.geff"))
+if not geffs:
+    geffs = sorted(INPUT.glob("*/*/train/*.geff"))
+print(f"{len(geffs)} geff dirs found")
+assert geffs, "no geffs under /kaggle/input"
+src = geffs[0].parent
 subprocess.run(
-    ["tar", "-czf", "/kaggle/working/train_geffs.tar.gz", "-C", str(SRC)]
+    ["tar", "-czf", "/kaggle/working/train_geffs.tar.gz", "-C", str(src)]
     + [g.name for g in geffs],
     check=True,
 )
