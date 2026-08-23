@@ -68,10 +68,18 @@ def candidates_for_video(nodes: pl.DataFrame, edges: pl.DataFrame, divs: list[di
             out.append(nxt[0])
         return out
 
+    parent_of: dict[int, int] = {}
+    for s, kids_ in child_of.items():
+        for k in kids_:
+            parent_of[k] = s  # in-deg<=1 in valid graphs; last wins otherwise
+
     orphans_by_t: dict[int, list[int]] = {}
+    stealables_by_t: dict[int, list[int]] = {}
     for n in pos:
         if in_deg.get(n, 0) == 0 and len(chain(n)) >= ORPHAN_MIN_LEN:
             orphans_by_t.setdefault(tof[n], []).append(n)
+        elif in_deg.get(n, 0) == 1:
+            stealables_by_t.setdefault(tof[n], []).append(n)
 
     out: list[dict] = []
     for p_id, kids_ in child_of.items():
@@ -80,43 +88,50 @@ def candidates_for_video(nodes: pl.DataFrame, edges: pl.DataFrame, divs: list[di
         c1 = kids_[0]
         if tof.get(c1) != tof[p_id] + 1:
             continue
-        for c2 in orphans_by_t.get(tof[p_id] + 1, []):
-            if c2 == c1:
-                continue
-            d_pc = float(np.linalg.norm(pos[c2] - pos[p_id]))
-            if d_pc > D_PC_MAX:
-                continue
-            sis = float(np.linalg.norm(pos[c2] - pos[c1]))
-            if not (SISTER_MIN <= sis <= SISTER_MAX):
-                continue
-            mid = (pos[c1] + pos[c2]) / 2
-            border = min(float(np.min(pos[c2])), float(np.min(EXT - pos[c2])))
-            ch = chain(c2)
-            speed = float(np.linalg.norm(pos[ch[1]] - pos[ch[0]])) if len(ch) >= 2 else float("nan")
-            # label: real iff parent matches a GT divider and orphan matches one of its daughters
-            real = False
-            for d in divs:
-                if d["t"] != tof[p_id]:
+        for kind, pool in (("adopt", orphans_by_t), ("steal", stealables_by_t)):
+            for c2 in pool.get(tof[p_id] + 1, []):
+                if c2 == c1:
                     continue
-                if np.linalg.norm(pos[p_id] - d["parent_pos"]) > MATCH_UM:
+                d_pc = float(np.linalg.norm(pos[c2] - pos[p_id]))
+                if d_pc > D_PC_MAX:
                     continue
-                if any(np.linalg.norm(pos[c2] - cp) <= MATCH_UM for cp in d["child_pos"]):
-                    real = True
-                    break
-            out.append(
-                {
-                    "parent_id": p_id,
-                    "orphan_id": c2,
-                    "t": tof[p_id],
-                    "d_pc": d_pc,
-                    "sister": sis,
-                    "mid_over_sister": float(np.linalg.norm(mid - pos[p_id])) / sis,
-                    "border": border,
-                    "orphan_speed": speed,
-                    "orphan_len4": len(ch),
-                    "real": real,
-                }
-            )
+                sis = float(np.linalg.norm(pos[c2] - pos[c1]))
+                if not (SISTER_MIN <= sis <= SISTER_MAX):
+                    continue
+                if kind == "steal" and parent_of.get(c2) == p_id:
+                    continue
+                mid = (pos[c1] + pos[c2]) / 2
+                border = min(float(np.min(pos[c2])), float(np.min(EXT - pos[c2])))
+                ch = chain(c2)
+                speed = float(np.linalg.norm(pos[ch[1]] - pos[ch[0]])) if len(ch) >= 2 else float("nan")
+                q = parent_of.get(c2)
+                d_qc = float(np.linalg.norm(pos[c2] - pos[q])) if kind == "steal" and q is not None else float("nan")
+                # label: real iff parent matches a GT divider and c2 matches one of its daughters
+                real = False
+                for d in divs:
+                    if d["t"] != tof[p_id]:
+                        continue
+                    if np.linalg.norm(pos[p_id] - d["parent_pos"]) > MATCH_UM:
+                        continue
+                    if any(np.linalg.norm(pos[c2] - cp) <= MATCH_UM for cp in d["child_pos"]):
+                        real = True
+                        break
+                out.append(
+                    {
+                        "kind": kind,
+                        "parent_id": p_id,
+                        "orphan_id": c2,
+                        "t": tof[p_id],
+                        "d_pc": d_pc,
+                        "sister": sis,
+                        "mid_over_sister": float(np.linalg.norm(mid - pos[p_id])) / sis,
+                        "border": border,
+                        "orphan_speed": speed,
+                        "orphan_len4": len(ch),
+                        "d_qc": d_qc,
+                        "real": real,
+                    }
+                )
     return out
 
 
@@ -206,10 +221,14 @@ def main() -> None:
 
     print(f"\nTOTAL: GT divisions={n_divs_total} candidates={out.height} real-in-pool={n_real}")
     print(f"failure modes: {dict(Counter(all_modes))}")
+    if out.height:
+        for k in ("adopt", "steal"):
+            sub = out.filter(pl.col("kind") == k)
+            print(f"  kind={k}: candidates={sub.height} real={int(sub['real'].sum())}")
     if n_real:
         fake = out.filter(~pl.col("real"))
         real = out.filter(pl.col("real"))
-        for c in ("d_pc", "sister", "mid_over_sister", "border", "orphan_speed"):
+        for c in ("d_pc", "sister", "mid_over_sister", "border", "orphan_speed", "d_qc"):
             fv, rv = fake[c].drop_nulls(), real[c].drop_nulls()
             print(f"{c:15} fake med={fv.median():.2f} [{fv.quantile(0.1):.2f},{fv.quantile(0.9):.2f}]  "
                   f"real med={rv.median():.2f} [{rv.min():.2f},{rv.max():.2f}]")
