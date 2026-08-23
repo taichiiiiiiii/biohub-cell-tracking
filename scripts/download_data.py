@@ -16,6 +16,7 @@ size already matches the manifest, so re-running is cheap.
 Usage:
     uv run python scripts/download_data.py                 # test + their GT
     uv run python scripts/download_data.py --train 6bba_c328f2fd 44b6_24264f12
+    uv run python scripts/download_data.py --all-geffs          # + GT of all 199 train videos (~4k small files)
     uv run python scripts/download_data.py --dry-run
 """
 from __future__ import annotations
@@ -43,7 +44,7 @@ def load_manifest() -> dict[str, int]:
         return {r["name"]: int(r["size"]) for r in csv.DictReader(f)}
 
 
-def select(manifest: dict[str, int], train_names: list[str]) -> list[str]:
+def select(manifest: dict[str, int], train_names: list[str], all_geffs: bool = False) -> list[str]:
     test_names = sorted({n.split("/")[1][:-5] for n in manifest if n.startswith("test/") and ".zarr/" in n})
     geff_names = set(test_names) | set(train_names) | set(ALWAYS_GEFF)
     wanted: list[str] = ["sample_submission.csv"]
@@ -52,7 +53,7 @@ def select(manifest: dict[str, int], train_names: list[str]) -> list[str]:
             wanted.append(n)
         elif n.startswith("train/"):
             stem, kind = n.split("/")[1].rsplit(".", 1)
-            if kind == "geff" and stem in geff_names:
+            if kind == "geff" and (all_geffs or stem in geff_names):
                 wanted.append(n)
             elif kind == "zarr" and stem in train_names:
                 wanted.append(n)
@@ -76,12 +77,13 @@ def fetch(name: str, size: int) -> tuple[str, str]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--train", nargs="*", default=[], help="train video stems to fetch (zarr + geff)")
+    ap.add_argument("--all-geffs", action="store_true", help="also fetch the GT .geff of every train video (tiny)")
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     manifest = load_manifest()
-    wanted = select(manifest, args.train)
+    wanted = select(manifest, args.train, all_geffs=args.all_geffs)
     total = sum(manifest[n] for n in wanted)
     print(f"{len(wanted)} files, {total / 1e9:.2f} GB selected")
     if args.dry_run:
