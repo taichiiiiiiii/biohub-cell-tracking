@@ -10,10 +10,17 @@ Patch: Z half 2 (5 slices ~8.1um), XY half 12 (25px ~10.2um).
 """
 import csv
 import json
+import subprocess
+import sys
 from pathlib import Path
 
+try:
+    import zarr
+except ModuleNotFoundError:  # default script image lacks zarr; internet is enabled
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "zarr"], check=True)
+    import zarr
+
 import numpy as np
-import zarr
 
 INPUT = Path("/kaggle/input")
 COMP = next(p for p in INPUT.iterdir() if (p / "train").exists())
