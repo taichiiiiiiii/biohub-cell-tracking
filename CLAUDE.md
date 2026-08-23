@@ -23,9 +23,26 @@
 
 > 実測が古い記述と矛盾したら記述を直す。公開 NB の「表示スコア」は信用しない（CHECKLIST Week 1）。
 
+## ブランチと作業の流れ
+
+`develop`（既定・開発）／`main`（安定）。**必ず Issue を起票してから着手**し、`feat/issue{N}-slug` → develop へ PR → CI（ruff + pytest）緑 → squash merge。`Closes #N` は PR 本文に書く。CI 確認は `gh api repos/taichiiiiiiii/biohub-cell-tracking/actions/runs?branch=<br>`。
+
+## サブエージェント（`.claude/agents/`）
+
+| 役割 | 使うとき | model |
+|---|---|---|
+| researcher | 実装前調査（公開 NB は `kaggle kernels pull` で読む） | opus |
+| implementer | TDD 実装 | sonnet |
+| experimenter | A/B・掃引・ローカル CV（雑音床未記入なら拒否する） | sonnet |
+| reviewer | 成果物 1 本ごとに指摘ゼロまで反復 | opus |
+| submitter | 提出前バリデーション（提出はしない） | sonnet |
+| github-manager | Issue / PR / コメント（承認後） | sonnet |
+
 ## プロジェクト構成
 
 ```
+.claude/agents/    上記サブエージェント定義
+.github/workflows/ ci.yml（PR→develop と develop/main push で ruff + pytest + 公式 division テスト）
 official/          公式ベースライン＋公式メトリクス（submodule・読み取り専用・編集禁止）
 src/biohub/        自前の torch 不要ツール: io.py（zarr/geff 読み）, evaluate.py（CSV→公式スコア）
 scripts/           build_manifest.py / download_data.py / local_eval.py / noise_floor.py / submission_status.py
