@@ -146,6 +146,15 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 6. **判定**: 規則上は 4 アームが「LB 検証候補」、最良 **win2/w1.0**。ただし**正直な注記**: ①Δ の実体は全アームで**最大動画 6bba_05db0fb1 ただ 1 本**（他 3 本は Δ=+0.0000 の同値＝「非負 4/4」は同値を非負に数えた結果）＝実質 n=1。②w 応答は win2 で非単調（w0.6 も w1.0 も基準 w0.8 より良い）＝基準がたまたま谷。③win4/w1.0 の 44b6 破壊は過平滑がマッチング半径 7 µm を跨いで大量に外す実例＝**linefit は「効きも壊しも」ノード密度と変位の大きい動画に集中する**。→ 採否は LB 対提出（base1 v1 vs base1+w1.0）でのみ決める。E4 の再実行雑音が出るまで Δ+0.004 の LB 差は解釈しない。
 7. **学び**: ①後処理 1 段だけの差し替えループ（checkpoint 方式）は 1 アーム約 2.5 分＝Kaggle 再実行（約 25 分＋キュー）の 1/10 以下で回る。②公開 test 4 本は 3 本が「linefit 不感」（エッジ数が少ない or ジッタが小さい）＝**この 4 本での後処理 A/B は事実上 6bba_05db0fb1 の単発測定**。hidden（≈200 本）への外挿は動画構成比に依存する。train 12 本 raw geff（eval_train_raw）が届けば n を増やして再測定する。
 
+### E6 division stage-2 の事前登録（2026-08-24・Issue #5）— 空席 0.1 項への最初の攻め
+1. **仮説**: div TP=0 の主因は検出器でなくリンカ形状。GT division 形態（完全 geff 30 本・n=12）: d_child_min med 4.65/p90 6.20、**d_child_max med 7.12/p90 12.08**（8.4 µm ゲート超え多数）、**sister med 11.04/p10 8.54/max 17.13 µm**。現行 safe-div は SISTER_MAX_UM=8.5（GT 中央値未満）＝**実 division の ~90% を幾何条件で棄却する設計**。エッジ指標のための「安全な」二叉であって division 検出器ではない。
+2. **実装案**: eval_train_raw の train 12 本 raw geff（division 含む選抜）に対し、ローカル checkpoint ループで division 候補生成→2 子エッジ付与→公式 division_jaccard を直接測る。候補幾何は GT 分布から: sister ≤ 18 µm、child 変位 ≤ 14 µm、親は t、子は t+1。
+3. **事前登録した判定規則**: train 12 本で division_TP ≥ 3 かつ adj_edge_jaccard の劣化 ≤ 0.001（division エッジ追加は edge FP にもなり得るため差引で判定）。score 合成 Δ ≥ +0.003 で LB 検証候補。**div FP の増加数も必ず記録**（division_J = TP/(TP+FP+FN)）。
+4. **対照**: 現行 safe-div（sister 8.5）を同一 raw geff に適用した場合の div TP/FP。
+5. **結果**: （未着 — eval_train_raw v2 の raw geff 待ち）
+6. **判定**: （未着）
+7. **学び（設計段階）**: n=12 の分布は暫定。全 199 geff の DL 完了後に census を更新し、しきい値は最終分布で引き直す。
+
 ---
 
 ## 撤回した結論
