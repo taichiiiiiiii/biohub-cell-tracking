@@ -70,6 +70,36 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 6. **判定**: 対象外。
 7. **学び**: `44b6` 系は GT が 50 ノード程度しかなく、粗い検出では 7 µm 以内にほぼ当たらない（TP 2 と 0）。系統別に検出器の感度を変える必要がある可能性。N_pred は N_true の 5〜8% なのでこの段階では adj ペナルティは負（ボーナス側）。
 
+### E1 公開 NB の出力 CSV を公式指標で再測定（2026-08-24・Issue #5）
+1. **仮説**: なし（測定）。公開 NB の「表示スコア」がどれだけ実体を表すか、系譜ごとの実力を同じ物差しで並べる。
+2. **実装**: `scripts/score_kernel_output.py`（`kaggle kernels output` で公開 NB の submission.csv を取得 → `src/biohub/evaluate.py`）。公開 test 4 本＝train のダミーなので **in-sample**（学習系の重みは train 199 本すべてで学習済み）。
+3. **事前登録した判定規則**: なし（採否対象でない）。
+4. **対照**: なし。
+5. **結果**（score = adj_edge_J + 0.1·div_J、4 本マイクロ平均）:
+
+   | NB | score | edge_J | div_J | node_recall | N_pred | 判定 |
+   |---|---|---|---|---|---|---|
+   | inversion/cell-tracking-getting-started-w-nearest-neighbor | nan | nan | nan | nan | 0 | clean |
+   | kaiwalyaatulraut/biohub-cell-tracking-solution | 0.9178 | 0.9227 | 0.0 | 0.998 | 135,824 | **HACK**（hub+偽fork セル） |
+   | anhadmahajan06/biohub-track-your-cells-development | 0.8955 | 0.8946 | 0.0 | 0.998 | 122,910 | clean |
+   | yusuketogashi/lb897-baseline | 0.8918 | 0.8913 | 0.0 | 0.983 | 126,469 | clean |
+   | raykkretzschmar/biohub-harmonic-bidirectional-association-v1 | 0.8907 | 0.8893 | 0.0 | 0.984 | 122,083 | clean |
+   | yusuketogashi/no-hack-biohub-cell-another-approch-3rd | 0.8905 | 0.8901 | 0.0 | 0.984 | 123,090 | clean |
+   | pilkwang/biohub-cell-tracking-two-seeds-logit-blend | 0.8897 | 0.8875 | 0.0 | 0.983 | 119,039 | clean |
+   | yusuketogashi/clean-approach-lightweight-local-cv-no-hack | 0.8890 | 0.8855 | 0.0 | 0.982 | 120,246 | clean |
+   | yunusgmsoy/kimi-notebook-v17 | 0.8878 | 0.8864 | 0.0 | 0.983 | 122,208 | clean |
+   | kunaldesale2408/biohub-cell-tracking | 0.8878 | 0.8864 | 0.0 | 0.983 | 122,208 | clean |
+   | pilkwang/biohub-cell-tracking-learned-graph-w-gap-recovery | 0.8876 | 0.8928 | 0.0 | 0.998 | 136,809 | clean |
+   | evgendvorkin/biohub-0-902-lb | 0.8870 | 0.8856 | 0.0 | 0.983 | 122,252 | clean |
+   | xiaoleilian/biohub-ct-mix-divaug | 0.8696 | 0.8706 | 0.0 | 0.972 | 145,511 | clean |
+   | thibautgoldsborough/unet-baseline-inference-submission | 0.8081 | 0.8197 | 0.0 | 0.986 | 164,682 | clean |
+   | seshurajup/lb-0-857-best-rule-base-v14 | 0.7840 | 0.7823 | 0.0 | 0.919 | 136,208 | clean |
+   | pilkwang/biohub-cell-tracking-data-model-eda-baseline | 0.7444 | 0.7418 | 0.0 | 0.882 | 129,289 | clean |
+
+   smoke（E0）は 0.0446。出典 `outputs/public_nb/*.json`。
+6. **判定**: 対象外。
+7. **学び**: ①**全 NB で division TP=0**（0.1 の項が空席）。②学習系（pack50 UNet+Transformer+ILP）は 0.87〜0.89、ルールベースは 0.74〜0.78、公式 UNet は 0.81（N_pred 過多 55k vs N_true 33k で −7%）。③最高値 0.918 の `kaiwalyaatulraut` は hub+偽 fork の HACK 系で除外。④adj 係数は N_pred<N_true で 1 を超える（`44b6_0b24845f` で 1.038）＝ノード数を減らす方向の「見かけの改善」が混入するので、A/B ではノード数を固定して比較する。⑤in-sample なので hidden の推定には使わない（LB 自称 0.908 に対し 0.889）。
+
 ---
 
 ## 撤回した結論
