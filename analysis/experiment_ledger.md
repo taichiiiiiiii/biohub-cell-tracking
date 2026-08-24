@@ -15,7 +15,7 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 | 採点時間 | ノートブック実行の約 50 倍、9〜12 時間の報告（#734237）。上限値は未確認 | 2026-08-24 |
 | 指標の改訂 | 2026-07-22 に division 指標 exploit をパッチ・全提出再採点（#728324）。`official/` は 08-18 更新の main を固定 | 2026-08-24 |
 | GT の疎さ | `44b6_0113de3b` 52 ノード / N_true 25,755、`44b6_0b24845f` 51 / 32,795、`6bba_05b6850b` 861 / 6,362、`6bba_05db0fb1` 1,229 / 69,800、`6bba_c328f2fd` 511 / 31,228 | 2026-08-23 |
-| **雑音床（これ以下の差は無視）** | **12 本基底で再計算（08-24）**: base1 後処理の eval-12 per-video から動画再抽出ブートストラップ（再構成 0.9125=公式一致で検算済）: hidden **58 本 SD 0.0087 / 141 本 0.0054 / 199 本 0.0045**。∴ LB 上の差 <0.005 は動画抽選の揺れの帯域内＝**E5 linefit(+0.004) は LB では判定不能、division 帯(+0.03〜0.09) は判定可能**。これは「評価動画が引き直されたときの揺れ」（public↔private の転移）であり、**同一 hidden 上の A/B は対比較（paired）で別途扱う**。旧 4 本推定（58 本 0.014/199 本 0.008）は過大だった | 2026-08-24 |
+| **雑音床（これ以下の差は無視）** | **12 本基底で再計算（08-24）**: dual-seed raw+132 postproc の eval-12 per-video から動画再抽出ブートストラップ（再構成 0.9125=公式一致で検算済）: hidden **58 本 SD 0.0087 / 141 本 0.0054 / 199 本 0.0045**。∴ LB 上の差 <0.005 は動画抽選の揺れの帯域内＝**E5 linefit(+0.004) は LB では判定不能、division 帯(+0.03〜0.09) は判定可能**。これは「評価動画が引き直されたときの揺れ」（public↔private の転移）であり、**同一 hidden 上の A/B は対比較（paired）で別途扱う**。旧 4 本推定（58 本 0.014/199 本 0.008）は過大だった | 2026-08-24 |
 | LB 再実行のばらつき | 未測定（同一コード 2 回提出） | — |
 | 誤差の集中度 | 未測定 | — |
 | オラクル上界 | 未測定（GT 自身 / 検出のみ完璧） | — |
@@ -173,8 +173,8 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
    - **precision@recall（rank 正規化 OOF、基底率 1:22）**: recall 0.9→prec 0.10 / 0.8→0.15 / 0.7→0.20 / 0.5→0.29。
    - **陰性種別で難度が大きく違う**: div_parent vs trackstart AUC **0.941**（recall 0.9 で prec 0.51）／vs midtrack AUC 0.855。
    - 成果物: fold0–3.pt（各動画を外した fold のモデル＝リーク無し採点用）+ final（14 epochs、全データ）。
-5. **eval-12 の現状測定（base1 プリセット後処理・公式指標）**: score **0.9125** = adj_edge_J 0.9076 + 0.1×div_J 0.0488（**div TP=2 / FP=23 / FN=16**、GT div 18）。カーネル同梱バリデータ（base2 構成・deepcenter veto ON）は adj 0.9116 / div_J 0.0800（TP=2 / FP=7 / FN=16）＝**veto は FP を 23→7 に減らすが TP は増やさない**。division 満点の帯域 +0.095 が空いたまま。
-6. **eval-12 の失敗様態census（18 GT division・base1 後処理グラフ）**: **steal_needed 10 / orphan_recoverable 4 / daughter_undetected 3 / already_fork 1**。∴ 養子縁組のみの上限は TP 2→6（divJ≈0.24）、steal 込みで TP≈15（divJ≈0.6、+0.05 帯）＝**rewire 機構が価値の過半**。
+5. **eval-12 の現状測定（dual-seed raw + 132 postproc・公式指標）**: score **0.9125** = adj_edge_J 0.9076 + 0.1×div_J 0.0488（**div TP=2 / FP=23 / FN=16**、GT div 18）。カーネル同梱バリデータ（base2 構成・deepcenter veto ON）は adj 0.9116 / div_J 0.0800（TP=2 / FP=7 / FN=16）＝**veto は FP を 23→7 に減らすが TP は増やさない**。division 満点の帯域 +0.095 が空いたまま。
+6. **eval-12 の失敗様態census（18 GT division・dual-seed raw+132 postproc グラフ）**: **steal_needed 10 / orphan_recoverable 4 / daughter_undetected 3 / already_fork 1**。∴ 養子縁組のみの上限は TP 2→6（divJ≈0.24）、steal 込みで TP≈15（divJ≈0.6、+0.05 帯）＝**rewire 機構が価値の過半**。
 7. **候補プール（12 本合計）**: adopt 30,766 対 / real 4、steal 1,202,521 対 / real 19（1 division が複数の妥当対を持つ）。ユニーク親 230,947・real 親 18。**oracle 箱フィルタ（real 全維持の最タイト幾何箱）でも 63.9% しか残せない**＝real の特徴レンジが全域に散る。
 8. **E6 の border ゲートは n=1 過適合だった（撤回）**: test4 では「境界距離 real 28 µm vs fake 9.8＝有効」だったが、eval-12 の real は border min **1.6 µm**。`border>=15` は real 親 **6/18** しか残さない（>=10 で 9/18、>=5 で 14/18）。divstage2 の BORDER_MIN_UM=15 既定は実 division の 2/3 を捨てる設計＝撤回表に登録。
 9. **次**: div_score_cands カーネル（v1 投入済・T4）で 231,615 親パッチをリーク無し採点 → CNN スコア単独と幾何スタックの「real 親の動画内 rank」分布で deployment 判定。既存 fork 668 個の CNN veto 効果も同時測定。
@@ -195,7 +195,7 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 12. **v4 の事前登録（2026-08-24）**: 変更は**窓の拡大のみ**（RXY 12→24 = ±9.75 µm で d_child p90 を被覆、RZ 2→3）。学習プロトコル・fold・閾値規約は v3 と同一。判定: 同じ読み出し 1–3 を再実行し、(i) real 親 top10 ≥ 4 なら統合設計に進む (ii) 改善が top1% 数個どまりなら hard-negative mining を次の単独変更として実施 (iii) それでも不足なら patch 分類器路線を棄却し steal 幾何+トラック形状特徴の学習（GBDT）へ転線。
 13. **v4 結果 = 棄却（CV 段階で悪化・読み出しに進まず）**: fold AUC [0.789, 0.770, 0.850, **0.564**]・pooled rank 0.741（v3 0.867）。★学習曲線の形が v3 と質的に違う: v3 は ep0 から平坦、**v4 は中盤ピーク（0.79-0.85 @ep8-10）→終盤崩落（0.47-0.62）＝真の過学習**。機序解釈: 密組織では ±10 µm 窓に近傍細胞が常在し「2 細胞に見える」が判別力を持たない。広窓は娘被覆と引き換えにニュアンス変動を注入し、151 陽性の tiny CNN では負ける。**「第 2 娘がパッチ外」仮説は誤り側に倒れた**（信号は娘の出現でなく親の形態変化にある可能性）。
 14. **寄与分解（v1 スコア・eval-12）**: 幾何 prior 単独 top50=**0**・CNN 単独 top50=**0**・**積スタック top1=1/top10=2/top50=4** ＝ 2 信号は直交、結合のみが濃縮する。∴ CNN の微小信号は実在 → (ii) hard-negative mining を実施する根拠。
-15. **次ループの事前登録（hard negatives・単独変更）**: 窓は v3（RZ2/RXY12）へ戻す。eval_train_raw v3 の新規 24 本（eval-12 と不交差）に base1 後処理→候補列挙→v3 fold モデル採点（各動画は held-out fold で）→動画毎 top-K 偽親（K=40、real 除外）を hard negative として div_patches v5 に追加、分類器 v6 を同一プロトコルで学習。判定は eval-12 で読み出し 1–3 再実行（バーは E7-12 と同じ）。並行アーム: 同じ 24 本の pair 特徴で GBDT 選別器（幾何+トラック形状のみ・CNN 不使用）を学習し、同じ読み出しで比較=(iii) の下調べ。
+15. **次ループの事前登録（hard negatives・単独変更）**: 窓は v3（RZ2/RXY12）へ戻す。eval_train_raw v3 の新規 24 本（eval-12 と不交差）に 132 postproc→候補列挙→v3 fold モデル採点（各動画は held-out fold で）→動画毎 top-K 偽親（K=40、real 除外）を hard negative として div_patches v5 に追加、分類器 v6 を同一プロトコルで学習。判定は eval-12 で読み出し 1–3 再実行（バーは E7-12 と同じ）。並行アーム: 同じ 24 本の pair 特徴で GBDT 選別器（幾何+トラック形状のみ・CNN 不使用）を学習し、同じ読み出しで比較=(iii) の下調べ。
 
 ### 提出記録（2026-08-24 11:28 JST・user 許可「必要に応じて提出して」に基づく）
 | # | kernel | ver | 実験 | ローカル値 | 予測 |
@@ -218,7 +218,7 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 - **判定: Arm B は保留**（v4 の重みは残す。Arm A=hard negatives が停滞した場合のみ「pretrain init vs random init」の 1 対照実験で再訪）。教訓: **外部データは「ラベル数」でなく「測定スケールの一致」を先に検査する**。
 
 ### eval-24 ベースライン確定（2026-08-24 12:15）
-base1 後処理・公式指標: **score 0.8919**（adj_edge_J 0.8891 / div_J 0.0282、div TP=2 FP=38 FN=31、GT 33、n=24）。eval-12（0.9125）より低い＝division-first 選抜の先頭 12 本は易しい側。**eval-36 合算: GT 51 division・div TP 4 / FP 61 / FN 47（divJ 0.036）**、満点帯 +0.096。GBDT 学習対 492,072（real 36・偽 20% 抽出）と candidates24（465,513 親・real 28・fork 1,467）を Kaggle へ。
+dual-seed raw+132 postproc・公式指標: **score 0.8919**（adj_edge_J 0.8891 / div_J 0.0282、div TP=2 FP=38 FN=31、GT 33、n=24）。eval-12（0.9125）より低い＝division-first 選抜の先頭 12 本は易しい側。**eval-36 合算: GT 51 division・div TP 4 / FP 61 / FN 47（divJ 0.036）**、満点帯 +0.096。GBDT 学習対 492,072（real 36・偽 20% 抽出）と candidates24（465,513 親・real 28・fork 1,467）を Kaggle へ。
 
 ### Arm C（GBDT 幾何選別器）判定 = 棄却（2026-08-24 12:20）
 eval-24 の 492k 対（real 36）で LightGBM・動画グループ 4-fold: **CV AUC 0.4326 ± 0.2114**（fold 別 0.64/0.58/0.41/**0.10**）。36 陽性では幾何+トラック形状は雑音に過学習するのみ（寄与分解の幾何単独 top50=0 と整合）。**(iii) 単独路線は棄却**。選別は CNN×幾何スタック + hard negatives に一本化。
@@ -396,4 +396,5 @@ v5（960 hardnegs 追加・n=4,418）: fold AUC [0.859, 0.819, 0.804, 0.808]（h
 | 元の主張 | いつ・何で覆ったか | 訂正後 |
 |---|---|---|
 | E6中間「境界距離は有効な選別特徴（real 28 µm vs fake med 9.8、2-3×削減）」・divstage2 の BORDER_MIN_UM=15 既定 | 2026-08-24 E7 eval-12（18 GT division）で real の border min 1.6 µm、border>=15 は real 親 6/18 しか残さない | 境界ゲートは n=1（test4 の 1 division）への過適合。ゲートとして使うなら >=5 µm が上限（14/18）だが、選別は学習型スコアに委ねる |
+| 「eval-12/24 ベースラインは base1 プリセット」（E7 以降の各所） | 2026-08-24 深夜、v4 カーネルログ精査: "Calibrated dual-seed runtime patch applied"・bidirectional 0.2・secondary low_margin_consensus・edge threshold 0.48 = **dual-seed（base2 系）パイプラインが raw を生成**していた | eval-12/24/36 の raw は dual-seed 系＋ローカル 132 postproc。E9〜E15 の結論はそのまま**最良提出系（base2）に接地**していた（好都合な誤り）。LB 対応: eval-12 系 0.9125 ↔ base2 LB 0.919 |
 | E7 v2「pooled OOF AUC 0.59」 | 同日 v2 ログ精査: fold 別 AUC は 0.83-0.92。生スコアの fold 間キャリブレーション差が混合されただけ | fold 内 rank 正規化後 pooled AUC 0.867（v3） |
