@@ -3,14 +3,13 @@
 作業リポジトリ。運用規則は [CLAUDE.md](CLAUDE.md)、進行順は [CHECKLIST.md](CHECKLIST.md)、
 一次記録は [analysis/experiment_ledger.md](analysis/experiment_ledger.md)、教訓は [docs/LESSONS.md](docs/LESSONS.md)。
 
-## Status（2026-08-24 10:00）
+## Status（2026-08-24 22:00）
 
-**ベースライン = base1 0.8890 確立**（E2）／base2 0.8907・199 本 7.7h<12h ✅（E3）／E5 linefit: base1 v2 実行済 0.8931 だが実質 n=1・LB 対提出待ち。
-**train 12 本 eval セット確立（E7）**: base1 プリセットの公式スコア **0.9125**（adj_edge_J 0.9076 / div_J 0.0488、div TP=2 FP=23 FN=16、GT div 18 本）。division 満点なら **+0.095** の帯域が空いたまま＝主戦線続行。
-**E7 分類器（3D patch CNN・Kaggle T4）学習済**: fold 別 AUC 0.81–0.90（動画グループ 4-fold・rank 正規化 pooled 0.867）。val 曲線は ep0 から平坦＝後期過学習なし。⚠️pooled 生スコアの AUC 0.59 は fold 間キャリブレーション混合のアーチファクト（撤回済・rank 正規化で扱う）。次= eval-12 候補を fold モデルでリーク無し採点→「真候補が rank #1」率で deployment 判定。
-**過適合ガード（user 指示 08-24）**: 採否は eval-12（fold 外）で判定・閾値は OOF のみ・LB 照会は事前登録した対のみ・動画別寄与分布を必ず確認（E5 の n=1 教訓）。
-**提出キュー（user 実行待ち・5/日）**: ①base1 v1（E2）②base2 v3（E3）③base1 v1 再（E4 雑音）④base1 v2（E5）。コマンドは Issue #5 コメント。
-一次記録は台帳 E0〜E7。全 199 GT geff はローカル取得済（CPU カーネル tar 方式）。
+**LB アンカー確立**: base1 **0.908**／同一コード再実行 **0.908**（再実行雑音<表示3桁）／base2 dual-seed **0.919**＝提出基準／E5 linefit w1.0 **0.907**（local +0.004 が不転移＝n=1 効果の実証）。LB 首位 0.962 と差 0.043。
+**E10 センサス（地図）**: eval-12 の edge FN 363 の内訳=誤リンク 131・検出欠落 127・track end/start 89。**FP 410 全除去=+0.049 が最大レバー**、division 天井は +0.016 止まり。
+**E9〜E13: 「同一モデル情報の事後手術」6 連敗でクローズ**: FP エッジの transformer prob 中央値 0.79（自信を持って間違える）・運動整合性は TP/FP 分離ゼロ・ILP 再解決/候補拡張/div weight 掃引は最良 +0.0009。E13 リグ（`scripts/e13_resolve.py`）は val12_post をバイト一致再現＝今後の ILP/postproc 掃引はローカル 15 分/config。
+**次**: E14 = DET_THRESHOLD 0.99→0.97（検出欠落 127 本狙い・Kaggle v5）→ 成立なら base2 系へ統合。モデル側（シード追加・アンサンブル）が本丸。
+一次記録は台帳 E0〜E14。
 
 | 項目 | 値 |
 |---|---|
