@@ -27,14 +27,15 @@ except ImportError:
     import zarr
 
 INPUT = Path("/kaggle/input")
-cands_csv = next(iter(INPUT.rglob("candidates.csv")), None)
+cands_csvs = sorted(INPUT.rglob("candidates*.csv"))
+cands_csv = cands_csvs[0] if cands_csvs else None
 model_dir = next(iter(p.parent for p in INPUT.rglob("fold0.pt")), None)
 train_dirs = sorted(d for d in INPUT.rglob("train") if d.is_dir())
 if not (cands_csv and model_dir and train_dirs):
     print("mounts:", [str(p) for p in INPUT.iterdir()])
-    raise FileNotFoundError(f"cands={cands_csv} models={model_dir} train={train_dirs[:2]}")
+    raise FileNotFoundError(f"cands={cands_csvs} models={model_dir} train={train_dirs[:2]}")
 TRAIN = train_dirs[0]
-print(f"cands={cands_csv}\nmodels={model_dir}\ntrain={TRAIN}")
+print(f"cands files={[c.name for c in cands_csvs]}\nmodels={model_dir}\ntrain={TRAIN}")
 
 _info = json.load(open(model_dir / "model_info.json"))
 RZ, RXY = int(_info.get("rz", 2)), int(_info.get("rxy", 12))
@@ -90,39 +91,38 @@ def extract(vol_t, vol_t1, z, y, x):
     return out
 
 
-rows = list(csv.DictReader(open(cands_csv)))
-print(f"{len(rows)} candidates across {len(set(r['stem'] for r in rows))} videos")
-by_stem: dict[str, list[dict]] = {}
-for r in rows:
-    by_stem.setdefault(r["stem"], []).append(r)
+def score_file(cands_csv):
+    rows = list(csv.DictReader(open(cands_csv)))
+    print(f"{cands_csv.name}: {len(rows)} candidates across {len(set(r['stem'] for r in rows))} videos")
+    by_stem = {}
+    for r in rows:
+        by_stem.setdefault(r["stem"], []).append(r)
+    out_rows = []
+    for stem, rr in sorted(by_stem.items()):
+        arr = zarr.open(str(TRAIN / f"{stem}.zarr"), mode="r")["0"]
+        net = nets[int(rr[0]["fold"])]
+        by_t = {}
+        for r in rr:
+            by_t.setdefault(int(r["t"]), []).append(r)
+        for t, group in sorted(by_t.items()):
+            vol_t = np.asarray(arr[t])
+            vol_t1 = np.asarray(arr[min(t + 1, arr.shape[0] - 1)])
+            batch = np.stack([
+                extract(vol_t, vol_t1, int(round(float(g["z"]))), int(round(float(g["y"]))), int(round(float(g["x"]))))
+                for g in group
+            ])
+            with torch.no_grad():
+                sc = torch.sigmoid(net(torch.from_numpy(norm(batch)).to(DEV))).cpu().numpy()
+            for g, v in zip(group, sc):
+                out_rows.append({"stem": stem, "cand_id": g["cand_id"], "score": float(v)})
+        print(f"  {stem}: scored={len(rr)}", flush=True)
+    out_name = "cand_scores.csv" if cands_csv.name == "candidates.csv" else f"scores_{cands_csv.stem}.csv"
+    with open(f"/kaggle/working/{out_name}", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["stem", "cand_id", "score"])
+        w.writeheader()
+        w.writerows(out_rows)
+    print(f"wrote {len(out_rows)} -> {out_name}")
 
-out_rows = []
-for stem, rr in sorted(by_stem.items()):
-    zarr_path = TRAIN / f"{stem}.zarr"
-    arr = zarr.open(str(zarr_path), mode="r")["0"]
-    fold = int(rr[0]["fold"])
-    net = nets[fold]
-    # group by t so each (t, t+1) frame pair is decoded once
-    by_t: dict[int, list[dict]] = {}
-    for r in rr:
-        by_t.setdefault(int(r["t"]), []).append(r)
-    scored = 0
-    for t, group in sorted(by_t.items()):
-        vol_t = np.asarray(arr[t])
-        vol_t1 = np.asarray(arr[min(t + 1, arr.shape[0] - 1)])
-        batch = np.stack([
-            extract(vol_t, vol_t1, int(round(float(g["z"]))), int(round(float(g["y"]))), int(round(float(g["x"]))))
-            for g in group
-        ])
-        with torch.no_grad():
-            s = torch.sigmoid(net(torch.from_numpy(norm(batch)).to(DEV))).cpu().numpy()
-        for g, sc in zip(group, s):
-            out_rows.append({"stem": stem, "cand_id": g["cand_id"], "score": float(sc)})
-        scored += len(group)
-    print(f"{stem}: fold={fold} scored={scored}", flush=True)
 
-with open("/kaggle/working/cand_scores.csv", "w", newline="") as f:
-    w = csv.DictWriter(f, fieldnames=["stem", "cand_id", "score"])
-    w.writeheader()
-    w.writerows(out_rows)
-print(f"wrote {len(out_rows)} scores")
+for cands_csv in cands_csvs:
+    score_file(cands_csv)
