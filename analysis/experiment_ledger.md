@@ -399,6 +399,11 @@ v5（960 hardnegs 追加・n=4,418）: fold AUC [0.859, 0.819, 0.804, 0.808]（h
 - **division 信号探索の最終結論**: このモデル族の全チャネル（前向き softmax・逆向き softmax・patch CNN・幾何・GBDT・運動）を測定し尽くして全滅。「第 2 子に質量を割かない」のは推論の癖でなく**学習目標の帰結**（1-to-1 追跡 loss）。∴ division の +0.01 帯（LB 0.928 事例が実証）は**division を陽に学習した新モデル**でしか開かない。
 - 探索系実験はここで打ち切り。以後は学習系（E19 feasibility →）へ。
 
+### E19 事前登録: 学習の実現可能性プローブ（2026-08-25 06:20・実行中）
+1. **目的**: 探索系全滅（E9〜E18）を受け、残る 2 路線（第 3 シード学習・division-aware fine-tune）の**コスト計測**。`train_unet_transformer.py` を full-train splits（195 本）+ 400ep warm start（missing=0 を assert・発火確認込み）で **150 iter だけ**回し、sec/iter・warmup コスト・warm start の loss 連続性を測る。
+2. **読み出し**: sec/iter → 1 epoch の GPU 時間 → fine-tune +20〜50ep / スクラッチ 400ep の週次クォータ（T4 30h/週）内実現可能性。判定バーなし（計測）。
+3. kernel = `taichiiiii/biohub-train-probe` v1（T4×2・pack wheels オフライン install）。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
