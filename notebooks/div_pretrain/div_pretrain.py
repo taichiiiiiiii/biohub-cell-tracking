@@ -46,18 +46,58 @@ def extract(vol_t, vol_t1, z, y, x):
     return out
 
 
+_diag = {"n": 0}
+
+
+def divider_indices(nodes, edges, divs):
+    """Robust divider decode: prefer out-degree>=2 from the edge list; report
+    agreement with the `divisions` field whatever its encoding."""
+    e = np.asarray(edges)
+    outdeg = np.zeros(len(nodes), dtype=np.int32)
+    if e.ndim == 2 and e.shape[1] >= 2 and e.size:
+        src = e[:, 0].astype(int)
+        if src.max() < len(nodes):
+            np.add.at(outdeg, src, 1)
+    from_edges = np.where(outdeg >= 2)[0]
+    d = np.asarray(divs)
+    if d.dtype == bool:
+        from_field = np.where(d)[0]
+    elif d.ndim == 2:
+        from_field = d[:, 0].astype(int)
+    else:
+        from_field = d.astype(int).ravel()
+    if _diag["n"] < 3:
+        _diag["n"] += 1
+        print(f"DIAG nodes{nodes.shape}{nodes.dtype} edges{e.shape}{e.dtype} "
+              f"divs{d.shape}{d.dtype} sample={d.ravel()[:6]} "
+              f"outdeg2={len(from_edges)} field={len(from_field)} "
+              f"overlap={len(set(from_edges.tolist()) & set(from_field.tolist()))}", flush=True)
+    return from_edges if len(from_edges) else from_field
+
+
 def sample_patches(f):
     """yield (patch, label) from one sequence npz"""
     try:
         s = np.load(f)
-        vols, nodes, divs = s["volumes"], s["nodes"], s["divisions"]
+        vols, nodes, edges, divs = s["volumes"], s["nodes"], s["edges"], s["divisions"]
     except Exception as e:
         print(f"skip {os.path.basename(f)}: {type(e).__name__}")
         return []
     T = vols.shape[0]
+    Zs, Ys, Xs = vols.shape[1], vols.shape[2], vols.shape[3]
+    nodes = np.asarray(nodes, dtype=np.float64).copy()
+    # coordinate scale sniff: stored coords may be at native resolution (e.g. 4x XY)
+    sz = max(1, int(np.ceil((nodes[:, 1].max() + 1) / Zs)))
+    sy = max(1, int(np.ceil((nodes[:, 2].max() + 1) / Ys)))
+    sx = max(1, int(np.ceil((nodes[:, 3].max() + 1) / Xs)))
+    nodes[:, 1] /= sz; nodes[:, 2] /= sy; nodes[:, 3] /= sx
     t_col = nodes[:, 0].astype(int)
+    if _diag["n"] <= 3:
+        print(f"DIAG2 vols{vols.shape} t[{t_col.min()},{t_col.max()}] scale z/{sz} y/{sy} x/{sx} "
+              f"z[{nodes[:,1].min():.0f},{nodes[:,1].max():.0f}] y[{nodes[:,2].min():.0f},{nodes[:,2].max():.0f}] "
+              f"x[{nodes[:,3].min():.0f},{nodes[:,3].max():.0f}]", flush=True)
     out = []
-    div_idx = np.asarray(divs).astype(int).ravel()
+    div_idx = divider_indices(nodes, edges, divs)
     div_idx = div_idx[t_col[div_idx] < T - 1]
     if len(div_idx) > POS_PER_SEQ:
         div_idx = RNG.choice(div_idx, POS_PER_SEQ, replace=False)
@@ -65,7 +105,6 @@ def sample_patches(f):
     neg_pool = np.array([i for i in range(len(nodes)) if i not in div_set and t_col[i] < T - 1])
     n_neg = min(len(neg_pool), NEG_PER_POS * max(1, len(div_idx)))
     neg_idx = RNG.choice(neg_pool, n_neg, replace=False) if n_neg else []
-    Zs, Ys, Xs = vols.shape[1], vols.shape[2], vols.shape[3]
     for idx, lab in [(i, 1) for i in div_idx] + [(i, 0) for i in neg_idx]:
         t, z, y, x = nodes[idx, 0], nodes[idx, 1], nodes[idx, 2], nodes[idx, 3]
         t = int(t)
