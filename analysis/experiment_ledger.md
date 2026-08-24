@@ -160,6 +160,15 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 6. **判定（中間）**: 機構は実証済・選別が未解決。幾何+トラック特徴のスタックで ~50:1 まで削減可能だが精度不足。n=1-3 での閾値調整は過学習なので、**eval_train_raw の 12 本（GT division 選抜）で特徴を再測定してから**候補ランキングを確定する。それでも足りなければ学習型 division 検出器（3D patch 分類器、train GT ~151 陽性、Kaggle GPU 学習）＝全公開 NB が div TP=0 の中の真の差別化要素。
 7. **学び（設計段階→全数確定 08-24）**: **全 199 geff census: 151 divisions / 87 動画（0.76/動画）**。形態（n=151）: d_child_min med 4.08/p90 6.86、d_child_max med 7.13/p90 10.05/max 13.53、sister med 10.57/**p10 6.36**/p90 14.36/**max 20.30** µm、t は 0〜97 全域（med 48）。n=12 暫定との差: sister の裾が両側に広い → ゲートは sister∈[5.5,21]・d_pc≤14 に改訂。44b6 系は 26 divisions/71 本、6bba 系は 125/128 本。**規模感: hidden ≈150 divisions、現行 div FP ≈0.75/動画も同規模 → 完全復元+FP 半減で division_J ~0.5 = LB +0.05**（首位との差 0.047 に相当）＝**division が本コンペの差別化軸**という E6 の作業仮説を定量確認。**「1 division = +0.017」は division 項が少数イベントの micro 平均であるため**＝復元 1 本の価値がエッジ数百本分に相当する。rewire は edge TP を壊すリスクと表裏（既存エッジが GT TP なら −1TP+1FN）。
 
+### E7 学習型 division 分類器（2026-08-24・Issue #5）— 3D patch CNN
+1. **user 指示（08-24）**: 「学習の推移と public のオーバーフィットに注意して進めて」→ 本実験の設計制約として明記:
+   - **学習推移**: per-epoch train loss + val AUC を全 fold で記録（history.json）、best-epoch と最終 epoch の val AUC 差で後期過学習を可視化。
+   - **リーク防止**: fold は**動画単位**（同一動画のパッチは同一 fold）。正規化はパッチ内 med/MAD のみ（データセット統計を使わない）。
+   - **public 過適合防止**: 閾値は OOF のみから選ぶ。採否判定は train 12 本 eval セット（E6）で行い、公開 test 4 本や LB への繰り返し照会で調整しない。E5 の教訓（効果が 1 動画集中= n=1）を適用し、divison 改善も**動画別の寄与分布**を必ず見る。
+2. **データセット（`biohub-div-patches` v3 完了）**: X=(3458, 2ch=t/t+1, 5z, 25y, 25x) uint16。陽性 151（=全 GT division 親、44b6:26 / 6bba:125）、陰性 3,307（midtrack 2,388 + trackstart 919）。全 199 動画・全ゼロパッチ 0。
+3. **学習カーネル（`biohub-div-classifier`）**: tiny 3D CNN（Conv3d 16→32→64, GAP, dropout 0.3）+ BCE pos_weight ≈22。4-fold・動画グループ・系統/陽性数で snake-draft 平衡（実測 pos 38/37/37/39、44b6 pos 6/6/6/8）。最終モデルの epoch 数は fold best の中央値+1（固定 40 をやめた）。v1=マウントパス FileNotFound → v2=rglob 探索で再投入。
+4. **結果**: （実行待ち）
+
 ---
 
 ## 撤回した結論
