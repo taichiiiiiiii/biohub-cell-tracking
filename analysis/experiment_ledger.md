@@ -178,6 +178,7 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 7. **候補プール（12 本合計）**: adopt 30,766 対 / real 4、steal 1,202,521 対 / real 19（1 division が複数の妥当対を持つ）。ユニーク親 230,947・real 親 18。**oracle 箱フィルタ（real 全維持の最タイト幾何箱）でも 63.9% しか残せない**＝real の特徴レンジが全域に散る。
 8. **E6 の border ゲートは n=1 過適合だった（撤回）**: test4 では「境界距離 real 28 µm vs fake 9.8＝有効」だったが、eval-12 の real は border min **1.6 µm**。`border>=15` は real 親 **6/18** しか残さない（>=10 で 9/18、>=5 で 14/18）。divstage2 の BORDER_MIN_UM=15 既定は実 division の 2/3 を捨てる設計＝撤回表に登録。
 9. **次**: div_score_cands カーネル（v1 投入済・T4）で 231,615 親パッチをリーク無し採点 → CNN スコア単独と幾何スタックの「real 親の動画内 rank」分布で deployment 判定。既存 fork 668 個の CNN veto 効果も同時測定。
+9b. **steal の損益構造（2026-08-24・real steal 19 対の実測）**: 現親 Q が GT 未マッチ（>7 µm）= **奪取エッジの削除がメトリクス不可視 = 13/19（ほぼ無料）**。残り 6/19 は**全て相互 twin 型**（44b6_587a1e22 / 44b6_5f15d135 / 6bba_09961292 の 3 division: P と Q が互いに相手の娘の現親＝分裂親が 2 ノードに割れて各娘を 1 本ずつ持つ motif）。twin 型は「どちらを fork 親にするか」の選択問題で、正解側を選べば edge TP −0（相手の子エッジは元々 GT エッジと不一致）+ div TP +1。∴ steal 機構は ①無料型: Q 未マッチなら単純 rewire ②twin 型: P/Q の近接ペア検出→fork 集約、の 2 パスで設計する。
 10. **事前登録（スコア到着前・2026-08-24 10:10）**:
    - **読み出し 1（adopt 経路）**: 動画ごとに親を CNN スコアで順位付けし、real 親 18 個の動画内 rank を記録。top-1 / top-3 / top-10 / 上位 1% の本数を報告。
    - **読み出し 2（固定形スタック）**: `rank_norm(CNN) × rank_norm(幾何 prior-fit)`（重み学習なし・係数フリー）。同じ rank 分布を報告。**eval-12 で重みを調整することは禁止**（調整するなら別の held-out が必要）。
