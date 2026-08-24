@@ -1,8 +1,15 @@
 """Train the E6 division patch classifier (tiny 3D CNN) on div_patches output.
 
-Group split by video (no leakage). Reports grouped CV AUC and
-precision@recall targets; saves final model trained on all data.
+Overfitting controls (per user directive 2026-08-24):
+  * grouped CV: folds split by VIDEO, balanced by lineage and positive count
+    (no per-video leakage; each fold sees both 44b6/6bba and ~equal positives)
+  * per-epoch learning curves (train loss + val AUC) printed and saved to
+    history.json so divergence between train and val is visible in the log
+  * best-epoch tracking per fold; the final all-data model trains for the
+    median best epoch instead of a fixed large count
+  * thresholds are chosen from OOF scores only (honest precision@recall)
 """
+import csv
 import json
 from pathlib import Path
 
@@ -13,18 +20,19 @@ import torch.nn as nn
 SRC = Path("/kaggle/input/biohub-div-patches")
 d = np.load(SRC / "div_patches.npz")
 X, y = d["X"], d["y"].astype(np.float32)
-import csv
 with open(SRC / "meta.csv") as f:
     meta = list(csv.DictReader(f))
 stems = np.array([m["stem"] for m in meta])
-print(f"X={X.shape} pos={int(y.sum())} neg={int((1-y).sum())} videos={len(set(stems))}")
+print(f"X={X.shape} pos={int(y.sum())} neg={int((1 - y).sum())} videos={len(set(stems))}")
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 RNG = np.random.default_rng(0)
+N_FOLDS = 4
+MAX_EPOCHS = 30
 
 
 def norm(batch):
-    """robust per-patch normalization"""
+    """robust per-patch normalization (no dataset-level stats -> no leakage)"""
     b = batch.astype(np.float32)
     med = np.median(b, axis=(1, 2, 3, 4), keepdims=True)
     mad = np.median(np.abs(b - med), axis=(1, 2, 3, 4), keepdims=True) + 1e-3
@@ -59,16 +67,36 @@ class Net(nn.Module):
         return self.f(x).squeeze(-1)
 
 
-def train_fold(tr_idx, va_idx, epochs=30):
+def auc(y_true, y_score):
+    order = np.argsort(y_score)
+    ranks = np.empty(len(y_score))
+    ranks[order] = np.arange(len(y_score))
+    pos = y_true == 1
+    return (ranks[pos].sum() - pos.sum() * (pos.sum() - 1) / 2) / max(1, pos.sum() * (~pos).sum())
+
+
+def predict(net, idx, bs=256):
+    net.eval()
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(idx), bs):
+            j = idx[i:i + bs]
+            out.append(torch.sigmoid(net(torch.from_numpy(norm(X[j])).to(DEV))).cpu().numpy())
+    return np.concatenate(out)
+
+
+def train_fold(tr_idx, va_idx, epochs, tag, history):
     net = Net().to(DEV)
     pos_w = torch.tensor([(len(tr_idx) - y[tr_idx].sum()) / max(1.0, y[tr_idx].sum())], device=DEV)
     lossf = nn.BCEWithLogitsLoss(pos_weight=pos_w)
     opt = torch.optim.AdamW(net.parameters(), lr=1e-3, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, epochs)
     bs = 64
+    best = {"auc": -1.0, "ep": -1, "scores": None}
     for ep in range(epochs):
         net.train()
         idx = RNG.permutation(tr_idx)
+        tot, nb = 0.0, 0
         for i in range(0, len(idx), bs):
             j = idx[i:i + bs]
             xb = torch.from_numpy(norm(augment(X[j]))).to(DEV)
@@ -77,54 +105,81 @@ def train_fold(tr_idx, va_idx, epochs=30):
             loss = lossf(net(xb), yb)
             loss.backward()
             opt.step()
+            tot += float(loss.item())
+            nb += 1
         sched.step()
-    net.eval()
-    scores = []
-    with torch.no_grad():
-        for i in range(0, len(va_idx), 256):
-            j = va_idx[i:i + 256]
-            scores.append(torch.sigmoid(net(torch.from_numpy(norm(X[j])).to(DEV))).cpu().numpy())
-    return net, np.concatenate(scores)
+        rec = {"tag": tag, "epoch": ep, "train_loss": tot / max(1, nb)}
+        if va_idx is not None:
+            s = predict(net, va_idx)
+            rec["val_auc"] = float(auc(y[va_idx], s))
+            if rec["val_auc"] > best["auc"]:
+                best = {"auc": rec["val_auc"], "ep": ep, "scores": s}
+            print(f"[{tag}] ep {ep:02d}  train_loss={rec['train_loss']:.4f}  val_auc={rec['val_auc']:.4f}"
+                  + ("  *best*" if best["ep"] == ep else ""), flush=True)
+        else:
+            print(f"[{tag}] ep {ep:02d}  train_loss={rec['train_loss']:.4f}", flush=True)
+        history.append(rec)
+    return net, best
 
 
-def auc(y_true, y_score):
-    order = np.argsort(y_score)
-    ranks = np.empty(len(y_score)); ranks[order] = np.arange(len(y_score))
-    pos = y_true == 1
-    return (ranks[pos].sum() - pos.sum() * (pos.sum() - 1) / 2) / max(1, pos.sum() * (~pos).sum())
+# ---- balanced grouped folds: per lineage, snake-draft videos by positive count
+vid_pos = {}
+for v in sorted(set(stems)):
+    vid_pos[v] = int(y[stems == v].sum())
+fold_of = {}
+for lineage in ("44b6", "6bba"):
+    vids = [v for v in vid_pos if v.startswith(lineage)]
+    vids.sort(key=lambda v: (-vid_pos[v], v))
+    for i, v in enumerate(vids):
+        k = i % (2 * N_FOLDS)
+        fold_of[v] = k if k < N_FOLDS else 2 * N_FOLDS - 1 - k
+fold_arr = np.array([fold_of[s] for s in stems])
+for k in range(N_FOLDS):
+    m = fold_arr == k
+    print(f"fold {k}: videos={len(set(stems[m]))} n={int(m.sum())} pos={int(y[m].sum())} "
+          f"(44b6 pos={int(y[m & np.char.startswith(stems, '44b6')].sum())})")
 
-videos = np.array(sorted(set(stems)))
-RNG.shuffle(videos)
-folds = np.array_split(videos, 4)
+history: list[dict] = []
 oof = np.zeros(len(y))
-for k, va_videos in enumerate(folds):
-    va_mask = np.isin(stems, va_videos)
-    net, s = train_fold(np.where(~va_mask)[0], np.where(va_mask)[0])
-    oof[va_mask] = s
-    print(f"fold {k}: va_pos={int(y[va_mask].sum())} auc={auc(y[va_mask], s):.3f}")
-print(f"OOF AUC={auc(y, oof):.4f}")
-for rec in (0.9, 0.8, 0.7, 0.5):
-    thr = np.quantile(oof[y == 1], 1 - rec)
-    prec = y[oof >= thr].mean()
-    print(f"recall~{rec}: thr={thr:.3f} precision={prec:.3f} flagged={int((oof>=thr).sum())}")
+last_ep_auc = []
+best_eps = []
+for k in range(N_FOLDS):
+    va_mask = fold_arr == k
+    net, best = train_fold(np.where(~va_mask)[0], np.where(va_mask)[0], MAX_EPOCHS, f"fold{k}", history)
+    oof[va_mask] = best["scores"]          # scores from the best epoch, not the last
+    final_s = predict(net, np.where(va_mask)[0])
+    last_ep_auc.append(float(auc(y[va_mask], final_s)))
+    best_eps.append(best["ep"])
+    print(f"fold {k}: best ep={best['ep']} auc={best['auc']:.4f} | last ep auc={last_ep_auc[-1]:.4f} "
+          f"(gap {best['auc'] - last_ep_auc[-1]:+.4f} = late-epoch overfit if positive)")
+
+print(f"\nOOF AUC={auc(y, oof):.4f}  best_eps={best_eps}")
+thr_table = []
+for rec_t in (0.9, 0.8, 0.7, 0.5):
+    thr = float(np.quantile(oof[y == 1], 1 - rec_t))
+    sel = oof >= thr
+    prec = float(y[sel].mean()) if sel.any() else 0.0
+    thr_table.append({"recall": rec_t, "thr": thr, "precision": prec, "flagged": int(sel.sum())})
+    print(f"recall~{rec_t}: thr={thr:.3f} precision={prec:.3f} flagged={int(sel.sum())}")
 np.save("/kaggle/working/oof_scores.npy", oof)
 
-# final model on all data
-net_all = Net().to(DEV)
-pos_w = torch.tensor([(len(y) - y.sum()) / y.sum()], device=DEV)
-lossf = nn.BCEWithLogitsLoss(pos_weight=pos_w)
-opt = torch.optim.AdamW(net_all.parameters(), lr=1e-3, weight_decay=1e-4)
-sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, 40)
-for ep in range(40):
-    net_all.train()
-    idx = RNG.permutation(len(y))
-    for i in range(0, len(idx), 64):
-        j = idx[i:i + 64]
-        xb = torch.from_numpy(norm(augment(X[j]))).to(DEV)
-        yb = torch.from_numpy(y[j]).to(DEV)
-        opt.zero_grad(); lossf(net_all(xb), yb).backward(); opt.step()
-    sched.step()
+# ---- final model on all data, trained for the CV-selected epoch count
+final_epochs = int(np.median(best_eps)) + 1
+print(f"\nfinal model: {final_epochs} epochs (median best of folds, +1)")
+net_all, _ = train_fold(np.arange(len(y)), None, final_epochs, "final", history)
 torch.save(net_all.state_dict(), "/kaggle/working/div_classifier.pt")
-json.dump({"arch": "tiny3dcnn-v1", "input": "(2,5,25,25) med/mad-normalized"},
-          open("/kaggle/working/model_info.json", "w"))
-print("saved final model")
+json.dump(
+    {
+        "arch": "tiny3dcnn-v1",
+        "input": "(2,5,25,25) med/mad-normalized",
+        "folds": {v: int(k) for v, k in fold_of.items()},
+        "oof_auc": float(auc(y, oof)),
+        "fold_best_epochs": best_eps,
+        "fold_last_auc": last_ep_auc,
+        "final_epochs": final_epochs,
+        "thresholds": thr_table,
+    },
+    open("/kaggle/working/model_info.json", "w"), indent=1,
+)
+json.dump(history, open("/kaggle/working/history.json", "w"))
+print("saved final model + history")
