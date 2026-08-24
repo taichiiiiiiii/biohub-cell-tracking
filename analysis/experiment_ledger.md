@@ -404,6 +404,18 @@ v5（960 hardnegs 追加・n=4,418）: fold AUC [0.859, 0.819, 0.804, 0.808]（h
 2. **読み出し**: sec/iter → 1 epoch の GPU 時間 → fine-tune +20〜50ep / スクラッチ 400ep の週次クォータ（T4 30h/週）内実現可能性。判定バーなし（計測）。
 3. kernel = `taichiiiii/biohub-train-probe` v1（T4×2・pack wheels オフライン install）。
 
+### E19 判定（2026-08-25 09:55・読み出し完了）
+- v1: batch16 OOM（T4 14.5GB）→ v2: 自作パッチの構文事故（コメントがカンマを飲んだ・ast.parse 省略が原因）→ v3 成功。
+- **実測**: **3.3 s/iter**（batch 8・T4×2 DataParallel・UNet 分割）。warm start（400ep）は missing=0 で完全被覆・**loss 連続性完璧**（edge 0.0001 / det 0.0022 / acc 1.000 = 収束状態から再開。acc 1.0 は学習データ記憶の傍証でもある）。データパイプライン warmup+2 本 eval 込みで 150 iter = 11 分。
+- **換算**: フル epoch（199 本 ×99 窓 /8 ≈ 2,460 iter）≈ **2.3 h/epoch** ⇒ スクラッチ 400ep ≈ 900 GPU 時間 = **クォータ外（不可能）**・第 3 シードも同様。**fine-tune は可能**: max_iters サブサンプリングで 12h カーネル ≈ 1.3 万 iter ≈ 5.3 実効 epoch。
+- **結論**: モデル側で実行可能な唯一の路線 = **400ep からの目的別 fine-tune**（少 iter・低 lr）。
+
+### E20 事前登録: division オーバーサンプリング fine-tune（2026-08-25 10:00・実装前）
+1. **機序**: divisions は全リンクの 1/853（#733973）で視覚的にも曖昧＝学習中の露出不足。モデル構造は division を表現可能（C1→P と C2→P の両立は softmax per-target で可能）で、失敗は「C2 の質量が隣接トラック Q に行く」学習済み識別誤り。**division 含有フレーム窓の重点サンプリング**で露出を ~40 倍化し、収束済みモデルを低 lr で微調整する。
+2. **実装**: train スクリプトへのパッチ = WeightedRandomSampler（GT out-deg-2 親を含む窓に重み K、division 露出 ≈30%）・lr 1e-5・warm start 400ep・**eval-12 の 12 本を学習リストから除外**（fine-tune 差分に対する準クリーン計器を確保）・総 ~4,000 iter（≈4.5h カーネル）。
+3. **計器の論理**: base(400ep) は eval-12 を記憶済み＝比較は fine-tune に**不利側**のバイアス。その上で div TP が増えれば汎化的な division 改善の実証になる（保守的検定）。
+4. **判定規則（読み出し前に固定）**: fine-tune 重みで eval-12 raw を再生成（eval_train_raw の weights 差替え）→ 132 postproc → 公式採点。**div TP ≥ 4（基準 2）かつ adj_edge_J 低下 ≤ 0.003** → base2 カーネル統合 + LB 照会 1 回。div TP ≤ 3 または edge 崩れ → 棄却（lr/K の再掃引はしない=1 発勝負、過適合ガード）。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
