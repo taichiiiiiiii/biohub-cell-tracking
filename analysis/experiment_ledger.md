@@ -234,6 +234,27 @@ v5（960 hardnegs 追加・n=4,418）: fold AUC [0.859, 0.819, 0.804, 0.808]（h
 3. **判定規則（読み出し前に固定）**: eval-12 の real 23 対について、(P,C2) の transformer prob の動画内 rank（solution エッジ除外プール）を測る。**top10 合計 ≥ 4 で rewire の選別器として統合**（E7-12 と同じバー）。幾何との積スタックも同時に測る。
 4. **対照**: patch CNN v5 の同じ読み出し（top10=2）。
 
+### E9 判定（2026-08-24 16:45・読み出し完了）
+- **計測器故障を先に検出**: dump 座標は voxel でなく **detector grid（downsample [1,4,4]、z 等倍・y/x は 1/4）**だった。初回照合は 23 対中 0 一致（座標系取り違え）。`predict_unet_transformer.py` の `coords_so_far` 定義で確認し、`e9_analyze.py` 側に `DUMP_DS=[1,4,4]` を入れて修正（カーネル再実行不要）。教訓 [[feedback_verify_the_check_actually_fires]] どおり「一致 0」を実装でなく観測手段から疑ったのが正解だった。
+- **事前登録バーの結果: 不成立**。real 23 対中 dump 内一致 12。動画内 rank（solution エッジ除外プール・全 association 対 ~10-19 万/動画）で **top10=0、top50=0**（バー: top10 ≥ 4）。
+- 構造: **adopt は高 prob**（0.8238 → rank 408/36,883、0.4545 → rank 6,634/154,197）、**steal は 0.009–0.12**（現親 Q のエッジが softmax 質量を奪う）。dump 外 11 対の内訳 = P がどの target の top-5 にも入らない（src_hits=0）/ C2 が検出由来でない（postproc 補間ノード、tgt_hits=0）。
+- **判定: transformer prob 単独・全 association プール rank は選別器にならない**（登録どおり否定で確定）。ただし deployment の実フレームは「候補対 1.23M の中での順位」であり、これは E9-b として別登録する。
+
+### E9-b 事前登録: transformer prob を候補対テーブルの特徴量として結合（2026-08-24 16:50・読み出し前）
+1. **宇宙**: `val12_measure.csv` の 1,233,287 (orphan, parent) 対（steal 1,202,521 / adopt 30,766 / real 23）。
+2. **特徴量**: `trans_prob` = dump 内で P（t）→C2（t+1）に一致する行の max prob。一致 = 両端とも座標 ≤2 µm（ノード単位で g-index に解決してから対を引く）。**dump に無い対（target の top-5 圏外）は 0**。
+3. **読み出し**（順に）: (i) real の trans_prob>0 カバレッジ、(ii) trans 単独の動画内 rank、(iii) **三重積スタック** `rank_norm(CNN)×rank_norm(geom)×rank_norm(trans)`（E7-12 の積スタックに trans を追加、rank は動画内）、top1/3/10/50。
+4. **判定規則（読み出し前に固定)**: 三重積スタックが **top10 ≥ 4 かつ現行スタック（top1=1/top10=2/top50=4）を上回る** → rewire 統合試験（eval-12 公式スコア Δ 測定）へ。どちらか欠ければ E9 系は否定でクローズし、선別器路線を再設計する。
+5. **既知の部分開示**: (ii) の素材（real 12 対の prob と全プール rank）は E9 で既に見た。E9-b の新規性は候補プールでの rank と三重積のみ＝判定はそこに限定する。
+
+### E9-b 判定(2026-08-24 17:05・読み出し完了)
+- 読み出し (i) カバレッジ: real 23 対中 trans_prob>0 は **12**(全対の非ゼロ率 41.9%)。
+- 読み出し (ii) trans 単独の候補プール内 rank: **top10=1**(adopt P=461 rank7)、top50=1。
+- 読み出し (iii) 三重積 stack3: **top1=0 / top3=0 / top10=0 / top50=2** — 対照 stack2(CNN×geom)= top1=1/top3=1/top10=2/top50=3 を**下回る**。
+- **判定: バー(top10≥4 かつ stack2 超え)不成立 → E9 系は否定でクローズ**。
+- 機序: stack2 が上位に置く real は **steal**(P=4234 rank1、P=8377 rank10)だが、steal は現親 Q が softmax 質量を奪うため trans_prob=0。積で掛けると steal が沈み、trans が得意な adopt(2 対のみ高 prob)しか浮かばない。**「adopt には trans・steal には幾何×CNN」と失敗様態で選別器が分かれる**ことが確定した — 単一スコアの積は両立しない。
+- 副産物(選別器 5 連敗の総括): 幾何/tiny CNN/GBDT/CNN+hardneg/transformer prob すべて基底率 9079:1 に敗北。ただし**FP:TP のコスト比は約 1:20**(div FP 1 個 ≈ −0.0001、div TP 1 個 ≈ +0.002)なので、選別器に必要な precision は ~5% で足りる。stack2 top1=1/12 動画は既に上回っている可能性 → 経済性は rewire 統合(公式 Δ)でのみ判定する。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。

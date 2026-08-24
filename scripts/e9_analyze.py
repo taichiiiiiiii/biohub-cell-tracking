@@ -2,7 +2,8 @@
 """E9 readouts: transformer pair-prob rank of real division pairs (ledger E9).
 
 Dump rows: gi,gj,prob,t_src,z_src,y_src,x_src,t_tgt,z_tgt,y_tgt,x_tgt
-(voxel units, original resolution). Real pairs come from e6_measure output
+(detector grid = downsample [1,4,4]: z is voxel, y/x are voxel/4 -- confirmed
+against predict_unet_transformer.py coords_so_far). Real pairs come from e6_measure output
 joined to the postproc submission for coordinates.
 
     uv run python scripts/e9_analyze.py \
@@ -19,6 +20,7 @@ import numpy as np
 import polars as pl
 
 SCALE = np.array([1.625, 0.40625, 0.40625])
+DUMP_DS = np.array([1.0, 4.0, 4.0])  # detector-grid -> voxel (downsample [1,4,4])
 MATCH_UM = 2.0
 DUMP_COLS = ["gi", "gj", "prob", "t_src", "z_src", "y_src", "x_src",
              "t_tgt", "z_tgt", "y_tgt", "x_tgt"]
@@ -57,8 +59,8 @@ def main() -> None:
                for r in nd.iter_rows(named=True)}
         tof = {int(r["node_id"]): int(r["t"]) for r in nd.iter_rows(named=True)}
 
-        src_um = d.select("z_src", "y_src", "x_src").to_numpy() * SCALE
-        tgt_um = d.select("z_tgt", "y_tgt", "x_tgt").to_numpy() * SCALE
+        src_um = d.select("z_src", "y_src", "x_src").to_numpy() * DUMP_DS * SCALE
+        tgt_um = d.select("z_tgt", "y_tgt", "x_tgt").to_numpy() * DUMP_DS * SCALE
         t_src = d["t_src"].to_numpy()
         t_tgt = d["t_tgt"].to_numpy()
         prob = d["prob"].to_numpy()
