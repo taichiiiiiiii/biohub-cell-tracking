@@ -167,7 +167,14 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
    - **public 過適合防止**: 閾値は OOF のみから選ぶ。採否判定は train 12 本 eval セット（E6）で行い、公開 test 4 本や LB への繰り返し照会で調整しない。E5 の教訓（効果が 1 動画集中= n=1）を適用し、divison 改善も**動画別の寄与分布**を必ず見る。
 2. **データセット（`biohub-div-patches` v3 完了）**: X=(3458, 2ch=t/t+1, 5z, 25y, 25x) uint16。陽性 151（=全 GT division 親、44b6:26 / 6bba:125）、陰性 3,307（midtrack 2,388 + trackstart 919）。全 199 動画・全ゼロパッチ 0。
 3. **学習カーネル（`biohub-div-classifier`）**: tiny 3D CNN（Conv3d 16→32→64, GAP, dropout 0.3）+ BCE pos_weight ≈22。4-fold・動画グループ・系統/陽性数で snake-draft 平衡（実測 pos 38/37/37/39、44b6 pos 6/6/6/8）。最終モデルの epoch 数は fold best の中央値+1（固定 40 をやめた）。v1=マウントパス FileNotFound → v2=rglob 探索で再投入。
-4. **結果**: （実行待ち）
+4. **結果（v2/v3 完了・2026-08-24）**:
+   - **学習曲線**: val AUC は ep0 から 0.83–0.92 で平坦（後期過学習なし、best−last の gap ≤ +0.01）。train loss は 1.04→0.72 と下がり続けるが val は不動＝この容量・データ量では epoch 数は効かない。
+   - **v2 の教訓: pooled OOF AUC 0.59 は fold 間キャリブレーション混合のアーチファクト**（fold 別 AUC は 0.83–0.92）。fold 内 rank 正規化後の pooled AUC = **0.867**（v3、fold 別 [0.883, 0.900, 0.880, 0.808]）。**スコアを fold 横断で比較・閾値化するときは必ず rank 正規化**。
+   - **precision@recall（rank 正規化 OOF、基底率 1:22）**: recall 0.9→prec 0.10 / 0.8→0.15 / 0.7→0.20 / 0.5→0.29。
+   - **陰性種別で難度が大きく違う**: div_parent vs trackstart AUC **0.941**（recall 0.9 で prec 0.51）／vs midtrack AUC 0.855。
+   - 成果物: fold0–3.pt（各動画を外した fold のモデル＝リーク無し採点用）+ final（14 epochs、全データ）。
+5. **eval-12 の現状測定（base1 プリセット後処理・公式指標）**: score **0.9125** = adj_edge_J 0.9076 + 0.1×div_J 0.0488（**div TP=2 / FP=23 / FN=16**、GT div 18）。カーネル同梱バリデータ（base2 構成・deepcenter veto ON）は adj 0.9116 / div_J 0.0800（TP=2 / FP=7 / FN=16）＝**veto は FP を 23→7 に減らすが TP は増やさない**。division 満点の帯域 +0.095 が空いたまま。
+6. **次**: eval-12 の養子縁組候補を fold モデルでリーク無し採点（div_score_cands カーネル）→ 幾何特徴とスタックして「真の候補が動画内で rank #1 になる率」を測る＝deployment 判定。
 
 ---
 
