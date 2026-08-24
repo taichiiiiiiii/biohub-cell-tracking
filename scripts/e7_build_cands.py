@@ -15,9 +15,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
+import numpy as np
 import polars as pl
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from e6_measure import SCALE, gt_divisions  # noqa: E402
+
+MATCH_UM = 7.0
 
 
 def main() -> None:
@@ -26,6 +33,7 @@ def main() -> None:
     ap.add_argument("--pred-csv", type=Path, required=True)
     ap.add_argument("--model-info", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--gt-dir", type=Path, default=Path("data/train"))
     args = ap.parse_args()
 
     cands = pl.read_csv(args.measure)
@@ -48,6 +56,33 @@ def main() -> None:
     if bad_t:
         raise SystemExit(f"{bad_t} candidates with t mismatch between measure and pred CSV")
 
+    # existing pred forks (out-degree-2 parents): candidates for CNN-based FP veto
+    pred = pl.read_csv(args.pred_csv)
+    fork_rows = []
+    for (name,), g in sorted(pred.group_by("dataset"), key=lambda kv: kv[0][0]):
+        divs = gt_divisions(args.gt_dir / f"{name}.geff")
+        nd = g.filter(pl.col("row_type") == "node")
+        ed = g.filter(pl.col("row_type") == "edge")
+        pos = {int(r["node_id"]): np.array([r["z"], r["y"], r["x"]], dtype=float)
+               for r in nd.iter_rows(named=True)}
+        tof = {int(r["node_id"]): int(r["t"]) for r in nd.iter_rows(named=True)}
+        outdeg: dict[int, int] = {}
+        for r in ed.iter_rows(named=True):
+            outdeg[int(r["source_id"])] = outdeg.get(int(r["source_id"]), 0) + 1
+        for p_id, deg in outdeg.items():
+            if deg < 2:
+                continue
+            p_um = pos[p_id] * SCALE
+            real = any(
+                d["t"] == tof[p_id] and np.linalg.norm(p_um - d["parent_pos"]) <= MATCH_UM
+                for d in divs
+            )
+            z, y, x = pos[p_id]
+            fork_rows.append({"stem": name, "t": tof[p_id], "z": z, "y": y, "x": x,
+                              "fold": folds[name], "kind": "existing_fork",
+                              "parent_id": p_id, "orphan_id": -1, "real": real})
+    print(f"existing forks: {len(fork_rows)} (real={sum(r['real'] for r in fork_rows)})")
+
     out = joined.with_columns(
         pl.col("dataset").alias("stem"),
         pl.arange(0, joined.height).alias("cand_id"),
@@ -57,6 +92,11 @@ def main() -> None:
         "kind", "parent_id", "orphan_id", "d_pc", "sister", "mid_over_sister",
         "border", "orphan_speed", "orphan_len4", "d_qc", "real",
     )
+    if fork_rows:
+        forks = pl.DataFrame(fork_rows).with_columns(
+            (pl.arange(0, len(fork_rows)) + out.height).alias("cand_id"),
+        )
+        out = pl.concat([out, forks], how="diagonal")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     out.write_csv(args.out)
     print(f"wrote {out.height} candidates, real={int(out['real'].sum())}, "
