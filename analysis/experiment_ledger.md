@@ -228,6 +228,12 @@ v5（960 hardnegs 追加・n=4,418）: fold AUC [0.859, 0.819, 0.804, 0.808]（h
 **構造診断**: RF 計算で conv3 段の受容野 ≈ 15 px < sister 26 px（0.4 µm/px）＝**「1 細胞→2 細胞」の空間パターンを物理的に見られない**うえ GAP が位置情報を消す。tiny CNN が学べたのは輝度/テクスチャ統計の微小信号のみ、という全観測と整合。
 **次仮説（新規・高事前確率）**: 生 geff の Transformer **edge_prob** を division 選別に転用（199 本の追跡目的で学習済みのモデル出力を只で使う）。まず real 23 対の候補エッジ被覆率を測る。
 
+### E9 事前登録: Transformer edge_prob の division 転用（2026-08-24 13:45・実行中）
+1. **仮説**: 199 本で追跡学習済みの Transformer は、真の娘 C2 に対する「親候補分布」P(src|C2) で divider に高い質量を割く（ILP が別親に割当てた後でも）。データ枯渇の tiny CNN より遥かに強い特徴で、しかも**追加学習ゼロ**。
+2. **実装**: eval_train_raw v4 = predict の probs 行列から各 target の top-5 (src, tgt, prob, 座標) を dump（`BIOHUB_DUMP_PAIR_PROBS_DIR`）。val 選抜は eval-12 に戻した。
+3. **判定規則（読み出し前に固定）**: eval-12 の real 23 対について、(P,C2) の transformer prob の動画内 rank（solution エッジ除外プール）を測る。**top10 合計 ≥ 4 で rewire の選別器として統合**（E7-12 と同じバー）。幾何との積スタックも同時に測る。
+4. **対照**: patch CNN v5 の同じ読み出し（top10=2）。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
