@@ -1,0 +1,13 @@
+{
+  "id": "taichiiiii/biohub-div-gbdt",
+  "title": "biohub-div-gbdt",
+  "code_file": "div_gbdt.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_internet": "true",
+  "competition_sources": [],
+  "dataset_sources": ["taichiiiii/biohub-div-pairs"],
+  "kernel_sources": []
+}

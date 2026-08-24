@@ -27,7 +27,7 @@ _train_dirs = sorted(INPUT.glob("*/train")) or sorted(INPUT.glob("*/*/train"))
 assert _train_dirs, f"no train dir under {INPUT}: {[str(q) for q in INPUT.rglob('*')][:20]}"
 TRAIN = _train_dirs[0]
 print("TRAIN =", TRAIN)
-RZ, RXY = 3, 24  # v4: cover d_child p90 10um (+-9.75um XY); was 2,12 (2nd daughter outside patch)
+RZ, RXY = 2, 12  # v5: back to v3 window (v4 wide window rejected, ledger E7-13)
 NEG_PER_VIDEO = 12
 RNG = np.random.default_rng(20260824)
 
@@ -92,6 +92,24 @@ for gi, geff in enumerate(videos):
         meta.append((stem, int(nid), t, "trackstart"))
     if gi % 20 == 0:
         print(f"[{gi}/{len(videos)}] {stem}: total={len(y)} pos={sum(y)}")
+
+# v5: optional deployment-hard negatives mined from pred graphs (hardnegs.csv: stem,t,z,y,x)
+import csv as _csv
+_hn = sorted(Path("/kaggle/input").rglob("hardnegs.csv"))
+if _hn:
+    hn_rows = list(_csv.DictReader(open(_hn[0])))
+    print(f"hard negatives: {len(hn_rows)} from {_hn[0]}")
+    from collections import defaultdict
+    hn_by_stem = defaultdict(list)
+    for r in hn_rows:
+        hn_by_stem[r["stem"]].append(r)
+    for stem, rr in sorted(hn_by_stem.items()):
+        vol = zarr.open(str(TRAIN / f"{stem}.zarr"), mode="r")["0"]
+        for r in rr:
+            X.append(extract(vol, int(r["t"]), float(r["z"]), float(r["y"]), float(r["x"])))
+            y.append(0)
+            meta.append((stem, -1, int(r["t"]), "hardneg"))
+    print(f"after hardnegs: n={len(y)} pos={sum(y)}")
 
 X = np.stack(X); y = np.array(y, dtype=np.int8)
 print(f"dataset: X={X.shape} pos={int(y.sum())} neg={int((1-y).sum())}")
