@@ -10,6 +10,8 @@
   "competition_sources": [
     "biohub-cell-tracking-during-development"
   ],
-  "dataset_sources": [],
+  "dataset_sources": [
+    "taichiiiii/biohub-div-hardnegs"
+  ],
   "kernel_sources": []
 }
