@@ -84,7 +84,7 @@ r = subprocess.run(
     [sys.executable, "scripts/train_unet_transformer.py",
      "--data-dir", str(train_dir), "--splits", "probe_splits.json", "--split", "0",
      "--epochs", "1", "--max-iters", str(N_ITERS), "--num-workers", "4",
-     "--batch-size", "16"],
+     "--batch-size", "8"]  # v1: batch 16 OOMed on T4 (per-GPU 8 needs >14.5GB),
     cwd=repo, env=env, capture_output=True, text=True)
 wall = time.time() - t0
 print("STDOUT tail:\n", r.stdout[-4000:])
