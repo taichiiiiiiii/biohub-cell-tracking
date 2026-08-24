@@ -27,7 +27,7 @@ _train_dirs = sorted(INPUT.glob("*/train")) or sorted(INPUT.glob("*/*/train"))
 assert _train_dirs, f"no train dir under {INPUT}: {[str(q) for q in INPUT.rglob('*')][:20]}"
 TRAIN = _train_dirs[0]
 print("TRAIN =", TRAIN)
-RZ, RXY = 2, 12
+RZ, RXY = 3, 24  # v4: cover d_child p90 10um (+-9.75um XY); was 2,12 (2nd daughter outside patch)
 NEG_PER_VIDEO = 12
 RNG = np.random.default_rng(20260824)
 

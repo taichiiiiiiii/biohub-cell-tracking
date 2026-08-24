@@ -11,6 +11,7 @@ Output: cand_scores.csv (stem,cand_id,score). Leak-free: each video is scored
 only by the model that never saw its patches.
 """
 import csv
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -35,7 +36,9 @@ if not (cands_csv and model_dir and train_dirs):
 TRAIN = train_dirs[0]
 print(f"cands={cands_csv}\nmodels={model_dir}\ntrain={TRAIN}")
 
-RZ, RXY = 2, 12   # must match div_patches builder
+_info = json.load(open(model_dir / "model_info.json"))
+RZ, RXY = int(_info.get("rz", 2)), int(_info.get("rxy", 12))
+print(f"patch geometry from model_info: RZ={RZ} RXY={RXY}")
 
 
 class Net(nn.Module):

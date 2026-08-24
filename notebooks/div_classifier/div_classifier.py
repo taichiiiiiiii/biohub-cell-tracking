@@ -185,7 +185,9 @@ torch.save(net_all.state_dict(), "/kaggle/working/div_classifier.pt")
 json.dump(
     {
         "arch": "tiny3dcnn-v1",
-        "input": "(2,5,25,25) med/mad-normalized",
+        "input": f"{tuple(X.shape[1:])} med/mad-normalized",
+        "rz": int((X.shape[2] - 1) // 2),
+        "rxy": int((X.shape[3] - 1) // 2),
         "folds": {v: int(k) for v, k in fold_of.items()},
         "fold_aucs": fold_aucs,
         "pooled_rank_auc": float(auc(y, rank)),
