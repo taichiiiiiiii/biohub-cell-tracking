@@ -220,6 +220,9 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 ### eval-24 ベースライン確定（2026-08-24 12:15）
 base1 後処理・公式指標: **score 0.8919**（adj_edge_J 0.8891 / div_J 0.0282、div TP=2 FP=38 FN=31、GT 33、n=24）。eval-12（0.9125）より低い＝division-first 選抜の先頭 12 本は易しい側。**eval-36 合算: GT 51 division・div TP 4 / FP 61 / FN 47（divJ 0.036）**、満点帯 +0.096。GBDT 学習対 492,072（real 36・偽 20% 抽出）と candidates24（465,513 親・real 28・fork 1,467）を Kaggle へ。
 
+### Arm C（GBDT 幾何選別器）判定 = 棄却（2026-08-24 12:20）
+eval-24 の 492k 対（real 36）で LightGBM・動画グループ 4-fold: **CV AUC 0.4326 ± 0.2114**（fold 別 0.64/0.58/0.41/**0.10**）。36 陽性では幾何+トラック形状は雑音に過学習するのみ（寄与分解の幾何単独 top50=0 と整合）。**(iii) 単独路線は棄却**。選別は CNN×幾何スタック + hard negatives に一本化。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
