@@ -152,6 +152,7 @@ best_eps = []
 for k in range(N_FOLDS):
     va_mask = fold_arr == k
     net, best = train_fold(np.where(~va_mask)[0], np.where(va_mask)[0], MAX_EPOCHS, f"fold{k}", history)
+    torch.save(net.state_dict(), f"/kaggle/working/fold{k}.pt")   # leak-free scorer for fold-k videos
     oof[va_mask] = best["scores"]          # scores from the best epoch, not the last
     final_s = predict(net, np.where(va_mask)[0])
     last_ep_auc.append(float(auc(y[va_mask], final_s)))
@@ -159,19 +160,26 @@ for k in range(N_FOLDS):
     print(f"fold {k}: best ep={best['ep']} auc={best['auc']:.4f} | last ep auc={last_ep_auc[-1]:.4f} "
           f"(gap {best['auc'] - last_ep_auc[-1]:+.4f} = late-epoch overfit if positive)")
 
-print(f"\nOOF AUC={auc(y, oof):.4f}  best_eps={best_eps}")
+rank = np.zeros(len(oof))
+for k in range(N_FOLDS):
+    m = fold_arr == k
+    rank[m] = np.argsort(np.argsort(oof[m])) / max(1, m.sum() - 1)
+fold_aucs = [float(auc(y[fold_arr == k], oof[fold_arr == k])) for k in range(N_FOLDS)]
+print(f"\nper-fold AUC={['%.4f' % a for a in fold_aucs]}  "
+      f"pooled(rank-norm) AUC={auc(y, rank):.4f}  best_eps={best_eps}")
+print("NOTE: raw pooled OOF AUC mixes per-fold calibrations -- use rank-normalized")
 thr_table = []
 for rec_t in (0.9, 0.8, 0.7, 0.5):
-    thr = float(np.quantile(oof[y == 1], 1 - rec_t))
-    sel = oof >= thr
+    thr = float(np.quantile(rank[y == 1], 1 - rec_t))
+    sel = rank >= thr
     prec = float(y[sel].mean()) if sel.any() else 0.0
     thr_table.append({"recall": rec_t, "thr": thr, "precision": prec, "flagged": int(sel.sum())})
     print(f"recall~{rec_t}: thr={thr:.3f} precision={prec:.3f} flagged={int(sel.sum())}")
 np.save("/kaggle/working/oof_scores.npy", oof)
 
 # ---- final model on all data, trained for the CV-selected epoch count
-final_epochs = int(np.median(best_eps)) + 1
-print(f"\nfinal model: {final_epochs} epochs (median best of folds, +1)")
+final_epochs = max(8, int(np.median(best_eps)) + 1)   # val curves are flat from ep0; floor=8 for stable BN stats
+print(f"\nfinal model: {final_epochs} epochs (median fold best +1, floor 8)")
 net_all, _ = train_fold(np.arange(len(y)), None, final_epochs, "final", history)
 torch.save(net_all.state_dict(), "/kaggle/working/div_classifier.pt")
 json.dump(
@@ -179,7 +187,8 @@ json.dump(
         "arch": "tiny3dcnn-v1",
         "input": "(2,5,25,25) med/mad-normalized",
         "folds": {v: int(k) for v, k in fold_of.items()},
-        "oof_auc": float(auc(y, oof)),
+        "fold_aucs": fold_aucs,
+        "pooled_rank_auc": float(auc(y, rank)),
         "fold_best_epochs": best_eps,
         "fold_last_auc": last_ep_auc,
         "final_epochs": final_epochs,
