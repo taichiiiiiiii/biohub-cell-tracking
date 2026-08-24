@@ -111,16 +111,16 @@ def solve_stem(stem: str, args) -> None:
 
 
 def emit(args) -> None:
-    from biohub.public_postproc.config import build_config
+    from biohub.public_postproc.config import build_config, parse_set_overrides
     from biohub.public_postproc.deepcenter import load_deepcenter_veto_detector
     from biohub.public_postproc.pipeline import (
         SubmissionCsvWriter, _dataset_stats_row, _load_geff_as_dicts, filter_output_graph)
     out_dir = args.out_root / args.tag
-    cfg = build_config()
+    cfg = build_config(parse_set_overrides(args.set or []))
     deep = load_deepcenter_veto_detector(cfg)
     stems = sorted(p.stem.replace("solved_", "").replace(".parquet", "")
                    for p in out_dir.glob("solved_*.parquet"))
-    csv_path = out_dir / "submission.csv"
+    csv_path = out_dir / (args.emit_name or "submission.csv")
     with csv_path.open("w", newline="") as handle:
         writer = SubmissionCsvWriter(handle)
         for stem in stems:
@@ -140,6 +140,9 @@ def main() -> None:
     ap.add_argument("--tag", required=True)
     ap.add_argument("--stem")
     ap.add_argument("--emit", action="store_true")
+    ap.add_argument("--emit-name", help="alternate output csv name for postproc sweeps")
+    ap.add_argument("--set", action="append", metavar="NAME=VALUE",
+                    help="postproc BIOHUB_* overrides for emit (repeatable)")
     ap.add_argument("--add-thr", type=float, default=0.5)
     ap.add_argument("--app", type=float, default=0.1)
     ap.add_argument("--disapp", type=float, default=0.1)
