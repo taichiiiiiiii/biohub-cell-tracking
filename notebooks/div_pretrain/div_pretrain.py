@@ -40,6 +40,8 @@ def extract(vol_t, vol_t1, z, y, x):
         z0, y0, x0 = int(round(z)) - RZ, int(round(y)) - RXY, int(round(x)) - RXY
         zs, ys, xs = max(0, z0), max(0, y0), max(0, x0)
         ze = min(Z, z0 + 2 * RZ + 1); ye = min(Y, y0 + 2 * RXY + 1); xe = min(X, x0 + 2 * RXY + 1)
+        if ze <= zs or ye <= ys or xe <= xs:
+            continue  # fully outside this frame
         out[i, zs - z0:ze - z0, ys - y0:ye - y0, xs - x0:xe - x0] = fr[zs:ze, ys:ye, xs:xe]
     return out
 
@@ -63,9 +65,12 @@ def sample_patches(f):
     neg_pool = np.array([i for i in range(len(nodes)) if i not in div_set and t_col[i] < T - 1])
     n_neg = min(len(neg_pool), NEG_PER_POS * max(1, len(div_idx)))
     neg_idx = RNG.choice(neg_pool, n_neg, replace=False) if n_neg else []
+    Zs, Ys, Xs = vols.shape[1], vols.shape[2], vols.shape[3]
     for idx, lab in [(i, 1) for i in div_idx] + [(i, 0) for i in neg_idx]:
         t, z, y, x = nodes[idx, 0], nodes[idx, 1], nodes[idx, 2], nodes[idx, 3]
         t = int(t)
+        if not (0 <= z < Zs and 0 <= y < Ys and 0 <= x < Xs):
+            continue  # generator can place cells outside the FOV
         out.append((extract(vols[t], vols[min(t + 1, T - 1)], z, y, x), lab))
     return out
 
