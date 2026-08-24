@@ -3,12 +3,14 @@
 作業リポジトリ。運用規則は [CLAUDE.md](CLAUDE.md)、進行順は [CHECKLIST.md](CHECKLIST.md)、
 一次記録は [analysis/experiment_ledger.md](analysis/experiment_ledger.md)、教訓は [docs/LESSONS.md](docs/LESSONS.md)。
 
-## Status（2026-08-24 04:35）
+## Status（2026-08-24 10:00）
 
-**ベースライン = base1 0.8890 確立**（E2、元 NB とビット一致）／base2 0.8907・199 本 7.7h<12h ✅（E3）／E5 linefit: win2/w1.0 ローカル +0.0041 だが実質 n=1（効果は最大動画 1 本に集中）→ base1 v2 実行済 0.8931=掃引一致・LB 対提出待ち。
-**E6 division（0.1 項の空席、全公開 NB が div TP=0）が主戦線**: 正しい養子縁組エッジ 1 本 = **+0.0171** を実証（標的注入）。全 GT census **151 divisions/87 動画**・sister med 10.57 µm > 現行 safe-div 上限 8.5（div TP=0 の機序）。幾何のみの選別は基底率 9,079:1 で敗北 → train 12 本 eval セット（`eval_train_raw` 実行中）で特徴確定へ。
+**ベースライン = base1 0.8890 確立**（E2）／base2 0.8907・199 本 7.7h<12h ✅（E3）／E5 linefit: base1 v2 実行済 0.8931 だが実質 n=1・LB 対提出待ち。
+**train 12 本 eval セット確立（E7）**: base1 プリセットの公式スコア **0.9125**（adj_edge_J 0.9076 / div_J 0.0488、div TP=2 FP=23 FN=16、GT div 18 本）。division 満点なら **+0.095** の帯域が空いたまま＝主戦線続行。
+**E7 分類器（3D patch CNN・Kaggle T4）学習済**: fold 別 AUC 0.81–0.90（動画グループ 4-fold・rank 正規化 pooled 0.867）。val 曲線は ep0 から平坦＝後期過学習なし。⚠️pooled 生スコアの AUC 0.59 は fold 間キャリブレーション混合のアーチファクト（撤回済・rank 正規化で扱う）。次= eval-12 候補を fold モデルでリーク無し採点→「真候補が rank #1」率で deployment 判定。
+**過適合ガード（user 指示 08-24）**: 採否は eval-12（fold 外）で判定・閾値は OOF のみ・LB 照会は事前登録した対のみ・動画別寄与分布を必ず確認（E5 の n=1 教訓）。
 **提出キュー（user 実行待ち・5/日）**: ①base1 v1（E2）②base2 v3（E3）③base1 v1 再（E4 雑音）④base1 v2（E5）。コマンドは Issue #5 コメント。
-一次記録は台帳 E0〜E6。全 199 GT geff はローカル取得済（CPU カーネル tar 方式）。
+一次記録は台帳 E0〜E7。全 199 GT geff はローカル取得済（CPU カーネル tar 方式）。
 
 | 項目 | 値 |
 |---|---|
