@@ -17,7 +17,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-SRC = Path("/kaggle/input/biohub-div-patches")
+INPUT = Path("/kaggle/input")
+_hits = sorted(INPUT.rglob("div_patches.npz"))
+if not _hits:
+    print("mount tree:", [str(p) for p in INPUT.rglob("*") if p.is_dir()][:40])
+    raise FileNotFoundError("div_patches.npz not found under /kaggle/input")
+SRC = _hits[0].parent
+print("SRC =", SRC)
 d = np.load(SRC / "div_patches.npz")
 X, y = d["X"], d["y"].astype(np.float32)
 with open(SRC / "meta.csv") as f:
