@@ -1,0 +1,14 @@
+{
+  "id": "taichiiiii/biohub-div-score-cands",
+  "title": "biohub-div-score-cands",
+  "code_file": "div_score_cands.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "enable_internet": "true",
+  "competition_sources": ["biohub-cell-tracking-during-development"],
+  "dataset_sources": ["taichiiiii/biohub-div-cands"],
+  "kernel_sources": ["taichiiiii/biohub-div-classifier"]
+}
