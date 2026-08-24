@@ -9,6 +9,7 @@ Overfitting controls (per user directive 2026-08-24):
     median best epoch instead of a fixed large count
   * thresholds are chosen from OOF scores only (honest precision@recall)
 """
+import copy
 import csv
 import json
 from pathlib import Path
@@ -119,7 +120,8 @@ def train_fold(tr_idx, va_idx, epochs, tag, history):
             s = predict(net, va_idx)
             rec["val_auc"] = float(auc(y[va_idx], s))
             if rec["val_auc"] > best["auc"]:
-                best = {"auc": rec["val_auc"], "ep": ep, "scores": s}
+                best = {"auc": rec["val_auc"], "ep": ep, "scores": s,
+                        "state": copy.deepcopy(net.state_dict())}
             print(f"[{tag}] ep {ep:02d}  train_loss={rec['train_loss']:.4f}  val_auc={rec['val_auc']:.4f}"
                   + ("  *best*" if best["ep"] == ep else ""), flush=True)
         else:
@@ -152,7 +154,7 @@ best_eps = []
 for k in range(N_FOLDS):
     va_mask = fold_arr == k
     net, best = train_fold(np.where(~va_mask)[0], np.where(va_mask)[0], MAX_EPOCHS, f"fold{k}", history)
-    torch.save(net.state_dict(), f"/kaggle/working/fold{k}.pt")   # leak-free scorer for fold-k videos
+    torch.save(best.get("state", net.state_dict()), f"/kaggle/working/fold{k}.pt")  # best-epoch weights (late-epoch overfit appears with hardnegs)
     oof[va_mask] = best["scores"]          # scores from the best epoch, not the last
     final_s = predict(net, np.where(va_mask)[0])
     last_ep_auc.append(float(auc(y[va_mask], final_s)))
