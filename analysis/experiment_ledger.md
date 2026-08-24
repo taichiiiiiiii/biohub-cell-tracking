@@ -217,6 +217,9 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 - **v4 実測: SYNTH val AUC 0.63→0.67（4ep、上昇途上）**。ただし**決定的制約が判明: sequences は (T=6, Z64, Y64, X64) = XY 1.625 µm/px で競技データ（0.406 µm/px）の 4 倍粗い**。パッチの物理スケール・サンプリングが不一致で、fine-scale の appearance 事前学習としての転移価値は乏しい（作者の 165k division ラベルは検出/motion 学習向きで、我々のパッチ形態分類には解像度が足りない）。
 - **判定: Arm B は保留**（v4 の重みは残す。Arm A=hard negatives が停滞した場合のみ「pretrain init vs random init」の 1 対照実験で再訪）。教訓: **外部データは「ラベル数」でなく「測定スケールの一致」を先に検査する**。
 
+### eval-24 ベースライン確定（2026-08-24 12:15）
+base1 後処理・公式指標: **score 0.8919**（adj_edge_J 0.8891 / div_J 0.0282、div TP=2 FP=38 FN=31、GT 33、n=24）。eval-12（0.9125）より低い＝division-first 選抜の先頭 12 本は易しい側。**eval-36 合算: GT 51 division・div TP 4 / FP 61 / FN 47（divJ 0.036）**、満点帯 +0.096。GBDT 学習対 492,072（real 36・偽 20% 抽出）と candidates24（465,513 親・real 28・fork 1,467）を Kaggle へ。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
