@@ -387,6 +387,12 @@ v5（960 hardnegs 追加・n=4,418）: fold AUC [0.859, 0.819, 0.804, 0.808]（h
 3. **判定規則（読み出し前に固定）**: eval-12 で **Δ ≥ +0.005・median > 0・最悪 ≥ −0.002** → eval-24 検証（50% 割引則を想定）→ base2 提出カーネル統合 → LB 照会 1 回。
 4. リスク: ranker の学習データが train 全量なら ranker スコア自体に記憶が乗るが、比較は「同一 ranker を挟む/挟まない」の A/B なので計器は成立（ranker の躾が hidden へ汎化するかは LB で確認）。
 
+### E18 事前登録: 逆方向（親→子）分布による division 信号（2026-08-25 03:40・実行前）
+1. **機序仮説**: E9 の死因 = steal 型 division では子 C2 の**前向き** softmax（target ごとの親分布）の質量が誤親 Q に集中し、真親 P の prob が 0.01-0.12 に沈む。しかし**逆向きモデル**（bidirectional 機構の reverse_logits_native、target→source 方向）の**親 P ごとの子分布**は C1/C2 に割れるはず＝分裂の直接シグナル。前向き dump では観測不能だった未測定チャネル。
+2. **実装**: v7 = det 0.96875 復帰 + predict パッチ第 2 弾（bidirectional ブロック内・del 直前で reverse_logits_native の per-source top-5 を `<stem>_rev.csv` に dump。書式は前向きと同一）。
+3. **読み出し（事前固定）**: eval-12 real 23 対の (P,C2) について prob_rev(C2|P) と、親候補集合内 rank（E9-b と同じ候補プール 1.23M 対に rev 特徴を結合）。**判定規則: rev 単独または stack（CNN×geom×rev）で top10 ≥ 4 かつ E7 基準 stack2（top1=1/top10=2）超え → rewire 統合試験へ**。特に steal 型 16/23 対の rev prob 分布を必ず分離して報告（機序仮説の直接検証）。
+4. 対照: 前向き prob（E9: steal 0.009-0.12）。バー不成立でも steal 型の rev 分布が高ければ選別器の再設計材料として記録。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
