@@ -178,6 +178,12 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 7. **候補プール（12 本合計）**: adopt 30,766 対 / real 4、steal 1,202,521 対 / real 19（1 division が複数の妥当対を持つ）。ユニーク親 230,947・real 親 18。**oracle 箱フィルタ（real 全維持の最タイト幾何箱）でも 63.9% しか残せない**＝real の特徴レンジが全域に散る。
 8. **E6 の border ゲートは n=1 過適合だった（撤回）**: test4 では「境界距離 real 28 µm vs fake 9.8＝有効」だったが、eval-12 の real は border min **1.6 µm**。`border>=15` は real 親 **6/18** しか残さない（>=10 で 9/18、>=5 で 14/18）。divstage2 の BORDER_MIN_UM=15 既定は実 division の 2/3 を捨てる設計＝撤回表に登録。
 9. **次**: div_score_cands カーネル（v1 投入済・T4）で 231,615 親パッチをリーク無し採点 → CNN スコア単独と幾何スタックの「real 親の動画内 rank」分布で deployment 判定。既存 fork 668 個の CNN veto 効果も同時測定。
+10. **事前登録（スコア到着前・2026-08-24 10:10）**:
+   - **読み出し 1（adopt 経路）**: 動画ごとに親を CNN スコアで順位付けし、real 親 18 個の動画内 rank を記録。top-1 / top-3 / top-10 / 上位 1% の本数を報告。
+   - **読み出し 2（固定形スタック）**: `rank_norm(CNN) × rank_norm(幾何 prior-fit)`（重み学習なし・係数フリー）。同じ rank 分布を報告。**eval-12 で重みを調整することは禁止**（調整するなら別の held-out が必要）。
+   - **読み出し 3（FP veto）**: 既存 fork 668 の CNN スコア分布を「GT divider 7 µm 以内（TP 相当）」vs それ以外（FP 候補）で比較。veto 閾値 τ を **OOF の trackstart 表**（recall 0.9 → rank 0.60 相当）から取り、eval-12 での div FP 削減数と div TP 損失数を報告。
+   - **採用バー**: (a) adopt: top-1 一致が 4 recoverable 中 2 以上、かつ FP veto で div FP ≥ 半減が見込める場合に base1 v3 カーネルへ統合して LB 対提出 1 回で検証。(b) どちらも未達なら steal 機構の設計に先に投資（価値の過半は steal 側 10/18）。
+   - **過適合ガード**: 閾値はすべて OOF 由来に固定。eval-12 は「読み出し」にのみ使い、eval-12 上の掃引で閾値を選ばない。LB 照会は統合後 1 回。
 
 ---
 
