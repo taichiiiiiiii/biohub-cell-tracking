@@ -174,7 +174,10 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
    - **陰性種別で難度が大きく違う**: div_parent vs trackstart AUC **0.941**（recall 0.9 で prec 0.51）／vs midtrack AUC 0.855。
    - 成果物: fold0–3.pt（各動画を外した fold のモデル＝リーク無し採点用）+ final（14 epochs、全データ）。
 5. **eval-12 の現状測定（base1 プリセット後処理・公式指標）**: score **0.9125** = adj_edge_J 0.9076 + 0.1×div_J 0.0488（**div TP=2 / FP=23 / FN=16**、GT div 18）。カーネル同梱バリデータ（base2 構成・deepcenter veto ON）は adj 0.9116 / div_J 0.0800（TP=2 / FP=7 / FN=16）＝**veto は FP を 23→7 に減らすが TP は増やさない**。division 満点の帯域 +0.095 が空いたまま。
-6. **次**: eval-12 の養子縁組候補を fold モデルでリーク無し採点（div_score_cands カーネル）→ 幾何特徴とスタックして「真の候補が動画内で rank #1 になる率」を測る＝deployment 判定。
+6. **eval-12 の失敗様態census（18 GT division・base1 後処理グラフ）**: **steal_needed 10 / orphan_recoverable 4 / daughter_undetected 3 / already_fork 1**。∴ 養子縁組のみの上限は TP 2→6（divJ≈0.24）、steal 込みで TP≈15（divJ≈0.6、+0.05 帯）＝**rewire 機構が価値の過半**。
+7. **候補プール（12 本合計）**: adopt 30,766 対 / real 4、steal 1,202,521 対 / real 19（1 division が複数の妥当対を持つ）。ユニーク親 230,947・real 親 18。**oracle 箱フィルタ（real 全維持の最タイト幾何箱）でも 63.9% しか残せない**＝real の特徴レンジが全域に散る。
+8. **E6 の border ゲートは n=1 過適合だった（撤回）**: test4 では「境界距離 real 28 µm vs fake 9.8＝有効」だったが、eval-12 の real は border min **1.6 µm**。`border>=15` は real 親 **6/18** しか残さない（>=10 で 9/18、>=5 で 14/18）。divstage2 の BORDER_MIN_UM=15 既定は実 division の 2/3 を捨てる設計＝撤回表に登録。
+9. **次**: div_score_cands カーネル（v1 投入済・T4）で 231,615 親パッチをリーク無し採点 → CNN スコア単独と幾何スタックの「real 親の動画内 rank」分布で deployment 判定。既存 fork 668 個の CNN veto 効果も同時測定。
 
 ---
 
@@ -185,4 +188,5 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 
 | 元の主張 | いつ・何で覆ったか | 訂正後 |
 |---|---|---|
-| （まだ無し） | | |
+| E6中間「境界距離は有効な選別特徴（real 28 µm vs fake med 9.8、2-3×削減）」・divstage2 の BORDER_MIN_UM=15 既定 | 2026-08-24 E7 eval-12（18 GT division）で real の border min 1.6 µm、border>=15 は real 親 6/18 しか残さない | 境界ゲートは n=1（test4 の 1 division）への過適合。ゲートとして使うなら >=5 µm が上限（14/18）だが、選別は学習型スコアに委ねる |
+| E7 v2「pooled OOF AUC 0.59」 | 同日 v2 ログ精査: fold 別 AUC は 0.83-0.92。生スコアの fold 間キャリブレーション差が混合されただけ | fold 内 rank 正規化後 pooled AUC 0.867（v3） |
