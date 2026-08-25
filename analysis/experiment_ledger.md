@@ -442,6 +442,23 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
 3. **提出物**: base2 v4 = base2 dual-seed カーネル + primary を div-ft 重み（sha 60748375）に差替え。変更はこの 1 点のみ。
 4. **判定規則（提出前に固定）**: 予測 LB = 0.919 + Δ×50%（E15-b の半減則）≈ **0.924**。**LB ≥ 0.921 で採用**（新提出基準に昇格・fine-tune 路線を増強へ）。**LB ≤ 0.919 で棄却**（held-out ローカル→LB の転移失敗として記録・モデル変更のローカル計器は死と結論）。0.920 は判定不能（表示分解能）として再現 1 回。
 
+### E21 事前登録: secondary seed への同型 fine-tune（2026-08-25・user 承認「E21 secondary-ft も並行」・実行前）
+1. **仮説**: E20 の hard-window fine-tune（div 窓 K=28 oversample・lr 1e-5・8×500 iter・eval-12 除外）は primary で edge +0.0097 を出した。同型を secondary（seed314159 ep400）に適用すれば、両シード ft の dual-seed でさらに利得が乗る。
+2. **実装**: `notebooks/div_finetune_secondary/`（primary 版との差分 = warm start を seed314159 重みに・method 名 `unet_transformer_divft_sec` のみ。eval-12 除外はそのまま継承）。~4.5 GPU-h。
+3. **判定規則（読み出し前に固定）**: 完走後、eval-12 を両 ft（primary-ft + secondary-ft）の dual-seed で再評価し、ft-primary のみ（0.9221）との動画対応 paired Δ を測る。**mean Δ ≥ +0.002 かつ median > 0 かつ 12 本中 ≥8 が正 → LB probe 候補に昇格**。未達なら secondary-ft は棄却（primary-ft のみ維持）。
+
+### E22 事前登録: bidirectional weight 0.20→0.30 掃引（2026-08-25・user 承認・実行前）
+1. **動機**: 日次監視 08-25 = 公開 NB `evgendvorkin/biohub-0-923-lb`（LB 0.923 主張）の最有力差分が bidir weight 0.30。我々のカーネル内コメントにも「0.20 は 0.915 参照値のまま未調整」。DeepCenter epoch2 veto は我々も既に同構成＝差分から消えた。
+2. **実装**: eval_train_raw v11 = 変更 3 点のみ（bidir 0.30 を全 4 参照サイト・VALIDATOR_N_PER_TYPE=18（eval-36）・cell4 ft override を `BIOHUB_FT_PRIMARY` ゲート化して base 重みで実行）。~3-4 GPU-h・LB 照会なし。
+3. **A/B の正当性**: 両腕とも base(400ep) 重み＝same-weights pipeline A/B なので eval-36 汚染問題は該当しない。ベースライン(0.20) = e7/val12_post + e8/val24_post の公式 per-video スコア。
+4. **判定規則（読み出し前に固定）**: 動画対応 paired Δ（n=36）で **mean ≥ +0.002 かつ median > 0 かつ ≥22/36 が非負 → 0.30 を base2 系譜に採用**（LB 照会は E20-b 判定後に事前登録の上で 1 回）。未達なら 0.20 維持。div 項の変化は参考記録のみ（判定に使わない）。
+
+### E23 事前登録: 公開 0.923 NB の再現提出（2026-08-25・user 承認「再現提出する」・実行前）
+1. **目的**: `evgendvorkin/biohub-0-923-lb` v12 の LB 0.923 主張の真偽確認 + 新ベース候補のアンカー取り（NB 表示スコアは信用しない、が既知運用則）。
+2. **実装**: kernel を pull → コード監査（外部送信・不正操作がないこと）→ 当方アカウントでほぼ無改変 push → 完走後に提出。~4 GPU-h + **LB 照会 1**。
+3. **判定規則（提出前に固定）**: **LB ≥ 0.921 → 主張実質確認**＝新ベース骨格候補（次段: 我々の div-ft primary を接木、それ自体を別途事前登録）。**LB ≤ 0.919 → 再現失敗/タイトル詐欺として記録**、base2 系譜を維持。0.920 は判定不能。
+4. **リスク明記**: 提出枠 1 消費・fork 版が hidden test で挙動不一致の可能性（frame retention guard は我々の系にも実装済みなので大差ないはず）。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
