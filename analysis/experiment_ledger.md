@@ -212,6 +212,14 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 - 公開 NB に division 突破なし: `0-926-biohub-divsub` はタイトル詐欺（実体 0.912-0.913 の検出崩壊ガード、safe-div は既知の壊れた幾何のまま）。`divaug` 系は 7 月パッチ済み exploit の死骸。
 - #736937: NB の「Highest Score」ソートはパッチ前スコアが残留＝NB の表示スコアは信用しない（既知運用則の再確認）。#737103: 手動ラベルが external data か未回答（要追跡）。
 
+### 日次監視メモ（2026-08-25 スイープ）
+- **★公開 NB に LB 0.923 出現**: `evgendvorkin/biohub-0-923-lb` v12（10 votes・fork `jaslee2/biohub-fork923` と同一内容）。我々の base2（E3・LB 0.919）と同系の dual-seed + harmonic bidirectional fusion だが差分 4 点: (a) **BIDIRECTIONAL_EDGE_WEIGHT=0.30**（我々は 0.2）、(b) **DeepCenter veto を epoch2 チェックポイントで運用**（「epoch500 より良い」とコメント＝checkpoint 選択の再検証価値）、(c) frame retention guard（アンサンブル候補がフレームあたり primary の 90% 未満なら当該フレームは primary へフォールバック）、(d) kunaldesale 系 division ヒューリスティック。
+- 同 NB 内コメント: 「BIOHUB_ILP_DIVISION_WEIGHT を 0.3/1.0/2.0/3.0 で振っても実 LB は全て 0.915 で不変」＝我々の E13（ILP 重み手術は不動）と独立に整合。
+- `kunaldesale2408/biohub-cell-tracking` v6（81 votes・08-24 更新）: mutual-nearest-orphan sisters + t+2 divergence test。8 held-out volumes CV で div_j 0.0625（TP1/FP9/FN6）・score +0.0046。半径 SAFE_DIV_MAX_UM=8.0 / SISTER=11.0 / EXISTING_CHILD=10.0 / DIVERGE=2.25（引用元 12/15/10 から node 密度差で縮小と明記）。FP:TP コスト比 1:20 で TP1/FP9 は正味 +0.002−0.0009 ≈ +0.001 の薄利＝我々の選別器 5 連敗の壁とは別の「安全半径ゲート」型。
+- タイトル詐欺の継続: `flexonafft/biohub-harmonic-fusion` v7 は実体 0.913 の別技術（frame retention guard V1）。`anhadmahajan06` v19 は自己ガード付きでフォーク実行不能。NB 表示スコアは信用しない（既知運用則）。
+- Discussion 新着 2 件のみ（#737103 hand-labeling ルール質問=運営未回答のまま・#737101 stuck-at-0.928）。首位 0.962 圏の手法開示なし。
+- **追試キュー（E20-b 判定後・各 1 件=事前登録 1 本）**: ① bidirectional weight 0.2→0.30 掃引（env ノブのみ・ローカル eval-36 paired Δ で先に判定）② DeepCenter checkpoint epoch 選択の検証 ③ kunaldesale 安全半径 division ゲートの eval-36 移植測定（LB 照会は正味期待 +0.001 では出さない）。
+
 ### Arm B（合成事前学習）の中間判定（2026-08-24・保留）
 - v1-v3 の失敗series: ①FOV 外ノード（境界バグ）②座標がネイティブスケール格納（sniff で解決、v4 で patch 数 9→150/系列に回復）。
 - **v4 実測: SYNTH val AUC 0.63→0.67（4ep、上昇途上）**。ただし**決定的制約が判明: sequences は (T=6, Z64, Y64, X64) = XY 1.625 µm/px で競技データ（0.406 µm/px）の 4 倍粗い**。パッチの物理スケール・サンプリングが不一致で、fine-scale の appearance 事前学習としての転移価値は乏しい（作者の 165k division ラベルは検出/motion 学習向きで、我々のパッチ形態分類には解像度が足りない）。
