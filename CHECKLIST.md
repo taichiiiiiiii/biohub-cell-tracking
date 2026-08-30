@@ -22,22 +22,25 @@
 - [x] **hidden test の規模を調べる。** Overview 引用（#734237）: train と同規模（≈200 本）。
 - [ ] **系統比と public/private の内訳を調べる。** Discussion を MCP で走査（`list_competition_topics` 75 件）。
       公開 test 4 本の値は hidden の値ではない。
-- [ ] **雑音床を測る。** `scripts/noise_floor.py` は RMSE 用で使えない。動画単位ブートストラップで
-      **マイクロ平均 score の標準誤差**を出すスクリプトを書く（`tracking_cellmot.metrics.summarise` を
-      再利用。入力 = per-dataset の TP/FP/FN）。GT 付きの動画が多いほど精度が上がるので、Kaggle 上で
-      train の全 199 本に対してベースラインを走らせ per-dataset 行を持ち帰る。
-      出力を台帳の前提表に書き、以後の全比較で守る。
+- [x] **雑音床を測る。** `scripts/noise_floor_tracking.py` とeval-12で動画単位
+      ブートストラップを実施。hidden 199本換算SD 0.0045、LB差<0.005を
+      判定不能帯として台帳へ固定（2026-08-24）。
 - [ ] **誤差の集中度を確認する。** FN / FP が少数の動画に集中していないか（`6bba` の大きい動画が
       マイクロ平均を支配する構造）。系統別にも出す。
 - [ ] **オラクル上界を出す。** GT 自身を提出したときの adjusted Jaccard（N_pred = GT ノード数は
       N_true より小さいので J=1 だが division と疎さの影響を確認）。
       検出のみ完璧・リンクだけ自前、の上界も出す（検出器とリンカのどちらに伸び代があるか）。
-- [ ] **同一コードを 2 回提出して LB のばらつきを測る。** smoke カーネルで十分。これはブートストラップとは
-      別種の下限（同じ評価対象を同じコードで解き直したときの誤差）。**両方を下回る差は確実に無意味**。
-      提出は user 承認後。
+- [x] **同一コードを 2 回提出して LB のばらつきを測る。** base1を2回実行し、
+      両方0.908。表示3桁未満（<0.001）を再実行ばらつきの観測上限として記録。
 
 > **ゲート**: 狙っている改善幅が雑音床を超えないなら、スコアを追う作業は打ち切る。
 > 検出器の置き換え・系統別の扱い・分裂検出など、桁の違う軸に移る。
+
+- [ ] **E23ローカルparityを固定する。** LB 0.924 notebookの全ノード重心補正、
+      mid-track親、mutual-NN、t+2 divergence、DeepCenter設定を`src/biohub/public_postproc/`
+      へ移植する。notebook内の独自division proxyは採用せず、各armをCSV化して
+      `src/biohub/evaluate.py`から公式metricを直呼びする。node/edge/丸め後座標、
+      telemetry、per-video公式countsがE23経路と一致するまで性能実験を開始しない。
 
 ---
 

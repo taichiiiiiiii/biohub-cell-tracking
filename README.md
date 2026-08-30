@@ -3,22 +3,28 @@
 作業リポジトリ。運用規則は [CLAUDE.md](CLAUDE.md)、進行順は [CHECKLIST.md](CHECKLIST.md)、
 一次記録は [analysis/experiment_ledger.md](analysis/experiment_ledger.md)、教訓は [docs/LESSONS.md](docs/LESSONS.md)。
 
-## Status（2026-08-25 06:30）
+## Status（2026-08-30 17:30 JST）
 
-**LB アンカー確立**: base1 **0.908**／同一コード再実行 **0.908**（再実行雑音<表示3桁）／base2 dual-seed **0.919**＝提出基準／E5 linefit w1.0 **0.907**（local +0.004 が不転移＝n=1 効果の実証）。LB 首位 0.962 と差 0.043。
-**E10 センサス（地図）**: eval-12 の edge FN 363 の内訳=誤リンク 131・検出欠落 127・track end/start 89。**FP 410 全除去=+0.049 が最大レバー**、division 天井は +0.016 止まり。
-**E9〜E13: 「同一モデル情報の事後手術」6 連敗でクローズ**: FP エッジの transformer prob 中央値 0.79（自信を持って間違える）・運動整合性は TP/FP 分離ゼロ・ILP 再解決/候補拡張/div weight 掃引は最良 +0.0009。E13 リグ（`scripts/e13_resolve.py`）は val12_post をバイト一致再現＝今後の ILP/postproc 掃引はローカル 15 分/config。
-**深夜サイクル（08-25 未明）**: E14-b det 緩和 −0.0015 棄却（欠落検出は「閾値のすぐ下」ではない）／E15-b safe-div 緩和 eval-24 再現で確定棄却（掃引勝者は検証セットで半減の定量化）／E16 チェックポイント換装は**既に 400ep 使用中**と判明しパーク（ローカル評価は ckpt 比較に学習データ汚染で使用不可）／E18 逆方向（親→子）分布も基底率に敗北＝**division 信号はこのモデル族の全チャネルで全滅・再学習必須を確定**。
-**実行中**: E19 = 学習コスト計測プローブ（sec/iter・400ep warm start 連続性）→ 第 3 シード / division-aware fine-tune の実現可能性判定。待機列: E17 = 公開 22 特徴 association ranker の base2 移植。
-一次記録は台帳 E0〜E19。
+**新基準 = E23 public-0.923再現の LB 0.924**。事前採用バー0.921を通過し、
+base2 0.919から+0.005。現在488位/2,869チーム。現時点のgold圏proxyは
+15位0.945なので、変動余裕込みの作業目標を **LB 0.947以上**とする。
+首位0.962との差は0.038。
+
+**E20-b hard-window fine-tuneは棄却**。held-out eval-12では0.9221だったが
+LBは0.906（事前棄却バー≤0.919）まで崩れたため、同型のE21 secondary
+fine-tuneも凍結する。次ループの最初のゲートは、E23に固有の全ノード重心補正と
+構造safe-divをローカルへ正確に移植し、公式metric直呼びで0.924系を再生できる
+計測器を作ること。その後に同一raw・eval-36で改善レバーを分解する。
+
+一次記録は台帳 E0〜E23。
 
 | 項目 | 値 |
 |---|---|
 | slug | `biohub-cell-tracking-during-development` |
 | 形式 | **コード提出のみ**（`isKernelsSubmissionsOnly`）。カーネルが hidden test（train と同規模 ≈200 本・重複なし）に対して `submission.csv` を書く。**5 件/日**、チーム上限 5 |
 | 締切 | 2026-09-29 23:59 UTC（チーム合流・新規参加は 09-22） |
-| 賞金 / 参加 | $60,000 / 2,659 チーム（2026-08-24） |
-| LB（08-23） | 首位 0.962（CLI 確認）。公開 NB の自称値: clean 0.908 / 公式 UNet 0.857（**未再現**） |
+| 賞金 / 参加 | $60,000 / 2,869 チーム（2026-08-30） |
+| LB（08-30 08:29 UTC） | 首位 0.962、gold圏proxy（15位）0.945、当方0.924（488位）。Kaggle CLIの全leaderboardで確認 |
 | 指標 | `adj_edge_jaccard + 0.1 × division_jaccard`（定義: [`official/metrics.md`](official/metrics.md)） |
 | 公式実装 | [royerlab/kaggle-cell-tracking-competition](https://github.com/royerlab/kaggle-cell-tracking-competition)（`official/` submodule） |
 
