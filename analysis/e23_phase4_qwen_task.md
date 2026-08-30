@@ -60,8 +60,10 @@ For a rejected marginal synthetic repair:
 - remove the just-inserted middle node;
 - decrement/restore the local `synthetic_added` cap accounting and
   `stats["gap_inserted_synthetic"]`;
-- add neither proposed edge and do not mark the source, target, or isolated
-  sets as used;
+- preserve the existing construction order: perform the veto before creating
+  either proposed edge, so rejection leaves `new_edges` unchanged; do not move
+  edge construction before the veto and do not mark the source, target, or
+  isolated sets as used;
 - do **not** decrement `next_id`: the rejected node consumes its ID, so the
   next accepted synthetic node has a visible ID gap;
 - retain telemetry already recorded before rejection, including synthetic
@@ -96,8 +98,17 @@ order, edge construction, and all unrelated counters.
 Add focused synthetic-graph tests to `tests/test_public_postproc.py`. Isolate
 gap closing with the existing `_cfg`/`_ALL_OFF` pattern and monkeypatch the
 symbol actually called by `graph_ops.py` so there is no model, image, network,
-or checkpoint dependency. Assert the spy's call count, threshold argument,
-and relevant stats, not merely final topology.
+or checkpoint dependency. A monkeypatched
+`graph_ops.deepcenter_accept_repair_point` spy must preserve the real helper's
+telemetry contract: on a scored call it increments
+`deepcenter_gap_checked` and exactly one of `deepcenter_gap_accepted` or
+`deepcenter_gap_rejected` before returning. Alternatively, leave that helper
+real and monkeypatch `deepcenter.deepcenter_score_point` to return the desired
+deterministic score. For refinement-dependent assertions, monkeypatch
+`graph_ops.refine_synthetic_midpoint`; its spy must increment
+`gap_refined_synthetic` once per insertion before returning a deterministic
+point, just as the successful real refinement path does. Assert spy call
+counts, threshold arguments, and relevant stats, not merely final topology.
 
 Required coverage:
 
@@ -107,7 +118,10 @@ Required coverage:
    `gap_synthetic == 1`.
 2. Veto disabled: both node kinds/at least both span classes collectively show
    no model call and zero bypass/check counters while valid repairs still land.
-3. Exact boundaries: span exactly `8.5` is marginal. Exercise the established
+3. Exact boundaries: span exactly `8.5` is marginal. Construct that boundary
+   in physical units using the repository scale, for example an x-coordinate
+   difference of `8.5 / 0.40625` voxels with equal z/y, and assert that the
+   resulting candidate takes the marginal route. Exercise the established
    DeepCenter strict threshold boundary as well: score `0.25` is accepted and
    a score below `0.25` is rejected (either through the real helper with a
    deterministic score stub or an equivalently focused test).
@@ -119,10 +133,25 @@ Required coverage:
    rejected ID. Prove refinement telemetry from the rejected insertion and
    DeepCenter checked/rejected telemetry remain. Do not weaken this into two
    separate function calls, because `next_id` and cap reuse are call-local.
-5. Stats-schema test: `new_stats()` contains
+   Set `GAP_CLOSE_MAX_ADDED_ABS=1` and make
+   `GAP_CLOSE_MAX_ADDED_FRAC` large enough that the absolute cap is the binding
+   cap. Route the first candidate to rejection and the later candidate to
+   acceptance without a candidate tie. Assert `gap_skipped_node_cap == 0`, the
+   accepted node ID is exactly the rejected consumed ID plus one, and
+   `gap_refined_synthetic == 2` (one retained refinement event for each
+   attempted insertion). This must fail if rejection does not restore
+   `synthetic_added` capacity.
+5. Marginal synthetic fail-open: explicitly enable both
+   `USE_DEEPCENTER_VETO` and `DEEPCENTER_GAP_VETO`, route the gap gate to the
+   real `deepcenter_accept_repair_point`, and pass a dataset with a missing
+   detector bundle. The valid repair still lands,
+   `deepcenter_gap_missing == 1`, checked/accepted/rejected remain zero, and no
+   bypass counter changes. This protects the separate `USE_DEEPCENTER_VETO`
+   fail-open contract without loading a model.
+6. Stats-schema test: `new_stats()` contains
    `deepcenter_gap_bypassed_observed_node` and does not contain the stale
    `deepcenter_gap_bypassed_synthetic_node`.
-6. Non-regression: retain and run the existing legacy/default-base1 identity
+7. Non-regression: retain and run the existing legacy/default-base1 identity
    test and exact E23 profile-semantics test. Phase 4 changes no profile values.
    The full focused module must also retain all integrated Phase 3 tests.
 
