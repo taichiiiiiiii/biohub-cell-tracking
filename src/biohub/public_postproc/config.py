@@ -130,8 +130,8 @@ CODE_DEFAULTS: dict[str, str] = {
     "BIOHUB_REFINE_CENTROIDS_MAX_SHIFT_UM": "2.8",
     "BIOHUB_SAFE_DIV_MODE": "legacy",
     "BIOHUB_SAFE_DIV_REQUIRE_MID_TRACK_PARENT": "0",
-    "BIOHUB_SAFE_DIV_MUTUAL_NN": "0",
-    "BIOHUB_SAFE_DIV_DIVERGENCE": "0",
+    "BIOHUB_SAFE_DIV_REQUIRE_MUTUAL_NN": "0",
+    "BIOHUB_SAFE_DIV_REQUIRE_DIVERGENCE": "0",
     "BIOHUB_SAFE_DIV_DIVERGE_UM": "2.25",
     "BIOHUB_EXPERIMENT_TAG": "biohub_132_clean_short_track_rescue_lightcv_nohack",
 }
@@ -214,8 +214,8 @@ E23_PRESET: dict[str, str] = {
     "BIOHUB_SAFE_DIV_GLOBAL_FRAC_CAP": "0.00375",
     "BIOHUB_SAFE_DIV_MODE": "e23",
     "BIOHUB_SAFE_DIV_REQUIRE_MID_TRACK_PARENT": "1",
-    "BIOHUB_SAFE_DIV_MUTUAL_NN": "1",
-    "BIOHUB_SAFE_DIV_DIVERGENCE": "1",
+    "BIOHUB_SAFE_DIV_REQUIRE_MUTUAL_NN": "1",
+    "BIOHUB_SAFE_DIV_REQUIRE_DIVERGENCE": "1",
     "BIOHUB_SAFE_DIV_DIVERGE_UM": "2.25",
     "BIOHUB_REFINE_ALL_CENTROIDS": "1",
     "BIOHUB_REFINE_CENTROIDS_WIN_Z": "1",
@@ -348,10 +348,14 @@ class PostprocConfig:
     # Structural safe-division gates (E23 parity; inert in base1).
     # SAFE_DIV_MODE selects the candidate-generation semantics: "legacy"
     # (current port) or "e23" (notebook structural gates).
+    # REQUIRE_MUTUAL_NN / REQUIRE_DIVERGENCE mirror the notebook env vars
+    # BIOHUB_SAFE_DIV_REQUIRE_MUTUAL_NN / BIOHUB_SAFE_DIV_REQUIRE_DIVERGENCE
+    # exactly; the submitted notebook hardwires both gates, so the e23
+    # preset enables them (and REQUIRE_MID_TRACK_PARENT, its C1 gate).
     SAFE_DIV_MODE: str
     SAFE_DIV_REQUIRE_MID_TRACK_PARENT: bool
-    SAFE_DIV_MUTUAL_NN: bool
-    SAFE_DIV_DIVERGENCE: bool
+    SAFE_DIV_REQUIRE_MUTUAL_NN: bool
+    SAFE_DIV_REQUIRE_DIVERGENCE: bool
     SAFE_DIV_DIVERGE_UM: float
 
     USE_DEEPCENTER_VETO: bool
@@ -475,8 +479,8 @@ def build_config(
         SAFE_DIV_GLOBAL_FRAC_CAP=_get_float(env, "BIOHUB_SAFE_DIV_GLOBAL_FRAC_CAP"),
         SAFE_DIV_MODE=safe_div_mode,
         SAFE_DIV_REQUIRE_MID_TRACK_PARENT=_get_bool(env, "BIOHUB_SAFE_DIV_REQUIRE_MID_TRACK_PARENT"),
-        SAFE_DIV_MUTUAL_NN=_get_bool(env, "BIOHUB_SAFE_DIV_MUTUAL_NN"),
-        SAFE_DIV_DIVERGENCE=_get_bool(env, "BIOHUB_SAFE_DIV_DIVERGENCE"),
+        SAFE_DIV_REQUIRE_MUTUAL_NN=_get_bool(env, "BIOHUB_SAFE_DIV_REQUIRE_MUTUAL_NN"),
+        SAFE_DIV_REQUIRE_DIVERGENCE=_get_bool(env, "BIOHUB_SAFE_DIV_REQUIRE_DIVERGENCE"),
         SAFE_DIV_DIVERGE_UM=_get_float(env, "BIOHUB_SAFE_DIV_DIVERGE_UM"),
         USE_DEEPCENTER_VETO=_get_bool(env, "BIOHUB_USE_DEEPCENTER_VETO"),
         REQUIRE_DEEPCENTER_VETO=_get_bool(env, "BIOHUB_REQUIRE_DEEPCENTER_VETO"),

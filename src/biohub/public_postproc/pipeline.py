@@ -43,6 +43,14 @@ def new_stats() -> dict[str, int]:
     Verbatim from the notebook cell (``gap_close_effective_max_gap`` is
     deliberately absent: it is only set if ``close_single_frame_gaps``
     actually runs, same as the source).
+
+    The notebook declares ``safe_division_geometric_candidates``,
+    ``safe_division_mutual_nn_rejected`` and
+    ``safe_division_divergence_rejected`` but never increments them (its
+    telemetry always prints 0 for all three). The port keeps the keys in
+    the notebook's position and fills them truthfully inside
+    ``add_safe_divisions_postlink`` -- the documented notebook-only
+    broken-counter exception of the E23 parity contract.
     """
     return {
         "raw_edges": 0,
@@ -84,8 +92,11 @@ def new_stats() -> dict[str, int]:
         "gap2_added_edges": 0,
         "gap2_skipped_cap": 0,
         "safe_division_candidates": 0,
+        "safe_division_geometric_candidates": 0,
         "safe_divisions_added": 0,
         "safe_division_skipped_cap": 0,
+        "safe_division_mutual_nn_rejected": 0,
+        "safe_division_divergence_rejected": 0,
         "deepcenter_gap_checked": 0,
         "deepcenter_gap_bypassed_strong_motion": 0,
         "deepcenter_gap_bypassed_synthetic_node": 0,
