@@ -521,6 +521,30 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
   Kaggle提出まで進めてよい。可視LBでの反復選抜はせず、各照会のsubmission ID・
   score・採否を本台帳へ記録する。
 
+### E23 Phase 4 public-four parity 完了（2026-08-30 21:07 JST）
+
+- **code**: `022222b79a10df4908ee46b7ccba6ea088aa255c`（Phase 3に
+  exact synthetic-gap DeepCenter routingを統合）。Qwen実装後、SOL独立レビューは
+  最終`SHIP`。統合後の全97テスト、Ruff、`git diff --check`をPASS。
+- **実行**: `outputs/local/e23_parity_public4/`をfresh作成し、CPU-only、
+  `PYTHONHASHSEED=0`、E23 profile、固定DeepCenter checkpointを使用。ログで
+  checkpoint SHA pinのepoch 2をロードし、4 datasets、240,126 data rowsを完走。
+- **submission parity**: SHA256
+  `33c179b0449b9cdd186f06a653cddc8cf12359f008982f6713cdf30784a52e6a`、
+  `outputs/kaggle/e23_reference/submission.csv`と`cmp -s`一致。データセット別の
+  row/node/edge/fork数も全一致し、正規化graph SHA256
+  `7c71134d70413986f3e557c91b59db019260d27a93e438ba3770fd5c464338fd`。
+- **telemetry parity**: 4 unique datasets、74 columns。reference必須fieldは全値一致。
+  `deepcenter_gap_bypassed_observed_node`を含み、旧
+  `deepcenter_gap_bypassed_synthetic_node`は不在。centroid/safe-divisionの追加counter
+  conservationもPASS。
+- **公式score parity**: `scripts/local_eval.py`のJSON SHA256
+  `3afc4a1a5f4319daa27c92eb1486aed010d0e7e8231ad408bd7d2682b36ba71e`でreferenceと
+  `cmp -s`一致。public-four score `0.8845`、adjusted edge Jaccard `0.8845`。
+- **判定**: E23 notebook→localのPhase 3/4 blockerを**解除**。public-fourは
+  parity証明専用で候補採否には使わない。次は凍結済み`steal_twin_design.md`の
+  `twin_only_v1`をST-R1→ST-R4順に実装・dry-runし、eval12の事前登録gateから進める。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
