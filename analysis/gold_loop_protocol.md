@@ -101,6 +101,12 @@ Parity is accepted only when the notebook reference and local port agree on:
   `0.30`.
 - Therefore a strict `0.20 x 0.30` comparison requires one new approved Kaggle
   evaluation run. Top-k pair-probability dumps cannot reconstruct it exactly.
+- The external `.933` reproduction anchor is verified as immutable kernel v2 /
+  session `345883663` / submission `55877457`. Its exact `.931` parent differs
+  in two behavioral controls together: bidirectional edge weight `0.15 -> 0.30`
+  and secondary detection weight `0.475 -> 0.80`. The claimed single-change
+  attribution is false; see `analysis/external_933_provenance.md` and the
+  hash-pinned ignored bundle under `outputs/kaggle/external_933_reference/`.
 
 ## Adoption gates
 
@@ -124,21 +130,22 @@ For the already-preregistered 36-video safe-div/bidirectional comparison:
 
 Post-parity queue:
 
-0. Resolve the immutable scored version behind the external public kernel
-   `rishabhr0y/933-biohub-bidir30`, then reproduce it without semantic changes.
-   The current pulled version is `CANCEL_ACKNOWLEDGED` and differs from both
-   E23 and the current `.931` pull in several knobs, so the title/slug is not
-   proof that the latest source scored `0.933`. Disable its score-irrelevant
-   train validator only after proving public-test graph/SHA equivalence. Treat
-   `>=0.931` as reproduction, `0.929-0.930` as inconclusive, and `<=0.928` as
-   failure if an approved LB probe is eventually run.
+0. Keep the resolved external `.933` as a reproduction anchor. Scored v2 is
+   directly linked to its `.933` submission, and latest v4 is executable-AST
+   equivalent despite its cancelled run. Reproduce the two-control bundle
+   without semantic changes; disable its score-irrelevant train validator only
+   after proving public-test graph/SHA equivalence. Do not spend an LB query to
+   re-prove the score mapping. Any future approved account-level replay tests
+   portability/runtime, not provenance or single-factor causality.
 1. Conservative structural steal/twin rewire.
 2. E17 association ranker on the parity-verified E23 base.
 3. A frozen-encoder joint two-child/division head if the first two cannot
    supply the required gain.
 
-Item 0 is a provenance/reproduction anchor, not a claim that its knobs caused
-the displayed score. The implementation queue remains steal/twin then ranker.
+Item 0 is a resolved provenance/reproduction anchor, not a claim that either
+knob caused the displayed score. The joint `.931 -> .933` delta is below the
+noise floor and worsens three of four public dummy datasets under local
+official scoring. The implementation queue remains steal/twin then ranker.
 Any different candidate must state why its expected gain and information value
 outrank those two.
 
