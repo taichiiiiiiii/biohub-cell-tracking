@@ -1,14 +1,18 @@
 #!/usr/bin/env python
 """Run the ported public-notebook post-processing stack over prediction geffs.
 
-Applies the ``biohub_132_clean_short_track_rescue_lightcv_nohack`` preset
-(the config that produced ``outputs/kaggle/base1_v1/submission.csv``,
-score 0.8890) as defaults; override individual ``BIOHUB_*`` knobs with
-repeated ``--set NAME=VALUE``.
+Applies a named config profile: ``base1`` (default; the
+``biohub_132_clean_short_track_rescue_lightcv_nohack`` preset that produced
+``outputs/kaggle/base1_v1/submission.csv``, score 0.8890) or ``e23`` (the
+submitted E23 notebook's effective settings, public LB 0.924). Override
+individual ``BIOHUB_*`` knobs with repeated ``--set NAME=VALUE``; overrides
+always win over the selected profile.
 
     uv run python scripts/postproc_geffs.py \\
         --geff-dir outputs/kaggle/base1_v1/tracking_repo/predictions/unknown/unet_transformer/split_0 \\
         --out outputs/port_check/submission.csv
+
+    uv run python scripts/postproc_geffs.py --geff-dir <dir> --out <csv> --profile e23
 
     uv run python scripts/postproc_geffs.py --geff-dir <dir> --out <csv> \\
         --set BIOHUB_GAP_CLOSE_UM=7.0 --set BIOHUB_OUTPUT_MIN_TRACK_LEN=4
@@ -32,15 +36,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from biohub.public_postproc.config import build_config, parse_set_overrides  # noqa: E402
+from biohub.public_postproc.config import PROFILES, build_config, parse_set_overrides  # noqa: E402
 from biohub.public_postproc.pipeline import run_postproc, save_prelinefit_checkpoint  # noqa: E402
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--geff-dir", type=Path, required=True, help="directory of prediction *.geff files")
     ap.add_argument(
         "--test-dir", type=Path, default=ROOT / "data" / "test", help="zarr volumes for gap-refinement pixel lookups"
+    )
+    ap.add_argument(
+        "--profile",
+        choices=sorted(PROFILES),
+        default="base1",
+        help="named config profile: base1 (legacy default) or e23 (submitted E23 parity)",
     )
     ap.add_argument("--out", type=Path, default=None, dest="out_csv", help="submission CSV to write")
     ap.add_argument("--run-stats", type=Path, default=None, help="default: run_stats.csv next to --out")
@@ -60,17 +70,22 @@ def main() -> None:
         dest="overrides",
         help="override one BIOHUB_* preset knob (repeatable); NAME may omit the BIOHUB_ prefix",
     )
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     if args.save_prelinefit is None and args.out_csv is None:
         raise SystemExit("need --out (normal mode) or --save-prelinefit DIR (checkpoint mode)")
 
     overrides = parse_set_overrides(args.overrides)
     try:
-        cfg = build_config(overrides, test_dir=args.test_dir)
-    except KeyError as exc:
+        cfg = build_config(overrides, test_dir=args.test_dir, profile=args.profile)
+    except (KeyError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 
+    print(f"profile: {args.profile}")
     print(f"geff-dir: {args.geff_dir}")
     print(f"test-dir: {args.test_dir}")
     if overrides:

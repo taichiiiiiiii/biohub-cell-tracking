@@ -10,9 +10,19 @@ This mirrors two notebook cells almost verbatim:
 * the "preset" cell, which unconditionally overwrites a subset of those
   env vars for one named experiment -- captured here as :data:`PRESET`.
 
-``outputs/kaggle/base1_v1/submission.csv`` (score 0.8890) was produced by
-the ``biohub_132_clean_short_track_rescue_lightcv_nohack`` preset, i.e.
-``CODE_DEFAULTS`` overridden by ``PRESET`` with no further ``--set``.
+:data:`PRESET` is also exported as :data:`BASE1_PRESET`. Named profiles
+(see :data:`PROFILES`) select which preset is layered on top of
+``CODE_DEFAULTS`` by :func:`build_config`:
+
+* ``base1`` -- ``CODE_DEFAULTS`` + ``PRESET``; the exact config that
+  produced ``outputs/kaggle/base1_v1/submission.csv`` (score 0.8890) via
+  the ``biohub_132_clean_short_track_rescue_lightcv_nohack`` preset with
+  no further ``--set``. This is the default and stays byte-for-byte
+  identical to the previous behavior.
+* ``e23`` -- ``CODE_DEFAULTS`` + :data:`E23_PRESET`; the submitted E23
+  notebook's effective post-processing settings (public LB 0.924), per the
+  E23 parity contract in ``analysis/gold_loop_protocol.md``. It is built
+  directly on ``CODE_DEFAULTS`` and never inherits the base1 preset.
 
 Only the variables that ``filter_output_graph`` and the CSV/run_stats
 writers actually read are modelled here. Variables that only affect the
@@ -110,6 +120,19 @@ CODE_DEFAULTS: dict[str, str] = {
     "BIOHUB_DEEPCENTER_MANIFEST_DEFAULT": (
         "/kaggle/input/datasets/pilkwang/biohub-deepcenter-unet3d-center-prior-v1/ARTIFACT_MANIFEST.json"
     ),
+    # Phase-1 (E23 parity) additions: not part of the original notebook's
+    # constants cell. Defaults keep base1 behavior: refinement off, legacy
+    # safe-division mode, structural gates off.
+    "BIOHUB_REFINE_ALL_CENTROIDS": "0",
+    "BIOHUB_REFINE_CENTROIDS_WIN_Z": "1",
+    "BIOHUB_REFINE_CENTROIDS_WIN_YX": "3",
+    "BIOHUB_REFINE_CENTROIDS_BASELINE_PERCENTILE": "20.0",
+    "BIOHUB_REFINE_CENTROIDS_MAX_SHIFT_UM": "2.8",
+    "BIOHUB_SAFE_DIV_MODE": "legacy",
+    "BIOHUB_SAFE_DIV_REQUIRE_MID_TRACK_PARENT": "0",
+    "BIOHUB_SAFE_DIV_MUTUAL_NN": "0",
+    "BIOHUB_SAFE_DIV_DIVERGENCE": "0",
+    "BIOHUB_SAFE_DIV_DIVERGE_UM": "2.25",
     "BIOHUB_EXPERIMENT_TAG": "biohub_132_clean_short_track_rescue_lightcv_nohack",
 }
 
@@ -157,6 +180,71 @@ PRESET: dict[str, str] = {
     "BIOHUB_DEEPCENTER_GAP_THRESHOLD": "0.20",
     "BIOHUB_DEEPCENTER_SAFE_DIV_VETO": "0",
     "BIOHUB_EXPERIMENT_TAG": "biohub_132_clean_short_track_rescue_lightcv_nohack",
+}
+
+# Alias so the base1 profile reads explicitly next to the other profiles.
+BASE1_PRESET: dict[str, str] = PRESET
+
+# ---------------------------------------------------------------------------
+# E23 preset: the submitted E23 notebook's effective post-processing
+# settings (public LB 0.924), per the E23 parity contract in
+# analysis/gold_loop_protocol.md. Layered on CODE_DEFAULTS only -- never on
+# the base1 preset -- so anything unset here falls back to the notebook's
+# "constants" cell values, not to base1's overrides. Values that equal
+# CODE_DEFAULTS are kept explicit so this dict alone documents the profile.
+# ---------------------------------------------------------------------------
+E23_PRESET: dict[str, str] = {
+    "BIOHUB_MOTION_RELINK_LEARNED_BONUS": "1.0",
+    "BIOHUB_GAP_CLOSE_MAX_GAP": "2",
+    "BIOHUB_GAP_CLOSE_UM": "5.8",
+    "BIOHUB_GAP_DENSITY_ADAPTIVE": "1",
+    "BIOHUB_GAP_DENSITY_REFERENCE_UM": "6.5",
+    "BIOHUB_GAP_DENSITY_GAIN": "0.040",
+    "BIOHUB_GAP_DENSITY_MAX_STEP_DELTA_UM": "0.125",
+    "BIOHUB_GAP_DENSITY_NEIGHBORS": "3",
+    "BIOHUB_OUTPUT_FILTER_SHORT_TRACKS": "1",
+    "BIOHUB_OUTPUT_MIN_TRACK_LEN": "6",
+    "BIOHUB_OUTPUT_KEEP_DIVISION_COMPONENTS": "1",
+    "BIOHUB_OUTPUT_GAP2_RECOVERY": "0",
+    "BIOHUB_ADAPTIVE_SHORT_TRACK_RESCUE": "0",
+    "BIOHUB_SAFE_DIV_MAX_UM": "8.0",
+    "BIOHUB_SAFE_DIV_SISTER_MAX_UM": "11.0",
+    "BIOHUB_SAFE_DIV_EXISTING_CHILD_MAX_UM": "10.0",
+    "BIOHUB_SAFE_DIV_FRAME_FRAC_CAP": "0.0076",
+    "BIOHUB_SAFE_DIV_GLOBAL_FRAC_CAP": "0.00375",
+    "BIOHUB_SAFE_DIV_MODE": "e23",
+    "BIOHUB_SAFE_DIV_REQUIRE_MID_TRACK_PARENT": "1",
+    "BIOHUB_SAFE_DIV_MUTUAL_NN": "1",
+    "BIOHUB_SAFE_DIV_DIVERGENCE": "1",
+    "BIOHUB_SAFE_DIV_DIVERGE_UM": "2.25",
+    "BIOHUB_REFINE_ALL_CENTROIDS": "1",
+    "BIOHUB_REFINE_CENTROIDS_WIN_Z": "1",
+    "BIOHUB_REFINE_CENTROIDS_WIN_YX": "3",
+    "BIOHUB_REFINE_CENTROIDS_BASELINE_PERCENTILE": "20.0",
+    "BIOHUB_REFINE_CENTROIDS_MAX_SHIFT_UM": "2.8",
+    "BIOHUB_USE_DEEPCENTER_VETO": "1",
+    "BIOHUB_REQUIRE_DEEPCENTER_VETO": "1",
+    "BIOHUB_DEEPCENTER_EXPECTED_EPOCH": "2",
+    "BIOHUB_DEEPCENTER_GAP_VETO": "1",
+    "BIOHUB_DEEPCENTER_GAP_THRESHOLD": "0.25",
+    "BIOHUB_DEEPCENTER_GAP_CONFIRM_MIN_SPAN_UM": "8.5",
+    "BIOHUB_DEEPCENTER_SAFE_DIV_VETO": "1",
+    "BIOHUB_DEEPCENTER_SAFE_DIV_THRESHOLD": "0.12",
+    "BIOHUB_DEEPCENTER_RELATIVE": "weights/full_frame_center/best.pt",
+    "BIOHUB_DEEPCENTER_CHECKPOINT": (
+        "/kaggle/input/biohub-deepcenter-unet3d-center-prior-v1/weights/full_frame_center/best.pt"
+    ),
+    "BIOHUB_DEEPCENTER_CHECKPOINT_DEFAULT": (
+        "/kaggle/input/biohub-deepcenter-unet3d-center-prior-v1/weights/full_frame_center/best.pt"
+    ),
+    "BIOHUB_EXPERIMENT_TAG": "e23_pub923_parity",
+}
+
+# Named post-processing profiles: profile name -> preset layered on top of
+# CODE_DEFAULTS by build_config. Adding a profile never changes base1.
+PROFILES: dict[str, dict[str, str]] = {
+    "base1": BASE1_PRESET,
+    "e23": E23_PRESET,
 }
 
 
@@ -221,6 +309,13 @@ class PostprocConfig:
     GAP_REFINE_WIN_YX: int
     GAP_REFINE_MAX_SHIFT_UM: float
 
+    # All-node intensity-centroid refinement (E23 parity; inert in base1).
+    REFINE_ALL_CENTROIDS: bool
+    REFINE_CENTROIDS_WIN_Z: int
+    REFINE_CENTROIDS_WIN_YX: int
+    REFINE_CENTROIDS_BASELINE_PERCENTILE: float
+    REFINE_CENTROIDS_MAX_SHIFT_UM: float
+
     OUTPUT_FILTER_SHORT_TRACKS: bool
     OUTPUT_MIN_TRACK_LEN: int
     OUTPUT_KEEP_DIVISION_COMPONENTS: bool
@@ -250,6 +345,14 @@ class PostprocConfig:
     SAFE_DIV_EXISTING_CHILD_MAX_UM: float
     SAFE_DIV_FRAME_FRAC_CAP: float
     SAFE_DIV_GLOBAL_FRAC_CAP: float
+    # Structural safe-division gates (E23 parity; inert in base1).
+    # SAFE_DIV_MODE selects the candidate-generation semantics: "legacy"
+    # (current port) or "e23" (notebook structural gates).
+    SAFE_DIV_MODE: str
+    SAFE_DIV_REQUIRE_MID_TRACK_PARENT: bool
+    SAFE_DIV_MUTUAL_NN: bool
+    SAFE_DIV_DIVERGENCE: bool
+    SAFE_DIV_DIVERGE_UM: float
 
     USE_DEEPCENTER_VETO: bool
     REQUIRE_DEEPCENTER_VETO: bool
@@ -271,20 +374,40 @@ class PostprocConfig:
     EXPERIMENT_TAG: str
 
 
-def build_config(overrides: dict[str, str] | None = None, test_dir: Path | str = Path("data/test")) -> PostprocConfig:
+def build_config(
+    overrides: dict[str, str] | None = None,
+    test_dir: Path | str = Path("data/test"),
+    profile: str = "base1",
+) -> PostprocConfig:
     """Build a :class:`PostprocConfig` the same way the notebook builds its constants.
 
     Resolution order (last wins), mirroring "preset cell overwrites
     os.environ, constants cell reads os.environ.get(name, hardcoded)":
-    ``CODE_DEFAULTS`` -> :data:`PRESET` -> ``overrides`` (``--set``).
+    ``CODE_DEFAULTS`` -> the named profile's preset (:data:`PROFILES`;
+    ``base1`` is :data:`PRESET`, ``e23`` is :data:`E23_PRESET`) ->
+    ``overrides`` (``--set``). Positional arguments are unchanged, so
+    existing callers keep building the byte-for-byte ``base1`` config.
+
+    Raises :class:`ValueError` for an unknown ``profile`` or an invalid
+    ``BIOHUB_SAFE_DIV_MODE`` override, and :class:`KeyError` for unknown
+    override keys.
     """
+    try:
+        preset = PROFILES[profile]
+    except KeyError:
+        raise ValueError(f"unknown profile {profile!r}; expected one of {sorted(PROFILES)}") from None
+
     env: dict[str, str] = dict(CODE_DEFAULTS)
-    env.update(PRESET)
+    env.update(preset)
     if overrides:
         unknown = sorted(set(overrides) - set(CODE_DEFAULTS))
         if unknown:
             raise KeyError(f"unknown BIOHUB_* override key(s): {unknown}")
         env.update(overrides)
+
+    safe_div_mode = _get_str(env, "BIOHUB_SAFE_DIV_MODE")
+    if safe_div_mode not in ("legacy", "e23"):
+        raise ValueError(f"BIOHUB_SAFE_DIV_MODE must be 'legacy' or 'e23', got {safe_div_mode!r}")
 
     return PostprocConfig(
         TEST_DIR=Path(test_dir),
@@ -319,6 +442,11 @@ def build_config(overrides: dict[str, str] | None = None, test_dir: Path | str =
         GAP_REFINE_WIN_Z=_get_int(env, "BIOHUB_GAP_REFINE_WIN_Z"),
         GAP_REFINE_WIN_YX=_get_int(env, "BIOHUB_GAP_REFINE_WIN_YX"),
         GAP_REFINE_MAX_SHIFT_UM=_get_float(env, "BIOHUB_GAP_REFINE_MAX_SHIFT_UM"),
+        REFINE_ALL_CENTROIDS=_get_bool(env, "BIOHUB_REFINE_ALL_CENTROIDS"),
+        REFINE_CENTROIDS_WIN_Z=_get_int(env, "BIOHUB_REFINE_CENTROIDS_WIN_Z"),
+        REFINE_CENTROIDS_WIN_YX=_get_int(env, "BIOHUB_REFINE_CENTROIDS_WIN_YX"),
+        REFINE_CENTROIDS_BASELINE_PERCENTILE=_get_float(env, "BIOHUB_REFINE_CENTROIDS_BASELINE_PERCENTILE"),
+        REFINE_CENTROIDS_MAX_SHIFT_UM=_get_float(env, "BIOHUB_REFINE_CENTROIDS_MAX_SHIFT_UM"),
         OUTPUT_FILTER_SHORT_TRACKS=_get_bool(env, "BIOHUB_OUTPUT_FILTER_SHORT_TRACKS"),
         OUTPUT_MIN_TRACK_LEN=_get_int(env, "BIOHUB_OUTPUT_MIN_TRACK_LEN"),
         OUTPUT_KEEP_DIVISION_COMPONENTS=_get_bool(env, "BIOHUB_OUTPUT_KEEP_DIVISION_COMPONENTS"),
@@ -345,6 +473,11 @@ def build_config(overrides: dict[str, str] | None = None, test_dir: Path | str =
         SAFE_DIV_EXISTING_CHILD_MAX_UM=_get_float(env, "BIOHUB_SAFE_DIV_EXISTING_CHILD_MAX_UM"),
         SAFE_DIV_FRAME_FRAC_CAP=_get_float(env, "BIOHUB_SAFE_DIV_FRAME_FRAC_CAP"),
         SAFE_DIV_GLOBAL_FRAC_CAP=_get_float(env, "BIOHUB_SAFE_DIV_GLOBAL_FRAC_CAP"),
+        SAFE_DIV_MODE=safe_div_mode,
+        SAFE_DIV_REQUIRE_MID_TRACK_PARENT=_get_bool(env, "BIOHUB_SAFE_DIV_REQUIRE_MID_TRACK_PARENT"),
+        SAFE_DIV_MUTUAL_NN=_get_bool(env, "BIOHUB_SAFE_DIV_MUTUAL_NN"),
+        SAFE_DIV_DIVERGENCE=_get_bool(env, "BIOHUB_SAFE_DIV_DIVERGENCE"),
+        SAFE_DIV_DIVERGE_UM=_get_float(env, "BIOHUB_SAFE_DIV_DIVERGE_UM"),
         USE_DEEPCENTER_VETO=_get_bool(env, "BIOHUB_USE_DEEPCENTER_VETO"),
         REQUIRE_DEEPCENTER_VETO=_get_bool(env, "BIOHUB_REQUIRE_DEEPCENTER_VETO"),
         DEEPCENTER_GAP_VETO=_get_bool(env, "BIOHUB_DEEPCENTER_GAP_VETO"),
