@@ -498,6 +498,25 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
    steal/twin rewireへ拡張すること。eval-12でΔ≥+0.005、独立eval-24でΔ≥+0.003、
    division TP純増≥4、adj-edge低下≤0.002、両系統Δ≥0を事前採用バー候補とする。
 
+### E23 Phase 3 Base1 checkpoint（2026-08-30 20:02 JST）
+
+- **code**: `b381b01e1bc21bef62770c9009dbb81bfd6ba5b4`（Phase 3
+  `c7556e3`＋handoff docs）。実行前に focused 44件、全体87件、Ruff、
+  `git diff --check`を再実行して全PASS、worktree cleanを確認。
+- **入力pin**: `outputs/local/eval4_raw_geffs` = 132 files / 1,448,288 bytes /
+  tree SHA256 `7148a3adabe187768a8ef8eb27009b6a27f96f6a079b8f274cd00587b9cadb42`。
+- **成果物**: `outputs/local/e23_parity_base1/`。`START_MARKER.txt`と実行logを保持。
+  CPU-only Base1 post-processingは約37秒、4 datasets、submission 217,778 data rows。
+- **byte parity**: submission SHA256
+  `56b8fab98992bc5c6ed1dcaba32ad7116ebbf6c185a5fcc31ed39cc56fb992ab`、
+  `outputs/local/eval4_base1/submission.csv`との`cmp -s`一致。**Phase 3のBase1出力非回帰はPASS**。
+- **telemetry schema gate**: 予定どおり **HOLD**。Phase 4前のため新statsには旧
+  `deepcenter_gap_bypassed_synthetic_node`が残り、必須の
+  `deepcenter_gap_bypassed_observed_node`が未実装。runbook comparatorは
+  `AssertionError: {'deepcenter_gap_bypassed_observed_node'}`でfail-closedした。
+  Phase 4統合後にfresh directoryで全schema/field comparatorを再実行する。
+- このcheckpointでは公式スコアを読まず、Kaggle push/submitも行っていない。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
