@@ -10,7 +10,8 @@ experiment, implementation, or adoption decision.
 
 - Competition: `biohub-cell-tracking-during-development`
 - Current reproducible public baseline: E23, public LB `0.924`
-- Current account rank at the last read-only checks: `488-489 / 2,869`
+- Current account rank at the last read-only check (2026-08-30 18:45 JST):
+  `491 / 2,870`
 - Observed gold-zone proxy: rank 15 at `0.945`
 - Working target: public LB `>= 0.947` (a buffer above the observed boundary)
 - Public-LB noise estimate from hidden-199 extrapolation: SD about `0.0045`;
@@ -80,6 +81,10 @@ E23 effective post-processing settings:
 - DeepCenter is enabled and required, epoch `2`, exact `best.pt` artifact,
   gap veto enabled at `0.25` with confirm span `8.5 um`, safe-division veto
   enabled at `0.12`;
+- for gap closing, only a newly inserted synthetic middle at or above the
+  confirm span is sent to DeepCenter; an observed/reused middle bypasses it.
+  A rejected synthetic middle must be removed with its node/cap counters rolled
+  back before either proposed edge is retained;
 - use an explicit E23 experiment tag.
 
 Parity is accepted only when the notebook reference and local port agree on:
@@ -96,6 +101,13 @@ Parity is accepted only when the notebook reference and local port agree on:
   `outputs/kaggle/e22_bidir030_eval36_raw/tracking_repo/predictions/unknown/unet_transformer_val/split_0`.
   Workspace consolidation reverified 36 GEFF roots, 1,188 files, and
   10,090,215 bytes on 2026-08-30.
+- The exact four public-dummy raw predictions used by the submitted E23 run are
+  pinned at
+  `outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0`:
+  4 GEFF roots, 132 files, 1,583,021 bytes, canonical tree SHA256
+  `5fc5fb5e51d127612421970ed66f0ba4229f020940ed458dfdf0fa316f2e8bc1`.
+  Use `analysis/e23_parity_runbook.md` for the exact oracle comparison; these
+  four videos are parity diagnostics only and never an adoption set.
 - No usable `0.20` raw predictions exist in kernel versions v1-v10: v1 reached
   the `0.20` guard but stopped before writing raw GEFF; successful versions are
   `0.30`.
