@@ -50,9 +50,12 @@ original_edges = [
 ]
 ```
 
-Preassert span 1 is exactly `9.0` um and span 2 is exactly `10.0` um through
-`point_distance_um`. Keep `GAP_CLOSE_MAX_ADDED_ABS=1` and a nonbinding
-fractional cap. Reject midpoint `t=1`; accept midpoint `t=3`.
+Preassert the two actual candidate spans through `point_distance_um`: node 1
+at `0.0` to node 2 at `9.0 / s` is exactly `9.0` um, and node 2 at `9.0 / s`
+to node 3 at `19.0 / s` is exactly `10.0` um. Do not substitute an
+origin-to-`10.0 / s` check for the second candidate. Keep
+`GAP_CLOSE_MAX_ADDED_ABS=1` and a nonbinding fractional cap. Reject midpoint
+`t=1`; accept midpoint `t=3`.
 
 Required assertions:
 
