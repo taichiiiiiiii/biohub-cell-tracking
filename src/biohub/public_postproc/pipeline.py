@@ -24,6 +24,7 @@ from biohub.public_postproc.config import PostprocConfig
 from biohub.public_postproc.csv_out import SubmissionCsvWriter, write_run_stats
 from biohub.public_postproc.deepcenter import load_deepcenter_veto_detector
 from biohub.public_postproc.divisions import add_safe_divisions_postlink
+from biohub.public_postproc.frames import refine_all_centroids
 from biohub.public_postproc.geometry import edge_distance_um, edge_sort_key
 from biohub.public_postproc.graph_ops import (
     close_single_frame_gaps,
@@ -65,6 +66,10 @@ def new_stats() -> dict[str, int]:
         "gap_refined_synthetic": 0,
         "gap_refine_failed": 0,
         "gap_refine_rejected_shift": 0,
+        "centroid_refine_examined": 0,
+        "centroid_refine_moved": 0,
+        "centroid_refine_no_signal": 0,
+        "centroid_refine_rejected_shift": 0,
         "pruned_isolated_nodes": 0,
         "motion_relink_edges": 0,
         "motion_relink_tight_edges": 0,
@@ -119,6 +124,16 @@ def filter_output_graph_pre_linefit(
     """
     stats = new_stats()
     stats["raw_edges"] = len(raw_edges)
+
+    # One shared frame cache for the whole pre-linefit stack: E23 all-node
+    # centroid refinement reads each timepoint once, and gap-close /
+    # safe-division / DeepCenter reuse those frames below.
+    repair_frame_cache: dict[int, np.ndarray] = {}
+    if cfg.REFINE_ALL_CENTROIDS:
+        # Runs before any edge distance is computed, matching the notebook:
+        # refined coordinates feed the edge-length filter, motion relink,
+        # gap repair, safe divisions and DeepCenter queries.
+        refine_all_centroids(cfg, nodes_by_id, dataset, repair_frame_cache, stats)
 
     edges: list[dict[str, object]] = []
     for edge in raw_edges:
@@ -178,7 +193,6 @@ def filter_output_graph_pre_linefit(
         stats["dropped_multi_child_edges"] = sum(1 for edge in edges if id(edge) not in kept_ids)
         edges = [edge for edge in edges if id(edge) in kept_ids]
 
-    repair_frame_cache: dict[int, np.ndarray] = {}
     deepcenter_heatmap_cache: dict[tuple[str, int], np.ndarray] = {}
     nodes_by_id, edges = close_single_frame_gaps(
         cfg,

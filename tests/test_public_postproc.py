@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from biohub.public_postproc import frames as frames_module
 from biohub.public_postproc.config import PostprocConfig, build_config
 from biohub.public_postproc.csv_out import CSV_COLUMNS, SubmissionCsvWriter
+from biohub.public_postproc.frames import refine_all_centroids, refine_centroids, refine_synthetic_midpoint
 from biohub.public_postproc.graph_ops import linefit_smooth_output_graph
-from biohub.public_postproc.pipeline import filter_output_graph
+from biohub.public_postproc.pipeline import filter_output_graph, filter_output_graph_pre_linefit, new_stats
 
 # All the passes filter_output_graph can run, forced off so a test can turn
 # on exactly the one it exercises.
@@ -207,6 +211,236 @@ def test_csv_writer_raises_on_dangling_edge():
     nodes = {1: _node(1, 0)}
     with pytest.raises(AssertionError, match="dangling edge"):
         writer.write_edges("dsA", nodes, [{"source_id": 1, "target_id": 999}])
+
+
+# --------------------------------------------------------------------------
+# E23 all-node intensity-centroid refinement (Phase 2)
+# --------------------------------------------------------------------------
+def _write_synthetic_zarr(test_dir: Path, dataset: str, frames: dict[int, np.ndarray]) -> Path:
+    """Write the minimal ``<dataset>.zarr`` layout ``biohub.io.open_volume`` reads."""
+    import blosc2
+
+    depth, height, width = next(iter(frames.values())).shape
+    array_dir = test_dir / f"{dataset}.zarr" / "0"
+    array_dir.mkdir(parents=True)
+    (array_dir / "zarr.json").write_text(
+        json.dumps({"shape": [max(frames) + 1, depth, height, width], "data_type": "uint16"})
+    )
+    for t, frame in frames.items():
+        chunk_dir = array_dir / "c" / str(t) / "0" / "0"
+        chunk_dir.mkdir(parents=True)
+        (chunk_dir / "0").write_bytes(blosc2.compress(frame.astype(np.uint16).tobytes(), typesize=2))
+    return test_dir / f"{dataset}.zarr"
+
+
+def _spy_open_volume(monkeypatch) -> list[Path]:
+    """Count ``frames.open_volume`` calls while still decoding the real zarr."""
+    from biohub.io import open_volume as real_open_volume
+
+    opened: list[Path] = []
+
+    def counting_open_volume(path):
+        opened.append(Path(path))
+        return real_open_volume(path)
+
+    monkeypatch.setattr(frames_module, "open_volume", counting_open_volume)
+    return opened
+
+
+def _frame_with_spot(shape: tuple[int, int, int], spot: tuple[int, int, int], value: int = 1000) -> np.ndarray:
+    frame = np.zeros(shape, dtype=np.uint16)
+    frame[spot] = value
+    return frame
+
+
+def test_refine_centroids_exact_weighted_center(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    vol = np.zeros((5, 9, 9), dtype=np.uint16)
+    # Window around (2, 4, 4) at wz=1 / wyx=3; the 20th-percentile baseline of
+    # the mostly-zero patch is 0, so only the two bright voxels carry weight.
+    vol[2, 4, 5] = 300
+    vol[2, 5, 4] = 100
+    stats = new_stats()
+
+    refined = refine_centroids(cfg, vol, [(2.0, 4.0, 4.0)], stats)
+
+    # centroid = (300 * (2, 4, 5) + 100 * (2, 5, 4)) / 400
+    assert refined == [(2.0, 4.25, 4.75)]
+    assert stats["centroid_refine_examined"] == 1
+    assert stats["centroid_refine_moved"] == 1
+    assert stats["centroid_refine_no_signal"] == 0
+    assert stats["centroid_refine_rejected_shift"] == 0
+
+
+def test_refine_centroids_zero_signal_keeps_point_and_counts(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    vol = np.zeros((5, 9, 9), dtype=np.uint16)
+    stats = new_stats()
+
+    # Flat patch (total weight 0) and empty patch (rounded point far outside
+    # the volume) both degrade to "no signal": coordinates left unchanged.
+    refined = refine_centroids(cfg, vol, [(2.0, 4.0, 4.0), (100.0, 100.0, 100.0)], stats)
+
+    assert refined == [(2.0, 4.0, 4.0), (100.0, 100.0, 100.0)]
+    assert stats["centroid_refine_examined"] == 2
+    assert stats["centroid_refine_no_signal"] == 2
+    assert stats["centroid_refine_moved"] == 0
+    assert stats["centroid_refine_rejected_shift"] == 0
+
+
+def test_refine_centroids_rejects_excessive_physical_shift(tmp_path: Path):
+    # Single bright voxel at the window edge: centroid 3 yx voxels away,
+    # 3 * 0.40625 = 1.21875 um > the 0.5 um cap.
+    cfg = _cfg(tmp_path, BIOHUB_REFINE_CENTROIDS_MAX_SHIFT_UM="0.5")
+    vol = np.zeros((5, 9, 9), dtype=np.uint16)
+    vol[2, 4, 7] = 500
+    stats = new_stats()
+
+    refined = refine_centroids(cfg, vol, [(2.0, 4.0, 4.0)], stats)
+
+    assert refined == [(2.0, 4.0, 4.0)]
+    assert stats["centroid_refine_examined"] == 1
+    assert stats["centroid_refine_rejected_shift"] == 1
+    assert stats["centroid_refine_moved"] == 0
+
+
+def test_refine_centroids_exact_noop_is_not_counted_as_moved(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    vol = np.zeros((5, 9, 9), dtype=np.uint16)
+    # Symmetric bright pattern around (2, 4, 4): the weighted centroid is the
+    # input point itself, an accepted exact no-op that must not count as moved.
+    vol[2, 4, 4] = 100
+    vol[1, 4, 4] = vol[3, 4, 4] = 50
+    vol[2, 3, 4] = vol[2, 5, 4] = 50
+    vol[2, 4, 3] = vol[2, 4, 5] = 50
+    stats = new_stats()
+
+    refined = refine_centroids(cfg, vol, [(2.0, 4.0, 4.0)], stats)
+
+    assert refined == [(2.0, 4.0, 4.0)]
+    assert stats["centroid_refine_examined"] == 1
+    assert stats["centroid_refine_moved"] == 0
+    assert stats["centroid_refine_no_signal"] == 0
+    assert stats["centroid_refine_rejected_shift"] == 0
+
+
+def test_refine_all_centroids_reads_each_frame_once_and_keeps_order(tmp_path: Path, monkeypatch):
+    shape = (20, 40, 40)
+    frames = {0: _frame_with_spot(shape, (10, 20, 21)), 1: _frame_with_spot(shape, (10, 20, 23))}
+    _write_synthetic_zarr(tmp_path, "synthetic", frames)
+    opened = _spy_open_volume(monkeypatch)
+    cfg = _cfg(tmp_path, BIOHUB_REFINE_ALL_CENTROIDS="1")
+    nodes = {
+        5: _node(5, 0, z=10.0, y=20.0, x=20.0),
+        3: _node(3, 1, z=10.0, y=20.0, x=24.0),
+        9: _node(9, 0, z=10.0, y=20.0, x=20.0),
+    }
+    stats = new_stats()
+    frame_cache: dict[int, np.ndarray] = {}
+
+    refine_all_centroids(cfg, nodes, "synthetic", frame_cache, stats)
+
+    assert opened == [tmp_path / "synthetic.zarr", tmp_path / "synthetic.zarr"]  # once per t
+    assert sorted(frame_cache) == [0, 1]
+    assert list(nodes) == [5, 3, 9]  # dict iteration order preserved
+    assert (nodes[5]["z"], nodes[5]["y"], nodes[5]["x"]) == (10.0, 20.0, 21.0)
+    assert (nodes[9]["z"], nodes[9]["y"], nodes[9]["x"]) == (10.0, 20.0, 21.0)
+    assert (nodes[3]["z"], nodes[3]["y"], nodes[3]["x"]) == (10.0, 20.0, 23.0)
+    assert stats["centroid_refine_examined"] == 3
+    assert stats["centroid_refine_moved"] == 3
+
+
+def test_refine_all_centroids_requires_dataset(tmp_path: Path):
+    cfg = _cfg(tmp_path, BIOHUB_REFINE_ALL_CENTROIDS="1")
+    with pytest.raises(ValueError, match="dataset"):
+        refine_all_centroids(cfg, {1: _node(1, 0)}, None, {}, new_stats())
+
+
+def test_pipeline_enabled_without_dataset_is_a_hard_failure(tmp_path: Path):
+    cfg = _cfg(tmp_path, BIOHUB_REFINE_ALL_CENTROIDS="1", BIOHUB_OUTPUT_ENFORCE_NEXT_FRAME="1")
+    nodes = {1: _node(1, 0), 2: _node(2, 1)}
+    raw_edges = [{"source_id": 1, "target_id": 2, "edge_prob": 0.9}]
+    with pytest.raises(ValueError, match="dataset"):
+        filter_output_graph(cfg, nodes, raw_edges, dataset=None)
+
+
+def test_refine_all_centroids_missing_image_is_runtime_error(tmp_path: Path):
+    cfg = _cfg(tmp_path, BIOHUB_REFINE_ALL_CENTROIDS="1")
+    nodes = {1: _node(1, 0, z=2.0, y=4.0, x=4.0)}
+    with pytest.raises(RuntimeError, match="dataset=missing") as excinfo:
+        refine_all_centroids(cfg, nodes, "missing", {}, new_stats())
+    message = str(excinfo.value)
+    assert "t=0" in message
+    assert str(tmp_path / "missing.zarr") in message
+    assert excinfo.value.__cause__ is not None  # original read error chained, never swallowed
+
+
+def test_disabled_refinement_does_not_read_frames(tmp_path: Path, monkeypatch):
+    _write_synthetic_zarr(tmp_path, "synthetic", {0: np.zeros((4, 8, 8), dtype=np.uint16)})
+    opened = _spy_open_volume(monkeypatch)
+    cfg = _cfg(tmp_path, BIOHUB_REFINE_ALL_CENTROIDS="0", BIOHUB_OUTPUT_ENFORCE_NEXT_FRAME="1")
+    nodes = {1: _node(1, 0, z=2.0, y=4.0, x=4.0), 2: _node(2, 1, z=2.0, y=4.0, x=5.0)}
+    raw_edges = [{"source_id": 1, "target_id": 2, "edge_prob": 0.9}]
+
+    kept_nodes, kept_edges, stats = filter_output_graph(cfg, nodes, raw_edges, dataset="synthetic")
+
+    assert opened == []  # base1 behaviour: no frame reads while refinement is off
+    assert stats["centroid_refine_examined"] == 0
+    assert (kept_nodes[1]["z"], kept_nodes[1]["y"], kept_nodes[1]["x"]) == (2.0, 4.0, 4.0)
+    assert len(kept_edges) == 1
+
+
+def test_frame_cache_shared_with_synthetic_midpoint_refinement(tmp_path: Path, monkeypatch):
+    frames = {0: _frame_with_spot((20, 40, 40), (10, 20, 21))}
+    _write_synthetic_zarr(tmp_path, "synthetic", frames)
+    opened = _spy_open_volume(monkeypatch)
+    cfg = _cfg(tmp_path, BIOHUB_REFINE_ALL_CENTROIDS="1", BIOHUB_GAP_REFINE_SYNTHETIC="1")
+    nodes = {7: _node(7, 0, z=10.0, y=20.0, x=20.0)}
+    stats = new_stats()
+    frame_cache: dict[int, np.ndarray] = {}
+
+    refine_all_centroids(cfg, nodes, "synthetic", frame_cache, stats)
+    assert list(frame_cache) == [0]
+
+    # The gap-refinement fallback reuses the cached frame: no second open.
+    refined = refine_synthetic_midpoint(cfg, "synthetic", 0, (10.0, 20.0, 20.0), frame_cache, stats)
+
+    assert len(opened) == 1
+    assert refined == (10.0, 20.0, 21.0)
+    assert (nodes[7]["z"], nodes[7]["y"], nodes[7]["x"]) == (10.0, 20.0, 21.0)
+    assert stats["gap_refined_synthetic"] == 1
+
+
+def _two_node_graph() -> tuple[dict[int, dict[str, object]], list[dict[str, object]]]:
+    nodes = {1: _node(1, 0, z=10.0, y=20.0, x=20.0), 2: _node(2, 1, z=10.0, y=20.0, x=24.0)}
+    raw_edges = [{"source_id": 1, "target_id": 2, "edge_prob": 0.9}]
+    return nodes, raw_edges
+
+
+def test_centroid_refinement_runs_before_edge_distance_filter(tmp_path: Path):
+    # Raw node distance is 4 yx voxels = 1.625 um, above the 1.0 um edge cap;
+    # the intensity spots pull both centroids one voxel inward each, leaving
+    # 2 voxels = 0.8125 um. The edge can only survive when refinement runs
+    # *before* the edge-distance filter.
+    shape = (20, 40, 40)
+    frames = {0: _frame_with_spot(shape, (10, 20, 21)), 1: _frame_with_spot(shape, (10, 20, 23))}
+    _write_synthetic_zarr(tmp_path, "synthetic", frames)
+    edge_cap = {"BIOHUB_OUTPUT_ENFORCE_NEXT_FRAME": "1", "BIOHUB_OUTPUT_EDGE_MAX_UM": "1.0"}
+
+    cfg_off = _cfg(tmp_path, BIOHUB_REFINE_ALL_CENTROIDS="0", **edge_cap)
+    nodes_off, edges_off, stats_off = filter_output_graph_pre_linefit(cfg_off, *_two_node_graph(), dataset="synthetic")
+    assert edges_off == []
+    assert stats_off["dropped_long_edges"] == 1
+    assert nodes_off[1]["x"] == 20.0  # untouched without refinement
+
+    cfg_on = _cfg(tmp_path, BIOHUB_REFINE_ALL_CENTROIDS="1", **edge_cap)
+    nodes_on, edges_on, stats_on = filter_output_graph_pre_linefit(cfg_on, *_two_node_graph(), dataset="synthetic")
+    assert len(edges_on) == 1
+    assert stats_on["dropped_long_edges"] == 0
+    assert stats_on["centroid_refine_examined"] == 2
+    assert stats_on["centroid_refine_moved"] == 2
+    assert (nodes_on[1]["z"], nodes_on[1]["y"], nodes_on[1]["x"]) == (10.0, 20.0, 21.0)
+    assert (nodes_on[2]["z"], nodes_on[2]["y"], nodes_on[2]["x"]) == (10.0, 20.0, 23.0)
 
 
 # --------------------------------------------------------------------------
