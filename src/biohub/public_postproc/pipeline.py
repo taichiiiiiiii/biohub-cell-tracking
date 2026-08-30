@@ -99,7 +99,7 @@ def new_stats() -> dict[str, int]:
         "safe_division_divergence_rejected": 0,
         "deepcenter_gap_checked": 0,
         "deepcenter_gap_bypassed_strong_motion": 0,
-        "deepcenter_gap_bypassed_synthetic_node": 0,
+        "deepcenter_gap_bypassed_observed_node": 0,
         "deepcenter_gap_accepted": 0,
         "deepcenter_gap_rejected": 0,
         "deepcenter_gap_missing": 0,

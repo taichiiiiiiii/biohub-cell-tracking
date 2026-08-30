@@ -9,18 +9,22 @@ from __future__ import annotations
 import csv
 import io
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from biohub.public_postproc import deepcenter as deepcenter_module
 from biohub.public_postproc import divisions as divisions_module
 from biohub.public_postproc import frames as frames_module
+from biohub.public_postproc import graph_ops as graph_ops_module
 from biohub.public_postproc.config import PostprocConfig, build_config
 from biohub.public_postproc.csv_out import CSV_COLUMNS, SubmissionCsvWriter
 from biohub.public_postproc.divisions import add_safe_divisions_postlink
 from biohub.public_postproc.frames import refine_all_centroids, refine_centroids, refine_synthetic_midpoint
-from biohub.public_postproc.graph_ops import linefit_smooth_output_graph
+from biohub.public_postproc.geometry import point_distance_um
+from biohub.public_postproc.graph_ops import close_single_frame_gaps, linefit_smooth_output_graph
 from biohub.public_postproc.pipeline import filter_output_graph, filter_output_graph_pre_linefit, new_stats
 
 # All the passes filter_output_graph can run, forced off so a test can turn
@@ -1145,3 +1149,391 @@ def test_structural_safe_div_config_names_exact_and_old_keys_rejected():
     for old_key in ("BIOHUB_SAFE_DIV_MUTUAL_NN", "BIOHUB_SAFE_DIV_DIVERGENCE"):
         with pytest.raises(KeyError, match="unknown BIOHUB_"):
             build_config({old_key: "1"})
+
+
+# --------------------------------------------------------------------------
+# E23 Phase 4: exact DeepCenter gap-veto parity (pub923_repro routing table)
+# --------------------------------------------------------------------------
+# Physical scale is (z, y, x) = (1.625, 0.40625, 0.40625) um/voxel
+# (biohub.io.DEFAULT_SCALE); every span below runs along x with z == y == 0,
+# so span_um == delta_x_vox * 0.40625. The gap=1 candidate gate is
+# GAP_CLOSE_UM * 2 = 12.0 um, so the 8.0/8.5/10.0 um spans are all feasible.
+_UM_PER_VOXEL_X = 0.40625
+_GAP_NONMARGINAL_SPAN_VOX = 8.0 / _UM_PER_VOXEL_X  # 8.0 um < 8.5 um min span
+_GAP_MARGINAL_SPAN_VOX = 10.0 / _UM_PER_VOXEL_X  # 10.0 um >= 8.5 um min span
+_GAP_BOUNDARY_SPAN_VOX = 8.5 / _UM_PER_VOXEL_X  # exactly 8.5 um (marginal)
+
+
+def _gap_cfg(tmp_path: Path, **overrides: str) -> PostprocConfig:
+    """Gap close isolated with the E23 gate values: veto on, 0.25, 8.5 um."""
+    env = {
+        "BIOHUB_OUTPUT_GAP_CLOSE": "1",
+        "BIOHUB_USE_DEEPCENTER_VETO": "1",
+        "BIOHUB_DEEPCENTER_GAP_VETO": "1",
+        "BIOHUB_DEEPCENTER_GAP_THRESHOLD": "0.25",
+        "BIOHUB_DEEPCENTER_GAP_CONFIRM_MIN_SPAN_UM": "8.5",
+    }
+    env.update(overrides)
+    return _cfg(tmp_path, **env)
+
+
+def _gap_graph(
+    span_voxels: float,
+    *,
+    observed_middle: bool = False,
+) -> tuple[dict[int, dict[str, object]], list[dict[str, object]]]:
+    """One t0->t2 gap pair along x plus a far dummy edge (the gate requires
+    at least one edge). With ``observed_middle`` an isolated t1 node sits
+    exactly on the midpoint, so GAP_CLOSE_REUSE_EXISTING reuses it; otherwise
+    the middle must be synthesized. The first synthetic ID is 9."""
+    nodes = {
+        1: _node(1, 0, x=0.0),
+        2: _node(2, 2, x=span_voxels),
+        7: _node(7, 10, x=2000.0),
+        8: _node(8, 11, x=2000.0),
+    }
+    if observed_middle:
+        nodes[3] = _node(3, 1, x=span_voxels / 2.0)
+    edges = [{"source_id": 7, "target_id": 8, "edge_prob": 1.0}]
+    return nodes, edges
+
+
+def _install_gap_dc_spy(monkeypatch, accept: Callable[[int], bool]) -> list[dict[str, object]]:
+    """Replace the gate helper where graph_ops looks it up. The spy keeps the
+    real helper's telemetry contract: a scored call increments
+    ``deepcenter_gap_checked`` and exactly one of accepted/rejected."""
+    calls: list[dict[str, object]] = []
+
+    def spy(cfg_, dataset_, t_, point_, bundle_, frame_cache_, dc_cache_, stats_, prefix_, threshold_):
+        calls.append({"t": int(t_), "point": point_, "prefix": prefix_, "threshold": threshold_})
+        stats_[f"deepcenter_{prefix_}_checked"] += 1
+        if accept(int(t_)):
+            stats_[f"deepcenter_{prefix_}_accepted"] += 1
+            return True
+        stats_[f"deepcenter_{prefix_}_rejected"] += 1
+        return False
+
+    monkeypatch.setattr(graph_ops_module, "deepcenter_accept_repair_point", spy)
+    return calls
+
+
+def _install_gap_refine_spy(monkeypatch) -> list[tuple[int, tuple[float, float, float]]]:
+    """Replace refine_synthetic_midpoint where graph_ops looks it up; like the
+    real successful path it counts one refinement per insertion attempt."""
+    calls: list[tuple[int, tuple[float, float, float]]] = []
+
+    def spy(cfg_, dataset_, t_, midpoint_, frame_cache_, stats_):
+        calls.append((int(t_), midpoint_))
+        stats_["gap_refined_synthetic"] += 1
+        return midpoint_
+
+    monkeypatch.setattr(graph_ops_module, "refine_synthetic_midpoint", spy)
+    return calls
+
+
+def test_e23_gap_quadrant_observed_nonmarginal_bypasses_strong_motion(tmp_path: Path, monkeypatch):
+    # Reused (observed) middle, span < 8.5 um: count strong motion, no model.
+    cfg = _gap_cfg(tmp_path)
+    nodes, edges = _gap_graph(_GAP_NONMARGINAL_SPAN_VOX, observed_middle=True)
+    calls = _install_gap_dc_spy(monkeypatch, accept=lambda t: True)
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(cfg, nodes, edges, stats)
+
+    assert calls == []
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 1
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 0
+    assert stats["deepcenter_gap_checked"] == 0
+    assert stats["gap_reused_existing"] == 1
+    assert stats["gap_pairs_selected"] == 1
+    assert stats["gap_inserted_synthetic"] == 0
+    assert int(out_nodes[3].get("gap_synthetic", 0)) != 1  # stays observed
+    pairs = {(int(e["source_id"]), int(e["target_id"])) for e in out_edges}
+    assert {(1, 3), (3, 2)} <= pairs and len(out_edges) == 3
+
+
+def test_e23_gap_quadrant_observed_marginal_bypasses_observed_node(tmp_path: Path, monkeypatch):
+    # Reused (observed) middle, span >= 8.5 um: count observed_node, no model.
+    cfg = _gap_cfg(tmp_path)
+    nodes, edges = _gap_graph(_GAP_MARGINAL_SPAN_VOX, observed_middle=True)
+    calls = _install_gap_dc_spy(monkeypatch, accept=lambda t: True)
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(cfg, nodes, edges, stats)
+
+    assert calls == []
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 1
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 0
+    assert stats["deepcenter_gap_checked"] == 0
+    assert stats["gap_reused_existing"] == 1
+    assert stats["gap_pairs_selected"] == 1
+    assert stats["gap_inserted_synthetic"] == 0
+    assert int(out_nodes[3].get("gap_synthetic", 0)) != 1  # stays observed
+    pairs = {(int(e["source_id"]), int(e["target_id"])) for e in out_edges}
+    assert {(1, 3), (3, 2)} <= pairs and len(out_edges) == 3
+
+
+def test_e23_gap_quadrant_synthetic_nonmarginal_bypasses_strong_motion(tmp_path: Path, monkeypatch):
+    # Synthetic middle, span < 8.5 um: count strong motion, no model.
+    cfg = _gap_cfg(tmp_path)
+    nodes, edges = _gap_graph(_GAP_NONMARGINAL_SPAN_VOX)
+    calls = _install_gap_dc_spy(monkeypatch, accept=lambda t: True)
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(cfg, nodes, edges, stats)
+
+    assert calls == []
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 1
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 0
+    assert stats["deepcenter_gap_checked"] == 0
+    assert stats["gap_reused_existing"] == 0
+    assert stats["gap_inserted_synthetic"] == 1
+    assert stats["gap_added_nodes"] == 1
+    assert int(out_nodes[9]["gap_synthetic"]) == 1
+    pairs = {(int(e["source_id"]), int(e["target_id"])) for e in out_edges}
+    assert {(1, 9), (9, 2)} <= pairs and len(out_edges) == 3
+
+
+def test_e23_gap_quadrant_synthetic_marginal_queries_deepcenter(tmp_path: Path, monkeypatch):
+    # Synthetic middle, span >= 8.5 um: exactly one model call at the E23
+    # threshold; both bypass counters stay zero.
+    cfg = _gap_cfg(tmp_path)
+    nodes, edges = _gap_graph(_GAP_MARGINAL_SPAN_VOX)
+    calls = _install_gap_dc_spy(monkeypatch, accept=lambda t: True)
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(cfg, nodes, edges, stats)
+
+    assert len(calls) == 1
+    assert calls[0]["t"] == 1
+    assert calls[0]["prefix"] == "gap"
+    assert calls[0]["threshold"] == 0.25 == cfg.DEEPCENTER_GAP_THRESHOLD
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 0
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 0
+    assert stats["deepcenter_gap_checked"] == 1
+    assert stats["deepcenter_gap_accepted"] == 1
+    assert stats["deepcenter_gap_rejected"] == 0
+    assert stats["gap_reused_existing"] == 0
+    assert stats["gap_inserted_synthetic"] == 1
+    assert int(out_nodes[9]["gap_synthetic"]) == 1
+    pairs = {(int(e["source_id"]), int(e["target_id"])) for e in out_edges}
+    assert {(1, 9), (9, 2)} <= pairs and len(out_edges) == 3
+
+
+def test_e23_gap_veto_disabled_changes_nothing_but_repairs(tmp_path: Path, monkeypatch):
+    # Gate off: no model call and none of the three routing/bypass counters
+    # moves, across both node kinds and both span classes in one call, while
+    # both valid repairs still land.
+    cfg = _gap_cfg(tmp_path, BIOHUB_DEEPCENTER_GAP_VETO="0")
+    nodes = {
+        1: _node(1, 0, x=0.0),
+        2: _node(2, 2, x=_GAP_NONMARGINAL_SPAN_VOX),  # pair A: synthetic, nonmarginal
+        3: _node(3, 4, x=400.0),
+        4: _node(4, 6, x=400.0 + _GAP_MARGINAL_SPAN_VOX),  # pair B: marginal
+        5: _node(5, 5, x=400.0 + _GAP_MARGINAL_SPAN_VOX / 2.0),  # observed middle for B
+        7: _node(7, 10, x=2000.0),
+        8: _node(8, 11, x=2000.0),
+    }
+    edges = [{"source_id": 7, "target_id": 8, "edge_prob": 1.0}]
+    calls = _install_gap_dc_spy(monkeypatch, accept=lambda t: True)
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(cfg, nodes, edges, stats)
+
+    assert calls == []
+    assert stats["deepcenter_gap_checked"] == 0
+    assert stats["deepcenter_gap_accepted"] == 0
+    assert stats["deepcenter_gap_rejected"] == 0
+    assert stats["deepcenter_gap_missing"] == 0
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 0
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 0
+    assert stats["gap_pairs_selected"] == 2
+    assert stats["gap_added_edges"] == 4
+    assert stats["gap_inserted_synthetic"] == 1  # pair A
+    assert stats["gap_added_nodes"] == 1
+    assert stats["gap_reused_existing"] == 1  # pair B
+    assert int(out_nodes[9]["gap_synthetic"]) == 1
+    assert int(out_nodes[5].get("gap_synthetic", 0)) != 1
+    pairs = {(int(e["source_id"]), int(e["target_id"])) for e in out_edges}
+    assert {(1, 9), (9, 2), (3, 5), (5, 4)} <= pairs and len(out_edges) == 5
+
+
+def test_e23_gap_span_exact_boundary_is_marginal(tmp_path: Path, monkeypatch):
+    # 8.5 / 0.40625 voxels of x is exactly the 8.5 um min-span boundary and
+    # must take the marginal route for both node kinds.
+    assert point_distance_um((0.0, 0.0, 0.0), (0.0, 0.0, _GAP_BOUNDARY_SPAN_VOX)) == 8.5
+    cfg = _gap_cfg(tmp_path)
+
+    # Synthetic middle at exactly 8.5 um: routed to DeepCenter.
+    calls = _install_gap_dc_spy(monkeypatch, accept=lambda t: True)
+    nodes, edges = _gap_graph(_GAP_BOUNDARY_SPAN_VOX)
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(cfg, nodes, edges, stats)
+    assert len(calls) == 1
+    assert calls[0]["t"] == 1 and calls[0]["threshold"] == 0.25
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 0
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 0
+    assert stats["gap_pairs_selected"] == 1
+    assert int(out_nodes[9]["gap_synthetic"]) == 1
+
+    # Observed middle at exactly 8.5 um: marginal observed bypass, no model.
+    calls = _install_gap_dc_spy(monkeypatch, accept=lambda t: True)
+    nodes, edges = _gap_graph(_GAP_BOUNDARY_SPAN_VOX, observed_middle=True)
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(cfg, nodes, edges, stats)
+    assert calls == []
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 1
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 0
+    assert stats["gap_pairs_selected"] == 1
+    assert int(out_nodes[3].get("gap_synthetic", 0)) != 1
+
+
+def test_e23_deepcenter_gap_threshold_exact_boundary(tmp_path: Path, monkeypatch):
+    # The production comparator is the strict ``score < threshold`` inside the
+    # real ``deepcenter_accept_repair_point`` (only the model call is
+    # stubbed): prove it at 0.25 and at both adjacent floats.
+    _install_gap_refine_spy(monkeypatch)
+    for score, want_accept in (
+        (np.nextafter(0.25, -np.inf), False),
+        (0.25, True),
+        (np.nextafter(0.25, np.inf), True),
+    ):
+        monkeypatch.setattr(
+            deepcenter_module, "deepcenter_score_point", lambda *_args, _score=score: _score
+        )
+        cfg = _gap_cfg(tmp_path)
+        nodes, edges = _gap_graph(_GAP_MARGINAL_SPAN_VOX)
+        stats = new_stats()
+        out_nodes, out_edges = close_single_frame_gaps(
+            cfg, nodes, edges, stats, dataset="ds0", deepcenter_bundle={"stub": True}
+        )
+        assert stats["deepcenter_gap_checked"] == 1
+        assert stats["deepcenter_gap_missing"] == 0
+        if want_accept:
+            assert stats["deepcenter_gap_accepted"] == 1
+            assert stats["deepcenter_gap_rejected"] == 0
+            assert stats["gap_pairs_selected"] == 1
+            assert 9 in out_nodes and int(out_nodes[9]["gap_synthetic"]) == 1
+            assert len(out_edges) == 3
+        else:
+            assert stats["deepcenter_gap_accepted"] == 0
+            assert stats["deepcenter_gap_rejected"] == 1
+            assert stats["gap_pairs_selected"] == 0
+            assert 9 not in out_nodes  # rejected node rolled back
+            assert len(out_edges) == 1  # only the dummy edge survives
+
+
+def test_e23_gap_veto_rejection_restores_cap_and_consumes_id(tmp_path: Path, monkeypatch):
+    # Deterministic cap-one transaction with a source overlap: pair (1, 2) is
+    # vetoed at its t=1 midpoint, then the rejected pair's target 2 is reused
+    # as the source of pair (2, 3), whose t=3 midpoint is accepted. The
+    # absolute cap (1) is binding, so the accepted insertion only happens if
+    # the rejection restores synthetic_added, and the accepted ID must skip
+    # the consumed rejected ID. Both distinct spans (9.0 vs 10.0 um) sit
+    # inside the 12.0 um gate and above the 8.5 um marginal boundary.
+    s = 0.40625
+    assert point_distance_um((0.0, 0.0, 0.0), (0.0, 0.0, 9.0 / s)) == 9.0
+    assert point_distance_um((0.0, 0.0, 9.0 / s), (0.0, 0.0, 19.0 / s)) == 10.0
+    cfg = _gap_cfg(
+        tmp_path,
+        BIOHUB_GAP_CLOSE_MAX_ADDED_ABS="1",
+        BIOHUB_GAP_CLOSE_MAX_ADDED_FRAC="1.0",
+    )
+    nodes = {
+        1: _node(1, 0, x=0.0),
+        2: _node(2, 2, x=9.0 / s),
+        3: _node(3, 4, x=19.0 / s),
+        6: _node(6, 9, x=2000.0),
+        7: _node(7, 10, x=2000.0),
+        8: _node(8, 11, x=2000.0),
+    }
+    original_edges = [
+        {"source_id": 7, "target_id": 8, "edge_prob": 0.71},
+        {"source_id": 6, "target_id": 7, "edge_prob": 0.62},
+    ]
+    refine_calls = _install_gap_refine_spy(monkeypatch)
+    dc_calls = _install_gap_dc_spy(monkeypatch, accept=lambda t: t != 1)  # veto mid t=1
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(cfg, nodes, original_edges, stats)
+
+    # Both attempts refined and checked, rejected midpoint t=1 first.
+    assert [t for t, _ in refine_calls] == [1, 3]
+    assert [call["t"] for call in dc_calls] == [1, 3]
+    assert stats["gap_refined_synthetic"] == 2  # rejected attempt keeps its event
+    assert stats["deepcenter_gap_checked"] == 2
+    assert stats["deepcenter_gap_rejected"] == 1
+    assert stats["deepcenter_gap_accepted"] == 1
+    assert stats["deepcenter_gap_missing"] == 0
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 0
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 0
+
+    # Rejected node and its two proposed edges are gone: source 1 and its
+    # target 2 keep no rejected repair edge, while 2 is reused as the accepted
+    # repair's source. The accepted repair skips the consumed ID (10 == 9+1).
+    assert 9 not in out_nodes
+    assert 10 in out_nodes and int(out_nodes[10]["gap_synthetic"]) == 1
+    assert 10 == 9 + 1
+    pairs = {(int(e["source_id"]), int(e["target_id"])) for e in out_edges}
+    assert (1, 9) not in pairs and (9, 2) not in pairs
+    assert (2, 10) in pairs and (10, 3) in pairs
+
+    # Telemetry and caps reflect only the accepted repair.
+    assert stats["gap_inserted_synthetic"] == 1
+    assert stats["gap_added_nodes"] == 1
+    assert stats["gap_added_edges"] == 2
+    assert stats["gap_pairs_selected"] == 1
+    assert stats["gap_reused_existing"] == 0
+    assert stats["gap_skipped_node_cap"] == 0  # restored cap served candidate 2
+
+    # Exact append order: the two original edges verbatim in their original
+    # order, then (2, 10) and (10, 3), each accepted edge with its complete
+    # dictionary and exactly half the 10.0 um span.
+    assert out_edges == [
+        {"source_id": 7, "target_id": 8, "edge_prob": 0.71},
+        {"source_id": 6, "target_id": 7, "edge_prob": 0.62},
+        {
+            "source_id": 2,
+            "target_id": 10,
+            "edge_prob": None,
+            "distance_um": 5.0,
+            "gap_closed": 1,
+        },
+        {
+            "source_id": 10,
+            "target_id": 3,
+            "edge_prob": None,
+            "distance_um": 5.0,
+            "gap_closed": 1,
+        },
+    ]
+    assert out_edges[2]["distance_um"] == 5.0
+    assert out_edges[3]["distance_um"] == 5.0
+
+
+def test_e23_gap_veto_missing_bundle_fails_open(tmp_path: Path, monkeypatch):
+    # USE_DEEPCENTER_VETO fail-open is separate from the gap gate: with veto
+    # enabled and no detector bundle, the marginal synthetic repair still
+    # lands, counted as missing with no checked/accepted/rejected/bypass.
+    cfg = _gap_cfg(tmp_path)
+    refine_calls = _install_gap_refine_spy(monkeypatch)
+    nodes, edges = _gap_graph(_GAP_MARGINAL_SPAN_VOX)
+    stats = new_stats()
+    out_nodes, out_edges = close_single_frame_gaps(
+        cfg, nodes, edges, stats, dataset="ds0", deepcenter_bundle=None
+    )
+
+    assert [t for t, _ in refine_calls] == [1]
+    assert stats["deepcenter_gap_missing"] == 1
+    assert stats["deepcenter_gap_checked"] == 0
+    assert stats["deepcenter_gap_accepted"] == 0
+    assert stats["deepcenter_gap_rejected"] == 0
+    assert stats["deepcenter_gap_bypassed_strong_motion"] == 0
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 0
+    assert stats["gap_pairs_selected"] == 1
+    assert stats["gap_inserted_synthetic"] == 1
+    assert 9 in out_nodes and int(out_nodes[9]["gap_synthetic"]) == 1
+    pairs = {(int(e["source_id"]), int(e["target_id"])) for e in out_edges}
+    assert {(1, 9), (9, 2)} <= pairs and len(out_edges) == 3
+
+
+def test_stats_schema_uses_observed_node_bypass_name():
+    stats = new_stats()
+    assert "deepcenter_gap_bypassed_observed_node" in stats
+    assert stats["deepcenter_gap_bypassed_observed_node"] == 0
+    # No schema key may keep the stale pre-Phase-4 synthetic-node suffix.
+    assert not any(key.endswith("synthetic_node") for key in stats)

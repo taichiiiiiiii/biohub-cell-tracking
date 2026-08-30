@@ -334,11 +334,14 @@ def close_single_frame_gaps(
                 middle = nodes_by_id[middle_id]
                 gap_span_um = float(d[r, c])
                 marginal_gap = gap_span_um >= cfg.DEEPCENTER_GAP_CONFIRM_MIN_SPAN_UM
-                requires_center_confirmation = cfg.DEEPCENTER_GAP_VETO and marginal_gap and middle_reused
+                synthetic_middle = int(middle.get("gap_synthetic", 0)) == 1
+                requires_center_confirmation = (
+                    cfg.DEEPCENTER_GAP_VETO and marginal_gap and synthetic_middle
+                )
                 if cfg.DEEPCENTER_GAP_VETO and not marginal_gap:
                     stats["deepcenter_gap_bypassed_strong_motion"] += 1
-                elif cfg.DEEPCENTER_GAP_VETO and not middle_reused:
-                    stats["deepcenter_gap_bypassed_synthetic_node"] += 1
+                elif cfg.DEEPCENTER_GAP_VETO and not synthetic_middle:
+                    stats["deepcenter_gap_bypassed_observed_node"] += 1
                 if requires_center_confirmation and not deepcenter_accept_repair_point(
                     cfg,
                     dataset,
