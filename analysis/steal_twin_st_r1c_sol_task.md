@@ -372,11 +372,11 @@ record to this exact top-level JSON object without reading the live graph:
 
 Use lowercase role keys exactly as above.  Do not add model path, checkpoint
 path, epoch, weights, credentials, wall time, host data, input ordinals, or
-graph mutations.  Validate that a record is a `TwinDebugRecord`, its decision
-is `accepted` with `reason is None` or `rejected` with one of `conflict`,
-`frame_cap`, `video_cap`, and all top-level numeric fields supplied by R1b are
-finite.  An incompatible record raises `TypeError` or `ValueError` before any
-JSONL target is touched.
+graph mutations.  The common validation in section 8 applies to **every**
+supplied record before capacity allocation, including records that will be
+dropped.  Only retained records enter the recursive metadata codec and line
+encoding below.  An incompatible record raises `TypeError` or `ValueError`
+before any collector state changes or JSONL target is touched.
 
 ### 7.1 Lossless encoding of R1b frozen metadata
 
@@ -431,7 +431,9 @@ Frozen NumPy/buffer values:
 
 This codec is lossless relative to the reviewed immutable R1b snapshot.  It
 also ensures metadata NaN/Inf cannot bypass the required `allow_nan=False`.
-Do not broaden the codec to arbitrary dataclasses or Python/NumPy objects.
+Do not broaden the codec to arbitrary dataclasses or Python/NumPy objects.  Do
+not add an inverse decoder or reconstruction API to production: ST-R1c only
+needs the deterministic forward conversion to a tagged plain JSON value.
 
 The final line encoding is exactly:
 
@@ -468,25 +470,67 @@ raise `ValueError`.  Production always constructs it with the already frozen
 `cfg.STEAL_TWIN_DEBUG_MAX_RECORDS == 200`.  Unit tests may construct a smaller
 capacity.
 
-`allocate` is single-threaded and online:
+`allocate` is single-threaded and online.  It performs these steps in exact
+order:
 
 1. reject calls after successful finalization;
-2. require a sequence of reviewed `TwinDebugRecord` values all belonging to
-   one dataset (an empty sequence is allowed);
-3. retain the first `min(len(records), remaining_capacity)` in their supplied
-   order and count the rest as dropped;
-4. canonicalize and encode each retained record immediately into an in-memory
-   line string; do not retain caller record/plan/graph references;
-5. return only this call's `(written, dropped)` counts and update cumulative
-   properties.
+2. require `records` to be a `Sequence`; an empty sequence is valid;
+3. walk **all** records in supplied index order and apply the common structural
+   validation below, without consulting remaining capacity;
+4. only after every record passes, retain the first
+   `min(len(records), remaining_capacity)` in supplied order and classify the
+   rest as dropped;
+5. canonicalize and encode each retained record into a local list of line
+   strings; do not recursively traverse or encode dropped metadata;
+6. only after every retained line encodes successfully, extend the in-memory
+   collector buffer, update cumulative counts, and return this call's
+   `(written, dropped)`.
 
-Each `allocate` call is atomic with respect to collector state: validate the
-whole supplied sequence and encode all would-be retained lines into a local
-temporary list first.  Only after every retained line encodes successfully may
-the method extend the collector buffer or update cumulative counters.  If
-validation or encoding raises, the buffer and both cumulative counts remain
-exactly unchanged.  Dropped records are type/dataset/decision validated but are
-never encoded or retained.
+The common validation for every supplied record is exact and ordered.  For
+each index, finish all checks below before moving to the next record:
+
+1. the value has exact reviewed type `TwinDebugRecord`;
+2. `dataset` is `None` or exact `str`, and every record in one nonempty call has
+   the same dataset value as its first record;
+3. `decision` is exact `str` and is either `"accepted"` with `reason is None`,
+   or `"rejected"` with exact-string reason `"conflict"`, `"frame_cap"`, or
+   `"video_cap"`;
+4. each role `p,q,a,b,a2,b2` has exact type `int` (not `bool`);
+5. `sort_key` is an exact tuple of length nine; its first three values have
+   exact type `float` and are finite, its final six values have exact type
+   `int`, and those six integers equal `(p,q,a,b,a2,b2)` in order;
+6. `d_pq,d_pa,d_pb,d_ab,d_a2b2,divergence_growth`,
+   `raw_deepcenter_score`, and `deepcenter_threshold` each have exact type
+   `float` and are finite, and `deepcenter_threshold == 0.12`;
+7. `deepcenter_decision` has exact type `TwinDeepCenterDecision`, has
+   `accepted is True`, exact finite-float `raw_score` equal to
+   `raw_deepcenter_score`, and `reason is None`;
+8. `removed_edge` has exact type `TwinEdgeRecord`, exact-int endpoints, and
+   exact `TwinFrozenMapping` metadata; its endpoints equal `(q,b)`;
+9. `planned_edge` has exact type `TwinPlannedEdge`, exact-int endpoints, exact
+   finite-float `distance_um`, and `edge_prob is None`; its source/target and
+   distance equal `p`, `b`, and `d_pb`, respectively.
+
+These checks deliberately do not recursively walk `removed_edge.metadata` for
+a dropped record.  R1b owns construction of the frozen snapshot; the recursive
+codec validates every nested value of each retained record.  Capacity zero
+does not bypass common validation: a malformed record still raises even though
+no record could be retained.  Here, "malformed" means a common envelope failure
+listed above.  An exact `TwinFrozenMapping` envelope containing an unsupported
+manually forged nested value is a codec failure only if that record is retained;
+when dropped, its nested metadata is intentionally not traversed.
+
+Use `TypeError` for a wrong container/record/field type and `ValueError` for a
+wrong length, nonfinite numeric value, invalid enum/reason, cross-field
+mismatch, or mixed dataset.  The error message must name the zero-based record
+index and failing field/category.  The already-finalized check remains the
+preceding `RuntimeError` and performs no record inspection.
+
+Each `allocate` call is atomic with respect to collector state.  If common
+validation or retained-record encoding raises, the buffer and both cumulative
+counts remain exactly unchanged.  Dropped records receive every common check
+above, not merely type/dataset/decision checks, but are never recursively
+encoded or retained.
 
 The number of retained line strings is never greater than `max_records`.
 There is no per-dataset reset and no final resort.  Dataset order comes from
@@ -544,16 +588,51 @@ partial target.  Atomicity here applies only to the debug JSONL; this task does
 not redesign the existing CSV, run-stats, pickle, or manifest writers.
 
 Before detector loading or output creation, reject a configured debug target
-that aliases another artifact in the same run.  Alias comparison means equal
-`resolve(strict=False)` paths, or `os.path.samefile` when both paths already
-exist (handle a samefile `OSError` as non-equality, not as permission to skip
-the resolved-path comparison):
+that aliases another artifact in the same run.  Compute both:
+
+```python
+debug_resolved = debug_path.resolve(strict=False)
+debug_parent_resolved = debug_path.parent.resolve(strict=False)
+debug_entry_resolved = debug_parent_resolved / debug_path.name
+```
+
+`debug_resolved` follows an existing final-component symlink, while
+`debug_entry_resolved` identifies the directory entry that `os.replace` would
+replace without following that final symlink.  Both identities matter.  For
+ordinary file artifacts, alias comparison means either debug identity equals
+the resolved artifact, or `os.path.samefile` when both paths already exist
+(handle a samefile `OSError` as non-equality, not as permission to skip the
+resolved-path comparisons):
 
 - for `run_postproc`: any input GEFF, `out_csv`, or the effective
   `run_stats_path`;
-- for `save_prelinefit_checkpoint`: any input GEFF,
+- for `save_prelinefit_checkpoint`: any input GEFF, `checkpoint_dir` itself,
   `checkpoint_dir/manifest.json`, or any planned
   `checkpoint_dir/<dataset>.pkl`.
+
+Input GEFF paths need a stronger tree rule because a GEFF is normally a
+directory and may itself be reached through a symlink.  Resolve each discovered
+GEFF with `geff_path.resolve(strict=True)` before detector/output activity:
+
+- if the resolved GEFF is a directory, reject when either `debug_resolved` or
+  `debug_entry_resolved` is equal to that directory **or is any descendant of
+  it**, using `is_relative_to(geff_resolved)`; this protects both the final
+  symlink target and the directory entry/temp-file parent in the complete GEFF
+  tree, not just its root name;
+- if the resolved GEFF is a regular file, treat it as a leaf artifact: reject
+  either debug-identity equality or existing-file `os.path.samefile`; a sibling
+  path is allowed and there is no descendant rule;
+- a symlink to a GEFF directory uses the directory/tree rule after resolution,
+  and a symlink to a regular-file GEFF uses the leaf rule.  A debug symlink or
+  a debug path below a symlinked GEFF directory is therefore rejected based on
+  resolved locations.  A debug leaf symlink physically located inside a GEFF
+  tree but pointing outside is also rejected because replacing that leaf and
+  creating its same-directory temp file would still modify the GEFF tree.
+
+Do not use lexical `str.startswith`, unresolved `Path.parent`, or only
+`debug_path == geff_path`; each misses sibling-prefix or symlink cases.  A
+failure to strictly resolve a discovered GEFF propagates before detector/output
+activity and is not treated as proof that aliasing is safe.
 
 Raise `ValueError` naming both the debug target and conflicting artifact.  An
 unrelated pre-existing debug target is valid and is replaced only after a
@@ -614,12 +693,15 @@ Cover every item below.
 - An exact expected JSON object/line for one accepted record and each
   resolution reason, including all role, sort, distance, DeepCenter,
   removed-edge, and planned-edge fields.
-- Round-trip assertions for nested `TwinFrozenMapping` with non-string keys,
-  tuple, frozenset under permuted construction order, bytes, complex and
-  nonfinite metadata floats (including distinct NaN bit patterns), every frozen
-  dtype/scalar/array/structured-scalar and buffer representation supported by
-  R1b.  Assert the separate snapshot `input_position` ordinal does not leak,
-  while a caller-owned metadata key also named `input_position` remains intact.
+- For nested `TwinFrozenMapping` with non-string keys, tuple, frozenset under
+  permuted construction order, bytes, complex and nonfinite metadata floats
+  (including distinct NaN bit patterns), and every frozen
+  dtype/scalar/array/structured-scalar/buffer representation supported by R1b,
+  assert `json.loads(encoded_line) == exact_expected_tagged_plain_object`.
+  Then encode the same immutable record again and assert exact byte replay.
+  Do not implement or test a production inverse decoder.  Assert the separate
+  snapshot `input_position` ordinal does not leak, while a caller-owned
+  metadata key also named `input_position` remains intact.
 - Two independently constructed equivalent inputs and repeated runs produce
   byte-identical JSONL.  Unicode uses the frozen default escaped form.
 - A capacity-two collector allocated records in dataset order `a`, `b`, `c`
@@ -628,7 +710,14 @@ Cover every item below.
   records.
 - Capacity zero, empty records, malformed/incompatible records, second
   finalization, and allocation after finalization have exact fail-closed
-  behavior.
+  behavior.  Parameterize every common structural/numeric failure against both
+  available capacity and capacity zero; malformed would-be-dropped records must
+  still raise, leave buffer/written/dropped state unchanged, and create no file.
+- Separately forge a valid common envelope whose `TwinFrozenMapping` contains
+  an unsupported nested value: it raises during retained codec encoding, while
+  capacity zero returns `(0, 1)` and increments only the dropped total without
+  traversing metadata.  The retained codec failure leaves all collector state
+  unchanged.
 
 ### 10.4 Run ownership and atomic failures
 
@@ -643,9 +732,17 @@ Cover every item below.
 - Inject write, fsync, and `os.replace` failures during finalization.  The old
   target remains unchanged, the original exception propagates, and handled
   failures leave no same-directory temp file.
-- Debug path aliases with inputs, CSV/stats, manifest, or dataset pickle are
-  rejected before detector/output activity; an unrelated existing target is
-  allowed.
+- In both `run_postproc` and `save_prelinefit_checkpoint`, a debug target equal
+  to a GEFF directory, directly below its tree, or below it through either a
+  GEFF symlink or debug-path symlink is rejected before detector/output
+  activity.  Use a sentinel child within each synthetic GEFF tree to prove no
+  target/temporary file is touched.  Also cover a debug leaf symlink located
+  inside the GEFF tree but pointing outside; the protected directory entry and
+  same-directory temp location still require rejection.
+- In both run paths, a regular-file GEFF rejects an equal/samefile debug target
+  but allows a sibling debug target.  CSV/stats, manifest, and dataset-pickle
+  aliases, plus equality with `checkpoint_dir` itself, are also rejected; an
+  unrelated existing target is allowed.
 - `run_relinefit` never constructs, allocates, or publishes a collector.
 
 ### 10.5 Off/dry-run identity and no R2 mutation
