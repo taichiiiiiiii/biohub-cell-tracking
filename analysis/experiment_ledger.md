@@ -516,6 +516,10 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
   `AssertionError: {'deepcenter_gap_bypassed_observed_node'}`でfail-closedした。
   Phase 4統合後にfresh directoryで全schema/field comparatorを再実行する。
 - このcheckpointでは公式スコアを読まず、Kaggle push/submitも行っていない。
+- **提出権限更新（2026-08-30）**: userから「必要に応じて提出」の明示承認あり。
+  以後、事前登録済みlocal gateと再現性検証を通過した候補は、必要なkernel実行・
+  Kaggle提出まで進めてよい。可視LBでの反復選抜はせず、各照会のsubmission ID・
+  score・採否を本台帳へ記録する。
 
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
