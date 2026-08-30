@@ -46,6 +46,12 @@ final submission decision.
 
 ## Loop order
 
+- Binding training gate: every new or warm-start training run must pass
+  [`analysis/training_loss_gate.md`](training_loss_gate.md) before official
+  metric evaluation; E23 primary/secondary remain `LEGACY_HISTORY_UNVERIFIED`
+  and cannot receive retrospective PASS, while current post-processing-only
+  work is outside this gate.
+
 1. Establish exact parity with the submitted E23 notebook.
 2. Run official local scoring and paired per-video diagnostics.
 3. Change one causal factor at a time and preregister its gate.
