@@ -30,10 +30,17 @@ Use the minimum useful specialists. Read-heavy specification, literature, and re
   native subagent effort by task: `medium` for bounded specification and
   submission checks, and `high` for experiment design, tracking research, and
   scientific review. The default fallback is `medium`.
-- Delegate code and test implementation through the external worker:
+- When the Qwen service is healthy, delegate code and test implementation
+  through the external worker:
   `printf '%s\n' "$TASK" | .codex/bin/qwen-implement /absolute/linked/worktree`.
   Do not use native `spawn_agent` for Qwen implementation. Codex 0.151.0 does
   not propagate a custom `model_provider` into native child roles.
+- While an actual Qwen canary fails with HTTP 429, implementation is
+  temporarily delegated to native `gpt-5.6-sol` subagents instead. Use
+  `medium` effort for bounded changes and `high` for ambiguous or high-risk
+  implementation. Keep the same isolated-worktree, scope, test, and parent
+  review gates. Do not repeatedly probe Qwen; return implementation to Qwen
+  only after a later canary succeeds.
 - The external worker uses `qwen3.7-max` with machine-local
   `qwen_token_plan`. Use `medium` reasoning for bounded implementation phases;
   raise effort only when the task's ambiguity or review risk justifies it.
