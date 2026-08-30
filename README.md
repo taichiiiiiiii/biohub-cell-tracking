@@ -46,18 +46,56 @@ fine-tuneも凍結する。次ループの最初のゲートは、E23に固有�
 ## セットアップ
 
 ```bash
-uv sync --extra dev
-uv run python scripts/build_manifest.py          # data/manifest.csv（125 ページ・約 10 分・初回のみ）
-uv run python scripts/download_data.py           # test 4 本 + GT geff（1.9 GB）
-uv run --extra dev pytest -q                     # 自前テスト
-PYTHONPATH=official/src uv run --extra dev pytest official/tests/test_metrics.py official/tests/test_division_metrics.py official/tests/test_division_sandbox_examples.py -q
+uv python install 3.12
+uv sync --frozen --python 3.12 --extra dev
+uv run --frozen python --version
+uv run --frozen kaggle --version
+
+# E23 DeepCenter のローカル parity 実験を行う場合だけ追加
+uv sync --frozen --python 3.12 --extra dev --extra deepcenter
+```
+
+Kaggle OAuth は初回だけログインする。トークンを表示する
+`kaggle auth print-access-token` はログやチャットに秘密値を残すため使わない。
+
+```bash
+uv run --frozen kaggle auth login
+
+# OAuth とコンペ参加状態の読み取り専用確認
+uv run --frozen kaggle competitions files \
+  biohub-cell-tracking-during-development \
+  --page-size 1 \
+  --format table
+```
+
+### データ準備
+
+```bash
+# データ本体を取らず、ファイル一覧だけ作る（初回のみ）
+uv run --frozen python scripts/build_manifest.py
+
+# public test 4 本 + 対応 GT + 公式テスト fixture + sample_submission（約 1.9 GB）
+uv run --frozen python scripts/download_data.py --dry-run
+uv run --frozen python scripts/download_data.py
+
+# 自前テスト
+uv run --frozen --extra dev pytest -q
+
+# 公式 metric テスト（GT の場所を明示）
+CELLMOT_DATA_DIR=data/train PYTHONPATH=official/src \
+  uv run --frozen --extra dev pytest \
+  official/tests/test_metrics.py \
+  official/tests/test_division_metrics.py \
+  official/tests/test_division_sandbox_examples.py -q
 ```
 
 ## ローカル採点（公式指標・torch 不要）
 
 ```bash
-BIOHUB_TEST_DIR=data/test uv run python notebooks/smoke_nn_baseline/main.py   # submission.csv を生成
-uv run python scripts/local_eval.py submission.csv --json outputs/score.json
+BIOHUB_TEST_DIR=data/test \
+  uv run --frozen python notebooks/smoke_nn_baseline/main.py
+uv run --frozen python scripts/local_eval.py \
+  submission.csv --gt-dir data/train --json outputs/score.json
 ```
 
 `src/biohub/evaluate.py` が CSV → tracksdata グラフ → `official/src/tracking_cellmot/metrics.evaluate` を
@@ -65,11 +103,38 @@ torch を import せずに通す。公式 `scripts/evaluate.py` は `io.py` 経�
 
 ## Kaggle 実行
 
+kernel push と competition submit は別の外部操作であり、それぞれ直前に
+ユーザーの明示承認を得る。同じ kernel slug への並列 push はせず、
+push → status → output を直列に行う。
+
 ```bash
-kaggle kernels push -p notebooks/smoke_nn_baseline     # user 承認後
-kaggle kernels status taichiiiii/biohub-smoke-nn-baseline
-kaggle kernels output taichiiiii/biohub-smoke-nn-baseline -p outputs/smoke
+# Gate 1: このコマンドへの明示承認後のみ
+uv run --frozen kaggle kernels push -p notebooks/smoke_nn_baseline
+
+uv run --frozen kaggle kernels status \
+  taichiiiii/biohub-smoke-nn-baseline
+uv run --frozen kaggle kernels output \
+  taichiiiii/biohub-smoke-nn-baseline \
+  -p outputs/smoke/v<VERSION> \
+  --file-pattern '^submission[.]csv$'
+
+# ローカル採点後、Gate 2として別途明示承認を得た場合のみ
+uv run --frozen kaggle competitions submit \
+  biohub-cell-tracking-during-development \
+  --file submission.csv \
+  --kernel taichiiiii/biohub-smoke-nn-baseline \
+  --version <VERSION> \
+  --message "<Issue・設定・Git SHA>"
+
+# 提出後の読み取り専用確認
+uv run --frozen kaggle competitions submissions \
+  biohub-cell-tracking-during-development \
+  --page-size 20 \
+  --format table
 ```
+
+`competitions submit --file submission.csv` のファイル名は、ローカルファイルではなく
+指定 kernel version が生成した出力名を指す。
 
 ## 参考（公開ノートブック・08-23 時点、票数順）
 

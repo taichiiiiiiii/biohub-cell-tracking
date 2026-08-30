@@ -2,7 +2,7 @@
 name = "biohub-cell-tracking"
 version = "0.1.0"
 description = "Kaggle: Biohub - Cell Tracking During Development (working repository)"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.0",
@@ -12,10 +12,10 @@ dependencies = [
     "zarr>=3.0.10,<4",
     "blosc2",
     "geff>=1.1.3",
-    # Same source as the official baseline (royerlab). metrics.py / division_metrics.py
-    # only need polars + tracksdata, so torch is NOT required locally.
+    # Same source as the official baseline (royerlab). The metric-only path
+    # needs polars + tracksdata; E23 DeepCenter parity uses the optional extra.
     "tracksdata @ git+https://github.com/royerlab/tracksdata@main",
-    "kaggle>=1.6",
+    "kaggle==2.2.4",
     "tqdm",
 ]
 
@@ -23,6 +23,9 @@ dependencies = [
 dev = [
     "pytest>=8.4",
     "ruff>=0.6",
+]
+deepcenter = [
+    "torch==2.13.0",
 ]
 
 [tool.uv]
@@ -33,7 +36,7 @@ testpaths = ["tests"]
 pythonpath = ["src", "official/src"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
 extend-exclude = ["official", "*.ipynb"]
 
