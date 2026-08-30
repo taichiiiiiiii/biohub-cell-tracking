@@ -10,6 +10,8 @@ import csv
 import io
 import json
 from collections.abc import Callable
+from dataclasses import FrozenInstanceError
+from enum import IntEnum
 from pathlib import Path
 
 import numpy as np
@@ -1948,3 +1950,1073 @@ def test_steal_twin_r1a_existing_fail_open_helper_is_unchanged(tmp_path: Path):
     )
     assert accepted is True
     assert stats == {"deepcenter_gap_missing": 1}
+
+
+# --------------------------------------------------------------------------
+# ST-R1b: immutable twin-only planner
+# --------------------------------------------------------------------------
+_TWIN_SCALE_Y = 0.40625
+
+
+def _twin_node(node_id: int, t: int, y_um: float, **metadata: object) -> dict[str, object]:
+    return {
+        "node_id": node_id,
+        "t": t,
+        "z": 0.0,
+        "y": y_um / _TWIN_SCALE_Y,
+        "x": 0.0,
+        **metadata,
+    }
+
+
+def _twin_motif(
+    *,
+    p_um: float = 0.0,
+    q_um: float = 4.0,
+    a_um: float = 0.0,
+    b_um: float = 6.0,
+    a2_um: float = 0.0,
+    b2_um: float = 9.0,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    nodes = [
+        _twin_node(0, -1, p_um),
+        _twin_node(1, 0, p_um),
+        _twin_node(2, 0, q_um),
+        _twin_node(3, 1, a_um),
+        _twin_node(4, 1, b_um),
+        _twin_node(5, 2, a2_um),
+        _twin_node(6, 2, b2_um),
+    ]
+    edges = [
+        {"source_id": 0, "target_id": 1, "edge_prob": 0.9},
+        {"source_id": 1, "target_id": 3, "edge_prob": 0.8},
+        {
+            "source_id": 2,
+            "target_id": 4,
+            "edge_prob": 0.7,
+            "input_position": "caller-value",
+            "nested": {"values": [1, {"two": 2}]},
+        },
+        {"source_id": 3, "target_id": 5, "edge_prob": 0.6},
+        {"source_id": 4, "target_id": 6, "edge_prob": 0.5},
+    ]
+    return nodes, edges
+
+
+def _offset_twin_motif(
+    *,
+    id_offset: int,
+    frame: int,
+    space_um: float,
+    b_delta_um: float = 6.0,
+    b2_delta_um: float = 9.0,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    nodes, edges = _twin_motif(
+        p_um=space_um,
+        q_um=space_um + 4.0,
+        a_um=space_um,
+        b_um=space_um + b_delta_um,
+        a2_um=space_um,
+        b2_um=space_um + b2_delta_um,
+    )
+    for node in nodes:
+        node["node_id"] += id_offset
+        node["t"] += frame
+    for edge in edges:
+        edge["source_id"] += id_offset
+        edge["target_id"] += id_offset
+    return nodes, edges
+
+
+def _twin_accept(_node) -> divisions_module.TwinDeepCenterDecision:
+    return divisions_module.TwinDeepCenterDecision(True, 0.2, None)
+
+
+def _twin_plan(tmp_path: Path, nodes, edges, callback=_twin_accept):
+    return divisions_module.plan_twin_only_v1(
+        _steal_twin_r1a_cfg(tmp_path), "ds0", nodes, edges, callback
+    )
+
+
+def _make_twin_outdegree_invalid(nodes, edges) -> None:
+    nodes.append(_twin_node(7, 0, 20.0))
+    edges.extend([{"source_id": 0, "target_id": 2}, {"source_id": 0, "target_id": 7}])
+
+
+def _assert_twin_conservation(plan) -> None:
+    counters = plan.counters
+    eligibility_reasons = (
+        "distance_twin",
+        "ambiguous_p_nn",
+        "ambiguous_q_nn",
+        "not_mutual_parent_nn",
+        "distance_existing_child",
+        "distance_parent",
+        "distance_sister_low",
+        "distance_sister_high",
+        "time",
+        "missing_successor",
+        "shared_successor",
+        "divergence",
+        "synthetic",
+        "deepcenter_bundle",
+        "deepcenter_dataset",
+        "deepcenter_frame",
+        "deepcenter_heatmap",
+        "deepcenter_nonfinite",
+        "deepcenter_threshold",
+    )
+    assert counters["steal_twin_enumerated"] == (
+        sum(counters[f"steal_twin_rejected_{reason}"] for reason in eligibility_reasons)
+        + counters["steal_twin_eligible"]
+    )
+    assert counters["steal_twin_eligible"] == (
+        counters["steal_twin_accepted"]
+        + counters["steal_twin_rejected_conflict"]
+        + counters["steal_twin_rejected_frame_cap"]
+        + counters["steal_twin_rejected_video_cap"]
+    )
+    accepted = counters["steal_twin_accepted"]
+    assert counters["steal_twin_planned_edges_removed"] == accepted
+    assert counters["steal_twin_planned_edges_added"] == accepted
+    assert counters["steal_twin_edges_removed"] == counters["steal_twin_edges_added"] == 0
+    assert counters["steal_twin_isolated_donors"] == accepted
+    assert accepted <= counters["steal_twin_examined_frames"]
+    assert accepted <= 2
+    assert counters["steal_twin_debug_records_written"] == 0
+    assert counters["steal_twin_debug_records_dropped"] == 0
+
+
+def test_steal_twin_r1b_minimal_exact_candidate_counters_and_debug_record(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    called: list[int] = []
+
+    def score(node):
+        called.append(node.node_id)
+        return divisions_module.TwinDeepCenterDecision(True, 0.2, None)
+
+    plan = _twin_plan(tmp_path, nodes, edges, score)
+    assert plan.validation_reason is None
+    assert called == [4]
+    assert len(plan.candidates) == len(plan.accepted_candidates) == len(plan.decisions) == 1
+    candidate = plan.candidates[0]
+    assert (candidate.p, candidate.q, candidate.a, candidate.b, candidate.a2, candidate.b2) == (1, 2, 3, 4, 5, 6)
+    assert candidate.sort_key == (6.9, -3.0, 4.0, 1, 2, 3, 4, 5, 6)
+    assert candidate.planned_edge == divisions_module.TwinPlannedEdge(1, 4, 6.0)
+    assert candidate.removed_edge.metadata["input_position"] == "caller-value"
+    snapshot = next(edge for edge in plan.edges if (edge.source_id, edge.target_id) == (2, 4))
+    assert snapshot.input_position == 2
+    assert plan.decisions[0].accepted and plan.decisions[0].reason is None
+    record = plan.debug_records[0]
+    assert record.dataset == "ds0"
+    assert record.decision == "accepted" and record.reason is None
+    assert (record.p, record.q, record.a, record.b, record.a2, record.b2) == (1, 2, 3, 4, 5, 6)
+    assert record.sort_key == (6.9, -3.0, 4.0, 1, 2, 3, 4, 5, 6)
+    assert (record.d_pq, record.d_pa, record.d_pb, record.d_ab, record.d_a2b2) == (
+        4.0,
+        0.0,
+        6.0,
+        6.0,
+        9.0,
+    )
+    assert record.divergence_growth == 3.0
+    assert record.raw_deepcenter_score == 0.2
+    assert record.deepcenter_threshold == 0.12
+    assert record.deepcenter_decision == divisions_module.TwinDeepCenterDecision(True, 0.2, None)
+    assert record.removed_edge == candidate.removed_edge
+    assert record.removed_edge.source_id == 2 and record.removed_edge.target_id == 4
+    assert dict(record.removed_edge.metadata) == {
+        "source_id": 2,
+        "target_id": 4,
+        "edge_prob": 0.7,
+        "input_position": "caller-value",
+        "nested": divisions_module.TwinFrozenMapping(
+            (("values", (1, divisions_module.TwinFrozenMapping((("two", 2),)))),)
+        ),
+    }
+    assert record.planned_edge == candidate.planned_edge
+    assert record.planned_edge == divisions_module.TwinPlannedEdge(1, 4, 6.0, None)
+    assert plan.counters["steal_twin_accepted"] == 1
+    assert plan.counters["steal_twin_examined_frames"] == 3
+    _assert_twin_conservation(plan)
+
+
+def test_steal_twin_r1b_donor_with_predecessor_is_excluded_from_q_pool(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    nodes.append(_twin_node(7, -1, 4.0))
+    edges.append({"source_id": 7, "target_id": 2})
+    plan = _twin_plan(tmp_path, nodes, edges)
+    assert plan.validation_reason is None
+    assert plan.counters["steal_twin_q_pool"] == 2  # nodes 0 and 7, but not donor 2
+    assert plan.counters["steal_twin_enumerated"] == 0
+    assert not plan.candidates
+    _assert_twin_conservation(plan)
+
+
+@pytest.mark.parametrize(
+    ("reason", "mutate"),
+    [
+        ("missing_node_field", lambda n, e: n[0].pop("z")),
+        ("invalid_node_id", lambda n, e: n[0].update(node_id=True)),
+        ("duplicate_node_id", lambda n, e: n.append(dict(n[0]))),
+        ("invalid_node_time", lambda n, e: n[0].update(t=0.0)),
+        ("nonfinite_node_coordinate", lambda n, e: n[0].update(z=np.nan)),
+        ("invalid_edge_endpoint", lambda n, e: e[0].update(source_id=True)),
+        ("dangling_edge", lambda n, e: e[0].update(source_id=999)),
+        ("duplicate_edge", lambda n, e: e.append(dict(e[0]))),
+        ("nonconsecutive_edge", lambda n, e: e[0].update(target_id=3)),
+        ("indegree", lambda n, e: e.append({"source_id": 2, "target_id": 3})),
+        ("outdegree", _make_twin_outdegree_invalid),
+        (
+            "nonfinite_edge_distance",
+            lambda n, e: (n[0].update(z=1e308), n[1].update(z=-1e308)),
+        ),
+    ],
+)
+def test_steal_twin_r1b_every_validation_reason_is_order_invariant_and_callback_free(
+    tmp_path: Path, reason: str, mutate
+):
+    nodes, edges = _twin_motif()
+    mutate(nodes, edges)
+    calls = 0
+
+    def score(_node):
+        nonlocal calls
+        calls += 1
+        return divisions_module.TwinDeepCenterDecision(True, 0.2, None)
+
+    first = _twin_plan(tmp_path, nodes, edges, score)
+    second = _twin_plan(tmp_path, list(reversed(nodes)), list(reversed(edges)), score)
+    for plan in (first, second):
+        assert plan.validation_reason == reason
+        assert plan.counters["steal_twin_validation_failed"] == 1
+        assert plan.counters[f"steal_twin_validation_{reason}"] == 1
+        assert sum(plan.counters.values()) == 2
+        assert not plan.nodes and not plan.edges and not plan.debug_records
+    assert calls == 0
+
+
+def test_steal_twin_r1b_validation_exact_multifault_priority(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    nodes[0].pop("z")
+    nodes[1]["node_id"] = True
+    edges[0]["source_id"] = "bad"
+    assert _twin_plan(tmp_path, nodes, edges).validation_reason == "missing_node_field"
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        "missing_node_field",
+        "invalid_node_id",
+        "duplicate_node_id",
+        "invalid_node_time",
+        "nonfinite_node_coordinate",
+        "invalid_edge_endpoint",
+        "dangling_edge",
+        "duplicate_edge",
+        "nonconsecutive_edge",
+        "indegree",
+        "outdegree",
+        "nonfinite_edge_distance",
+    ],
+)
+def test_steal_twin_r1b_multifault_priority_covers_every_validation_category(
+    tmp_path: Path, expected: str
+):
+    nodes, edges = _twin_motif()
+    if expected == "missing_node_field":
+        nodes[0].pop("z")
+        nodes[1]["node_id"] = True
+    elif expected == "invalid_node_id":
+        nodes[0]["node_id"] = True
+        nodes.append(dict(nodes[1]))
+    elif expected == "duplicate_node_id":
+        nodes.append(dict(nodes[0]))
+        nodes[1]["t"] = 0.5
+    elif expected == "invalid_node_time":
+        nodes[0]["t"] = 0.5
+        nodes[1]["z"] = np.nan
+    elif expected == "nonfinite_node_coordinate":
+        nodes[0]["z"] = np.nan
+        edges[0]["source_id"] = True
+    elif expected == "invalid_edge_endpoint":
+        edges[0]["source_id"] = True
+        edges[1]["source_id"] = 999
+    elif expected == "dangling_edge":
+        edges[0]["source_id"] = 999
+        edges.append(dict(edges[1]))
+    elif expected == "duplicate_edge":
+        edges.append(dict(edges[0]))
+        edges[1]["target_id"] = 5
+    elif expected == "nonconsecutive_edge":
+        edges.append({"source_id": 0, "target_id": 3})
+    elif expected == "indegree":
+        edges.append({"source_id": 2, "target_id": 3})
+        _make_twin_outdegree_invalid(nodes, edges)
+    elif expected == "outdegree":
+        _make_twin_outdegree_invalid(nodes, edges)
+        nodes[0]["z"] = 1e308
+        nodes[1]["z"] = -1e308
+    else:
+        nodes[0]["z"] = 1e308
+        nodes[1]["z"] = -1e308
+        nodes[3]["z"] = 1e308
+        nodes[5]["z"] = -1e308
+    for ordered_nodes, ordered_edges in (
+        (nodes, edges),
+        (list(reversed(nodes)), list(reversed(edges))),
+    ):
+        plan = _twin_plan(tmp_path, ordered_nodes, ordered_edges)
+        assert plan.validation_reason == expected
+        assert plan.counters[f"steal_twin_validation_{expected}"] == 1
+
+
+def test_steal_twin_r1b_wrong_time_and_shared_successor_validate_first(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    edges[3]["target_id"] = 4
+    wrong_time = _twin_plan(tmp_path, nodes, edges)
+    assert wrong_time.validation_reason == "nonconsecutive_edge"
+    assert wrong_time.counters["steal_twin_rejected_time"] == 0
+
+    nodes, edges = _twin_motif()
+    edges[4]["target_id"] = 5
+    shared = _twin_plan(tmp_path, nodes, edges)
+    assert shared.validation_reason == "indegree"
+    assert shared.counters["steal_twin_rejected_shared_successor"] == 0
+
+
+@pytest.mark.parametrize(
+    ("overrides", "counter"),
+    [
+        ({"q_um": np.nextafter(5.0, np.inf)}, "distance_twin"),
+        (
+            {"a_um": np.nextafter(-10.0, -np.inf), "b_um": -4.0, "a2_um": -10.0, "b2_um": -1.0},
+            "distance_existing_child",
+        ),
+        ({"b_um": np.nextafter(8.0, np.inf), "b2_um": 11.0}, "distance_parent"),
+        ({"b_um": np.nextafter(5.5, -np.inf), "b2_um": 8.0}, "distance_sister_low"),
+        ({"p_um": 3.0, "q_um": 4.0, "b_um": np.nextafter(11.0, np.inf), "b2_um": 14.0}, "distance_sister_high"),
+        ({"b2_um": np.nextafter(8.25, -np.inf)}, "divergence"),
+    ],
+)
+def test_steal_twin_r1b_adjacent_float_outside_bounds_rejects(tmp_path: Path, overrides, counter: str):
+    nodes, edges = _twin_motif(**overrides)
+    plan = _twin_plan(tmp_path, nodes, edges)
+    assert plan.counters[f"steal_twin_rejected_{counter}"] == 1
+    assert not plan.candidates
+    _assert_twin_conservation(plan)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"q_um": 5.0},
+        {"q_um": np.nextafter(5.0, -np.inf)},
+        {"a_um": -10.0, "b_um": -4.0, "a2_um": -10.0, "b2_um": -1.0},
+        {
+            "a_um": np.nextafter(-10.0, np.inf),
+            "b_um": -4.0,
+            "a2_um": -10.0,
+            "b2_um": -1.0,
+        },
+        {"b_um": 8.0, "b2_um": 11.0},
+        {"b_um": np.nextafter(8.0, -np.inf), "b2_um": 11.0},
+        {"b_um": 5.5, "b2_um": 7.75},
+        {"b_um": np.nextafter(5.5, np.inf), "b2_um": np.nextafter(7.75, np.inf)},
+        {"p_um": 3.0, "q_um": 4.0, "b_um": 11.0, "b2_um": 13.25},
+        {
+            "p_um": 3.0,
+            "q_um": 4.0,
+            "b_um": np.nextafter(11.0, -np.inf),
+            "b2_um": 13.25,
+        },
+        {"b2_um": 8.25},
+        {"b2_um": np.nextafter(8.25, np.inf)},
+    ],
+)
+def test_steal_twin_r1b_inclusive_geometry_boundaries_accept(tmp_path: Path, overrides):
+    nodes, edges = _twin_motif(**overrides)
+    plan = _twin_plan(tmp_path, nodes, edges)
+    assert plan.validation_reason is None
+    assert plan.counters["steal_twin_accepted"] == 1
+    _assert_twin_conservation(plan)
+
+
+@pytest.mark.parametrize("role_id", [1, 2, 3, 4, 5, 6])
+def test_steal_twin_r1b_each_synthetic_role_rejects_before_callback(tmp_path: Path, role_id: int):
+    nodes, edges = _twin_motif()
+    next(node for node in nodes if node["node_id"] == role_id)["gap_synthetic"] = 1
+    calls: list[int] = []
+    plan = _twin_plan(tmp_path, nodes, edges, lambda node: calls.append(node.node_id))
+    assert plan.counters["steal_twin_rejected_synthetic"] == 1
+    assert calls == []
+
+
+@pytest.mark.parametrize("missing_source", [3, 4])
+def test_steal_twin_r1b_missing_or_branching_successor_rejects(tmp_path: Path, missing_source: int):
+    nodes, edges = _twin_motif()
+    edges[:] = [edge for edge in edges if edge["source_id"] != missing_source]
+    plan = _twin_plan(tmp_path, nodes, edges)
+    assert plan.counters["steal_twin_rejected_missing_successor"] == 1
+
+
+@pytest.mark.parametrize("branch_source", [3, 4])
+def test_steal_twin_r1b_two_successors_rejects_as_missing_successor(tmp_path: Path, branch_source: int):
+    nodes, edges = _twin_motif()
+    new_id = 7
+    nodes.append(_twin_node(new_id, 2, 20.0))
+    edges.append({"source_id": branch_source, "target_id": new_id})
+    plan = _twin_plan(tmp_path, nodes, edges)
+    assert plan.validation_reason is None
+    assert plan.counters["steal_twin_rejected_missing_successor"] == 1
+
+
+@pytest.mark.parametrize("reason", [
+    "deepcenter_bundle",
+    "deepcenter_dataset",
+    "deepcenter_frame",
+    "deepcenter_heatmap",
+    "deepcenter_nonfinite",
+])
+def test_steal_twin_r1b_maps_each_deepcenter_reason(tmp_path: Path, reason: str):
+    nodes, edges = _twin_motif()
+
+    def callback(_node):
+        return divisions_module.TwinDeepCenterDecision(False, None, reason)
+
+    plan = _twin_plan(tmp_path, nodes, edges, callback)
+    assert plan.counters[f"steal_twin_rejected_{reason}"] == 1
+
+
+def test_steal_twin_r1b_maps_valid_threshold_rejection(tmp_path: Path):
+    nodes, edges = _twin_motif()
+
+    def callback(_node):
+        return divisions_module.TwinDeepCenterDecision(
+            False, np.nextafter(0.12, -np.inf), "deepcenter_threshold"
+        )
+
+    plan = _twin_plan(tmp_path, nodes, edges, callback)
+    assert plan.counters["steal_twin_rejected_deepcenter_threshold"] == 1
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        object(),
+        divisions_module.TwinDeepCenterDecision(1, 0.2, None),
+        divisions_module.TwinDeepCenterDecision(True, None, None),
+        divisions_module.TwinDeepCenterDecision(True, np.nan, None),
+        divisions_module.TwinDeepCenterDecision(True, 0.2, "deepcenter_threshold"),
+        divisions_module.TwinDeepCenterDecision(False, None, "unknown"),
+        divisions_module.TwinDeepCenterDecision(False, None, "deepcenter_threshold"),
+        divisions_module.TwinDeepCenterDecision(False, 0.12, "deepcenter_threshold"),
+        divisions_module.TwinDeepCenterDecision(False, 0.2, "deepcenter_frame"),
+    ],
+)
+def test_steal_twin_r1b_malformed_callback_result_fails_closed(tmp_path: Path, result: object):
+    nodes, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, nodes, edges, lambda _node: result)
+    assert plan.counters["steal_twin_rejected_deepcenter_bundle"] == 1
+
+
+def test_steal_twin_r1b_callback_exception_fails_closed(tmp_path: Path):
+    nodes, edges = _twin_motif()
+
+    def fail(_node):
+        raise RuntimeError("synthetic")
+
+    plan = _twin_plan(tmp_path, nodes, edges, fail)
+    assert plan.counters["steal_twin_rejected_deepcenter_bundle"] == 1
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "distance_twin",
+        "ambiguous_p_nn",
+        "ambiguous_q_nn",
+        "not_mutual_parent_nn",
+        "distance_existing_child",
+        "distance_parent",
+        "distance_sister_low",
+        "distance_sister_high",
+        "missing_successor",
+        "divergence",
+        "synthetic",
+    ],
+)
+def test_steal_twin_r1b_callback_runs_only_after_every_earlier_gate_family(
+    tmp_path: Path, reason: str
+):
+    if reason == "distance_existing_child":
+        nodes, edges = _twin_motif(a_um=-10.1, b_um=-4.0, a2_um=-10.1, b2_um=-1.0)
+    elif reason == "distance_parent":
+        nodes, edges = _twin_motif(b_um=8.1, b2_um=11.0)
+    elif reason == "distance_sister_low":
+        nodes, edges = _twin_motif(b_um=5.0, b2_um=8.0)
+    elif reason == "distance_sister_high":
+        nodes, edges = _twin_motif(
+            p_um=4.0, q_um=4.0, a_um=0.0, b_um=12.0, a2_um=0.0, b2_um=15.0
+        )
+    else:
+        nodes, edges = _twin_motif()
+    if reason == "distance_twin":
+        next(node for node in nodes if node["node_id"] == 2)["y"] = 6.0 / _TWIN_SCALE_Y
+    elif reason == "ambiguous_p_nn":
+        nodes.extend([_twin_node(7, 0, -4.0), _twin_node(8, 1, -6.0)])
+        edges.append({"source_id": 7, "target_id": 8})
+    elif reason in ("ambiguous_q_nn", "not_mutual_parent_nn"):
+        extra_um = 8.0 if reason == "ambiguous_q_nn" else 3.0
+        nodes.extend(
+            [
+                _twin_node(7, -1, extra_um),
+                _twin_node(8, 0, extra_um),
+                _twin_node(9, 1, extra_um),
+            ]
+        )
+        edges.extend([{"source_id": 7, "target_id": 8}, {"source_id": 8, "target_id": 9}])
+    elif reason == "missing_successor":
+        edges[:] = [edge for edge in edges if edge["source_id"] != 3]
+    elif reason == "divergence":
+        next(node for node in nodes if node["node_id"] == 6)["y"] = 8.0 / _TWIN_SCALE_Y
+    elif reason == "synthetic":
+        next(node for node in nodes if node["node_id"] == 5)["gap_synthetic"] = 1
+    calls: list[int] = []
+    plan = _twin_plan(
+        tmp_path,
+        nodes,
+        edges,
+        lambda node: calls.append(node.node_id) or divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    assert plan.counters[f"steal_twin_rejected_{reason}"] >= 1
+    assert calls == []
+
+
+def test_steal_twin_r1b_snapshot_and_records_are_detached_idempotent_and_no_io(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    caller_array = np.asarray([[1, 2], [3, 4]], dtype=np.int16)
+    caller_strided_array = np.arange(8, dtype=np.int16)[::2]
+    caller_metadata_array = np.asarray(
+        [7, 8], dtype=np.dtype(np.int16, metadata={"unit": "um", "nested": [1, 2]})
+    )
+    caller_object_array = np.asarray([{"nested": [5]}], dtype=object)
+    caller_structured_array = np.asarray(
+        [("cell", {"values": [6]})],
+        dtype=np.dtype([("name", "U4"), ("payload", object)]),
+    )
+    caller_buffer = bytearray(b"mutable")
+    caller_view_bytes = bytearray(b"view")
+    edges[2]["nested"]["array"] = caller_array
+    edges[2]["nested"]["strided_array"] = caller_strided_array
+    edges[2]["nested"]["metadata_array"] = caller_metadata_array
+    edges[2]["nested"]["object_array"] = caller_object_array
+    edges[2]["nested"]["structured_array"] = caller_structured_array
+    edges[2]["nested"]["buffer"] = caller_buffer
+    edges[2]["nested"]["view"] = memoryview(caller_view_bytes)
+    original_node_order = [id(row) for row in nodes]
+    original_edge_order = [id(row) for row in edges]
+    first = _twin_plan(tmp_path, nodes, edges)
+    second = _twin_plan(tmp_path, nodes, edges)
+    assert first == second
+    assert [id(row) for row in nodes] == original_node_order
+    assert [id(row) for row in edges] == original_edge_order
+    frozen = first.debug_records[0].removed_edge
+    nodes[4]["y"] = 999.0
+    edges[2]["edge_prob"] = -1.0
+    edges[2]["nested"]["values"][1]["two"] = 999
+    caller_array[0, 0] = 999
+    caller_strided_array[0] = 999
+    caller_metadata_array.dtype.metadata["nested"][0] = 999
+    caller_object_array[0]["nested"][0] = 999
+    caller_structured_array[0]["payload"]["values"][0] = 999
+    caller_buffer[0] = ord("X")
+    caller_view_bytes[0] = ord("X")
+    edges.reverse()
+    assert frozen.metadata["edge_prob"] == 0.7
+    assert frozen.metadata["nested"]["values"][1]["two"] == 2
+    assert frozen.metadata["input_position"] == "caller-value"
+    frozen_array = frozen.metadata["nested"]["array"]
+    assert isinstance(frozen_array, divisions_module.TwinFrozenArray)
+    assert frozen_array.dtype.string == "<i2"
+    assert frozen_array.dtype.descriptor == (("", "<i2"),)
+    assert frozen_array.shape == (2, 2)
+    assert np.frombuffer(frozen_array.content, dtype=np.int16).reshape(frozen_array.shape).tolist() == [
+        [1, 2],
+        [3, 4],
+    ]
+    with pytest.raises(TypeError):
+        frozen_array.content[0] = 0
+    frozen_strided = frozen.metadata["nested"]["strided_array"]
+    assert frozen_strided.shape == (4,)
+    assert frozen_strided.strides == (4,)
+    assert frozen_strided.c_contiguous is False
+    assert np.frombuffer(frozen_strided.content, dtype=np.int16).tolist() == [0, 2, 4, 6]
+    frozen_metadata_array = frozen.metadata["nested"]["metadata_array"]
+    assert frozen_metadata_array.dtype.metadata["unit"] == "um"
+    assert frozen_metadata_array.dtype.metadata["nested"] == (1, 2)
+    frozen_object_array = frozen.metadata["nested"]["object_array"]
+    assert isinstance(frozen_object_array, divisions_module.TwinFrozenArray)
+    assert frozen_object_array.object_content is True
+    assert frozen_object_array.content[0]["nested"] == (5,)
+    frozen_structured = frozen.metadata["nested"]["structured_array"]
+    assert frozen_structured.dtype.names == ("name", "payload")
+    assert frozen_structured.dtype.hasobject is True
+    structured_value = frozen_structured.content[0]
+    assert isinstance(structured_value, divisions_module.TwinFrozenStructuredScalar)
+    assert dict(structured_value.fields)["payload"]["values"] == (6,)
+    frozen_buffer = frozen.metadata["nested"]["buffer"]
+    frozen_view = frozen.metadata["nested"]["view"]
+    assert frozen_buffer == divisions_module.TwinFrozenBuffer(
+        "bytearray", "B", 1, (7,), (1,), False, b"mutable"
+    )
+    assert frozen_view.kind == "memoryview"
+    assert frozen_view.readonly is False
+    assert frozen_view.content == b"view"
+    with pytest.raises(TypeError):
+        frozen_buffer.content[0] = 0
+    assert first.debug_records[0].planned_edge.distance_um == 6.0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_steal_twin_r1b_rejects_unsupported_custom_mutable_metadata_before_plan(tmp_path: Path):
+    class MutableMetadata:
+        def __init__(self):
+            self.values = [1]
+
+    nodes, edges = _twin_motif()
+    mutable = MutableMetadata()
+    edges[2]["custom"] = mutable
+    calls: list[int] = []
+    with pytest.raises(TypeError, match="unsupported mutable edge metadata type"):
+        _twin_plan(tmp_path, nodes, edges, lambda node: calls.append(node.node_id))
+    assert mutable.values == [1]
+    assert calls == []
+
+
+def test_steal_twin_r1b_integral_subclass_endpoints_are_canonical_detached_metadata(
+    tmp_path: Path,
+):
+    class Endpoint(IntEnum):
+        DONOR = 2
+
+    class MutableIntegral(int):
+        def __new__(cls, value: int):
+            instance = super().__new__(cls, value)
+            instance.payload = ["caller-owned"]
+            return instance
+
+    nodes, edges = _twin_motif()
+    caller_target = MutableIntegral(4)
+    edges[2]["source_id"] = Endpoint.DONOR
+    edges[2]["target_id"] = caller_target
+    callback_nodes = []
+
+    def score(node):
+        callback_nodes.append(node)
+        return divisions_module.TwinDeepCenterDecision(True, 0.2, None)
+
+    plan = _twin_plan(tmp_path, nodes, edges, score)
+
+    assert plan.validation_reason is None
+    assert plan.counters["steal_twin_accepted"] == 1
+    assert [node.node_id for node in callback_nodes] == [4]
+    assert type(callback_nodes[0].node_id) is int
+    with pytest.raises(FrozenInstanceError):
+        callback_nodes[0].node_id = 999
+    removed = plan.debug_records[0].removed_edge
+    assert removed.metadata["source_id"] == 2
+    assert removed.metadata["target_id"] == 4
+    assert type(removed.metadata["source_id"]) is int
+    assert type(removed.metadata["target_id"]) is int
+    assert edges[2]["source_id"] is Endpoint.DONOR
+    assert edges[2]["target_id"] is caller_target
+    assert caller_target.payload == ["caller-owned"]
+
+    caller_target.payload[0] = "mutated"
+    edges[2]["source_id"] = 999
+    edges[2]["target_id"] = 999
+    assert removed.metadata["source_id"] == 2
+    assert removed.metadata["target_id"] == 4
+    with pytest.raises(TypeError):
+        removed.metadata["target_id"] = 999
+
+
+def test_steal_twin_r1b_empty_pool_has_complete_zero_schema_and_conserves(tmp_path: Path):
+    plan = _twin_plan(tmp_path, [_twin_node(1, 0, 0.0)], [])
+    assert plan.validation_reason is None
+    assert len(plan.counters) == len(divisions_module._TWIN_COUNTER_KEYS)
+    assert not plan.candidates and not plan.debug_records
+    _assert_twin_conservation(plan)
+
+
+def test_steal_twin_r1b_row_permutations_are_deterministic(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    baseline = _twin_plan(tmp_path, nodes, edges)
+    rng = np.random.default_rng(23)
+    for _ in range(20):
+        permuted_nodes = [nodes[index] for index in rng.permutation(len(nodes))]
+        permuted_edges = [edges[index] for index in rng.permutation(len(edges))]
+        plan = _twin_plan(tmp_path, permuted_nodes, permuted_edges)
+        assert plan.candidates == baseline.candidates
+        assert plan.decisions == baseline.decisions
+        assert plan.counters == baseline.counters
+        # Internal input ordinals intentionally follow the caller edge rows.
+        assert plan.debug_records[0].removed_edge.metadata == baseline.debug_records[0].removed_edge.metadata
+
+
+def test_steal_twin_r1b_one_union_tree_per_frame_with_both_pools(tmp_path: Path, monkeypatch):
+    nodes0, edges0 = _twin_motif()
+    nodes1 = [dict(node, node_id=node["node_id"] + 10, t=node["t"] + 10) for node in nodes0]
+    edges1 = [
+        {**edge, "source_id": edge["source_id"] + 10, "target_id": edge["target_id"] + 10}
+        for edge in edges0
+    ]
+    real_tree = divisions_module.cKDTree
+    calls: list[np.ndarray] = []
+
+    def spy(points):
+        calls.append(np.asarray(points).copy())
+        return real_tree(points)
+
+    monkeypatch.setattr(divisions_module, "cKDTree", spy)
+    plan = _twin_plan(tmp_path, [*nodes0, *nodes1], [*edges0, *edges1])
+    assert plan.counters["steal_twin_eligible"] == 2
+    assert len(calls) == 2
+    assert all(len(points) == 2 for points in calls)
+
+
+def test_steal_twin_r1b_tree_queries_use_precomputed_id_index():
+    import inspect
+
+    source = inspect.getsource(divisions_module.plan_twin_only_v1)
+    assert "union_index = {" in source
+    assert ".index(node_id)" not in source
+
+
+def test_steal_twin_r1b_one_union_tree_for_multiple_p_and_q_in_same_frame(
+    tmp_path: Path, monkeypatch
+):
+    nodes0, edges0 = _offset_twin_motif(id_offset=0, frame=0, space_um=0.0)
+    nodes1, edges1 = _offset_twin_motif(id_offset=20, frame=0, space_um=30.0)
+    real_tree = divisions_module.cKDTree
+    calls: list[np.ndarray] = []
+
+    def spy(points):
+        calls.append(np.asarray(points).copy())
+        return real_tree(points)
+
+    monkeypatch.setattr(divisions_module, "cKDTree", spy)
+    plan = _twin_plan(tmp_path, [*nodes0, *nodes1], [*edges0, *edges1])
+    assert plan.counters["steal_twin_eligible"] == 2
+    assert len(calls) == 1
+    assert calls[0].shape == (4, 3)
+
+
+def test_steal_twin_r1b_translated_tree_filters_true_distance_above_radius(tmp_path: Path):
+    nodes, edges = _twin_motif(
+        p_um=416.0,
+        q_um=421.0,
+        a_um=416.0,
+        b_um=422.0,
+        a2_um=416.0,
+        b2_um=425.0,
+    )
+    p = next(node for node in nodes if node["node_id"] == 1)
+    q = next(node for node in nodes if node["node_id"] == 2)
+    true_distance = abs(float(q["y"]) - float(p["y"])) * _TWIN_SCALE_Y
+    assert true_distance == 5.000000000000028
+    outside = _twin_plan(tmp_path, nodes, edges)
+    assert outside.counters["steal_twin_rejected_distance_twin"] == 1
+    assert outside.counters["steal_twin_accepted"] == 0
+
+    q["y"] = np.nextafter(float(p["y"]) + 5.0 / _TWIN_SCALE_Y, -np.inf)
+    inside_distance = abs(float(q["y"]) - float(p["y"])) * _TWIN_SCALE_Y
+    assert inside_distance <= 5.0
+    inside = _twin_plan(tmp_path, nodes, edges)
+    assert inside.counters["steal_twin_accepted"] == 1
+
+
+def test_steal_twin_r1b_tree_query_roundoff_superset_prevents_exact_radius_false_negative(
+    tmp_path: Path,
+):
+    p_y = 1.7577288453082915
+    q_y = 14.0654211530006
+    nodes, edges = _twin_motif()
+    by_id = {node["node_id"]: node for node in nodes}
+    for node_id in (0, 1, 3, 5):
+        by_id[node_id]["y"] = p_y
+    by_id[2]["y"] = q_y
+    by_id[4]["y"] = p_y + 6.0 / _TWIN_SCALE_Y
+    by_id[6]["y"] = p_y + 9.0 / _TWIN_SCALE_Y
+    # A third, lower-ID P establishes the frame origin. It is outside Q's
+    # frozen radius and therefore cannot change the mutual pair.
+    nodes.extend(
+        [
+            {"node_id": -3, "t": -1, "z": 0.0, "y": 0.0, "x": 0.0},
+            {"node_id": -2, "t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
+            {"node_id": -1, "t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+        ]
+    )
+    edges.extend([{"source_id": -3, "target_id": -2}, {"source_id": -2, "target_id": -1}])
+    snapshot_p = divisions_module.TwinSnapshotNode(1, 0, 0.0, p_y, 0.0, False)
+    snapshot_q = divisions_module.TwinSnapshotNode(2, 0, 0.0, q_y, 0.0, False)
+    assert divisions_module._twin_distance(snapshot_p, snapshot_q) == 5.0
+    assert q_y * _TWIN_SCALE_Y - p_y * _TWIN_SCALE_Y == 5.000000000000001
+    exact = _twin_plan(tmp_path, nodes, edges)
+    assert exact.counters["steal_twin_accepted"] == 1
+
+    by_id[2]["y"] = p_y + np.nextafter(5.0, np.inf) / _TWIN_SCALE_Y
+    outside = _twin_plan(tmp_path, nodes, edges)
+    assert outside.counters["steal_twin_accepted"] == 0
+    assert outside.counters["steal_twin_rejected_distance_twin"] >= 1
+
+
+def test_steal_twin_r1b_nonfinite_translated_tree_coordinates_fail_closed_without_all_pairs(
+    tmp_path: Path, monkeypatch
+):
+    nodes, edges = _twin_motif()
+    for node in nodes:
+        node["z"] = 1e308
+    nodes.extend(
+        [
+            {"node_id": -3, "t": -1, "z": -1e308, "y": 0.0, "x": 0.0},
+            {"node_id": -2, "t": 0, "z": -1e308, "y": 0.0, "x": 0.0},
+            {"node_id": -1, "t": 1, "z": -1e308, "y": 0.0, "x": 0.0},
+        ]
+    )
+    edges.extend([{"source_id": -3, "target_id": -2}, {"source_id": -2, "target_id": -1}])
+    constructors = 0
+
+    def unexpected_tree(_points):
+        nonlocal constructors
+        constructors += 1
+        raise AssertionError("nonfinite positions must not enter cKDTree")
+
+    monkeypatch.setattr(divisions_module, "cKDTree", unexpected_tree)
+    plan = _twin_plan(tmp_path, nodes, edges)
+    assert plan.validation_reason is None
+    assert constructors == 0
+    assert plan.counters["steal_twin_enumerated"] == 2
+    assert plan.counters["steal_twin_rejected_distance_twin"] == 2
+
+
+def test_steal_twin_r1b_p_nearest_tie_is_inclusive_and_just_over_is_unique(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    tie_distance = np.nextafter(4.0 + 1e-9, -np.inf)
+    nodes.extend([_twin_node(7, 0, -tie_distance), _twin_node(8, 1, -6.0)])
+    edges.append({"source_id": 7, "target_id": 8})
+    tied = _twin_plan(tmp_path, nodes, edges)
+    assert tied.counters["steal_twin_rejected_ambiguous_p_nn"] == 1
+
+    nodes[7]["y"] = -np.nextafter(4.0 + 1e-9, np.inf) / _TWIN_SCALE_Y
+    unique = _twin_plan(tmp_path, nodes, edges)
+    assert unique.counters["steal_twin_accepted"] == 1
+    assert unique.candidates[0].q == 2
+
+
+def test_steal_twin_r1b_q_nearest_tie_and_unique_nonmutual_are_distinct(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    nodes.extend(
+        [
+            _twin_node(7, -1, 8.0),
+            _twin_node(8, 0, 8.0 + 1e-9),
+            _twin_node(9, 1, 8.0),
+        ]
+    )
+    edges.extend([{"source_id": 7, "target_id": 8}, {"source_id": 8, "target_id": 9}])
+    tied = _twin_plan(tmp_path, nodes, edges)
+    assert tied.counters["steal_twin_rejected_ambiguous_q_nn"] == 2
+
+    just_over = np.nextafter(8.0 + 1e-9, np.inf)
+    for node in nodes:
+        if node["node_id"] in (7, 8, 9):
+            node["y"] = just_over / _TWIN_SCALE_Y
+    unique = _twin_plan(tmp_path, nodes, edges)
+    assert unique.counters["steal_twin_rejected_ambiguous_q_nn"] == 0
+    assert unique.counters["steal_twin_accepted"] == 1
+
+    for node in nodes:
+        if node["node_id"] in (7, 8, 9):
+            node["y"] = 3.0 / _TWIN_SCALE_Y
+    nonmutual = _twin_plan(tmp_path, nodes, edges)
+    assert nonmutual.counters["steal_twin_rejected_not_mutual_parent_nn"] == 1
+
+
+def test_steal_twin_r1b_spatial_query_order_does_not_change_plan(tmp_path: Path, monkeypatch):
+    nodes, edges = _twin_motif()
+    baseline = _twin_plan(tmp_path, nodes, edges)
+    real_tree = divisions_module.cKDTree
+
+    class ReversedTree:
+        def __init__(self, points):
+            self._tree = real_tree(points)
+
+        def query_ball_point(self, *args, **kwargs):
+            return list(reversed(self._tree.query_ball_point(*args, **kwargs)))
+
+    monkeypatch.setattr(divisions_module, "cKDTree", ReversedTree)
+    permuted = _twin_plan(tmp_path, nodes, edges)
+    assert permuted == baseline
+
+
+def test_steal_twin_r1b_sort_uses_cost_then_negative_growth_then_pq_not_score(tmp_path: Path):
+    n0, e0 = _offset_twin_motif(id_offset=0, frame=0, space_um=0.0, b_delta_um=6.0, b2_delta_um=9.0)
+    n1, e1 = _offset_twin_motif(id_offset=10, frame=10, space_um=0.0, b_delta_um=6.5, b2_delta_um=10.0)
+    n2, e2 = _offset_twin_motif(id_offset=20, frame=20, space_um=0.0, b_delta_um=6.0, b2_delta_um=9.0)
+    # Same cost as motif 0, greater growth: motif 2 sorts first despite its lower raw score.
+    next(node for node in n2 if node["node_id"] == 26)["y"] = 9.5 / _TWIN_SCALE_Y
+    scores = {4: 0.9, 14: 0.8, 24: 0.12}
+    plan = _twin_plan(
+        tmp_path,
+        [*n0, *n1, *n2],
+        [*e0, *e1, *e2],
+        lambda node: divisions_module.TwinDeepCenterDecision(True, scores[node.node_id], None),
+    )
+    assert [candidate.p for candidate in plan.candidates] == [21, 1, 11]
+    assert [candidate.raw_deepcenter_score for candidate in plan.candidates] == [0.12, 0.9, 0.8]
+    assert plan.candidates[0].sort_key[:3] < plan.candidates[1].sort_key[:3]
+
+
+def test_steal_twin_r1b_sort_uses_pq_before_ids_and_raw_score(tmp_path: Path):
+    n0, e0 = _offset_twin_motif(id_offset=0, frame=0, space_um=0.0)
+    n1, e1 = _offset_twin_motif(id_offset=10, frame=10, space_um=0.0)
+    next(node for node in n1 if node["node_id"] == 12)["y"] = 3.0 / _TWIN_SCALE_Y
+    scores = {4: 0.9, 14: 0.12}
+    plan = _twin_plan(
+        tmp_path,
+        [*n0, *n1],
+        [*e0, *e1],
+        lambda node: divisions_module.TwinDeepCenterDecision(True, scores[node.node_id], None),
+    )
+    assert [candidate.p for candidate in plan.candidates] == [11, 1]
+    assert [candidate.d_pq for candidate in plan.candidates] == [3.0, 4.0]
+    assert [candidate.raw_deepcenter_score for candidate in plan.candidates] == [0.12, 0.9]
+
+
+def test_steal_twin_r1b_sort_key_contains_every_id_as_successive_tie_breaker(tmp_path: Path):
+    nodes, edges = _twin_motif()
+    candidate = _twin_plan(tmp_path, nodes, edges).candidates[0]
+    assert candidate.sort_key[3:] == (
+        candidate.p,
+        candidate.q,
+        candidate.a,
+        candidate.b,
+        candidate.a2,
+        candidate.b2,
+    )
+    prefix = candidate.sort_key[:3]
+    for field_index in range(6):
+        left_ids = [10] * 6
+        right_ids = [10] * 6
+        left_ids[field_index] = 1
+        right_ids[field_index] = 2
+        for later_index in range(field_index + 1, 6):
+            left_ids[later_index] = 99
+            right_ids[later_index] = 0
+        assert (*prefix, *left_ids) < (*prefix, *right_ids)
+
+
+def test_steal_twin_r1b_frame_cap_precedes_video_cap_and_records_resolution_rejects(tmp_path: Path):
+    n0, e0 = _offset_twin_motif(id_offset=0, frame=0, space_um=0.0, b_delta_um=5.5, b2_delta_um=8.0)
+    n1, e1 = _offset_twin_motif(id_offset=10, frame=10, space_um=30.0, b_delta_um=5.5, b2_delta_um=8.0)
+    n2, e2 = _offset_twin_motif(id_offset=20, frame=10, space_um=60.0, b_delta_um=7.0, b2_delta_um=10.0)
+    plan = _twin_plan(tmp_path, [*n0, *n1, *n2], [*e0, *e1, *e2])
+    assert [decision.reason for decision in plan.decisions] == [None, None, "frame_cap"]
+    assert plan.counters["steal_twin_rejected_frame_cap"] == 1
+    assert plan.counters["steal_twin_rejected_video_cap"] == 0
+    assert [record.reason for record in plan.debug_records] == [None, None, "frame_cap"]
+    _assert_twin_conservation(plan)
+
+
+def test_steal_twin_r1b_video_cap_rejects_third_independent_frame(tmp_path: Path):
+    motifs = [
+        _offset_twin_motif(id_offset=10 * index, frame=10 * index, space_um=30.0 * index)
+        for index in range(3)
+    ]
+    nodes = [node for motif_nodes, _ in motifs for node in motif_nodes]
+    edges = [edge for _, motif_edges in motifs for edge in motif_edges]
+    plan = _twin_plan(tmp_path, nodes, edges)
+    assert [decision.reason for decision in plan.decisions] == [None, None, "video_cap"]
+    assert plan.counters["steal_twin_rejected_video_cap"] == 1
+    _assert_twin_conservation(plan)
+
+
+def test_steal_twin_r1b_conflict_precedes_simultaneous_frame_and_video_caps(tmp_path: Path):
+    # Candidate 1 at frame 0: 1/2/3/4/5/6.  Candidate 2 at frame 1
+    # reuses 3 and 5, so it conflicts with candidate 1.
+    nodes, edges = _twin_motif(b_um=5.5, b2_um=8.0)
+    nodes.extend(
+        [
+            _twin_node(7, 1, -4.0),
+            _twin_node(8, 2, -6.0),
+            _twin_node(9, 3, 0.0),
+            _twin_node(10, 3, -9.0),
+        ]
+    )
+    edges.extend(
+        [
+            {"source_id": 7, "target_id": 8},
+            {"source_id": 5, "target_id": 9},
+            {"source_id": 8, "target_id": 10},
+        ]
+    )
+    # An independent frame-1 candidate sorts between the two above and fills
+    # that frame's cap as well as the video's second slot.
+    cap_nodes, cap_edges = _offset_twin_motif(
+        id_offset=20,
+        frame=1,
+        space_um=30.0,
+        b_delta_um=6.0,
+        b2_delta_um=9.0,
+    )
+    plan = _twin_plan(tmp_path, [*nodes, *cap_nodes], [*edges, *cap_edges])
+    role_decisions = {
+        (decision.candidate.p, decision.candidate.q): decision.reason
+        for decision in plan.decisions
+    }
+    assert role_decisions[(1, 2)] is None
+    assert role_decisions[(21, 22)] is None
+    assert role_decisions[(3, 7)] == "conflict"
+    assert plan.counters["steal_twin_rejected_conflict"] == 1
+    assert plan.counters["steal_twin_rejected_frame_cap"] == 0
+    assert plan.counters["steal_twin_rejected_video_cap"] == 0
+    _assert_twin_conservation(plan)
+
+
+@pytest.mark.parametrize(
+    ("pair", "failure_call", "reason"),
+    [
+        (frozenset((1, 2)), 1, "distance_twin"),
+        (frozenset((1, 3)), 2, "distance_existing_child"),
+        (frozenset((1, 4)), 1, "distance_parent"),
+        (frozenset((3, 4)), 1, "distance_sister_high"),
+        (frozenset((5, 6)), 1, "divergence"),
+    ],
+)
+def test_steal_twin_r1b_nonfinite_derived_geometry_maps_to_exact_gate(
+    tmp_path: Path,
+    monkeypatch,
+    pair: frozenset[int],
+    failure_call: int,
+    reason: str,
+):
+    nodes, edges = _twin_motif()
+    real_distance = divisions_module._twin_distance
+    calls = 0
+
+    def overflow_at_gate(first, second):
+        nonlocal calls
+        if frozenset((first.node_id, second.node_id)) == pair:
+            calls += 1
+            if calls == failure_call:
+                return float("inf")
+        return real_distance(first, second)
+
+    monkeypatch.setattr(divisions_module, "_twin_distance", overflow_at_gate)
+    plan = _twin_plan(tmp_path, nodes, edges)
+    assert plan.validation_reason is None
+    assert plan.counters[f"steal_twin_rejected_{reason}"] == 1
+    assert not plan.candidates
+    _assert_twin_conservation(plan)
