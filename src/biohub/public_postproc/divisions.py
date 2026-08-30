@@ -16,12 +16,118 @@ used-target conflict check, appending accepted edges after the originals.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.spatial import cKDTree
 
 from biohub.public_postproc.config import PostprocConfig
-from biohub.public_postproc.deepcenter import deepcenter_accept_repair_point
+from biohub.public_postproc.deepcenter import (
+    deepcenter_accept_repair_point,
+    deepcenter_heatmap_for_frame,
+)
+from biohub.public_postproc.frames import read_test_frame
 from biohub.public_postproc.geometry import VOXEL_SCALE_UM, edge_distance_um
+
+
+@dataclass(frozen=True)
+class TwinDeepCenterDecision:
+    accepted: bool
+    raw_score: float | None
+    reason: str | None
+
+
+def score_twin_deepcenter(
+    cfg: PostprocConfig,
+    dataset: str | None,
+    t: int,
+    point: tuple[float, float, float],
+    detector_bundle: dict[str, object] | None,
+    frame_cache: dict[int, np.ndarray],
+    heatmap_cache: dict[tuple[str, int], np.ndarray],
+) -> TwinDeepCenterDecision:
+    """Strict, fail-closed DeepCenter decision for the frozen twin-only planner."""
+    required_bundle_keys = {"model", "cfg", "device", "torch", "path", "checkpoint_epoch"}
+    if not cfg.USE_DEEPCENTER_VETO or not cfg.STEAL_TWIN_DEEPCENTER_VETO or detector_bundle is None:
+        return TwinDeepCenterDecision(False, None, "deepcenter_bundle")
+    if not required_bundle_keys.issubset(detector_bundle):
+        return TwinDeepCenterDecision(False, None, "deepcenter_bundle")
+    checkpoint_epoch = detector_bundle["checkpoint_epoch"]
+    if (
+        isinstance(checkpoint_epoch, bool)
+        or not isinstance(checkpoint_epoch, int)
+        or checkpoint_epoch != cfg.DEEPCENTER_EXPECTED_EPOCH
+    ):
+        return TwinDeepCenterDecision(False, None, "deepcenter_bundle")
+    model_cfg = detector_bundle["cfg"]
+    pool_factor = getattr(model_cfg, "pool_factor", None)
+    if isinstance(pool_factor, bool) or not isinstance(pool_factor, int) or pool_factor < 1:
+        return TwinDeepCenterDecision(False, None, "deepcenter_bundle")
+    if dataset is None or not dataset.strip():
+        return TwinDeepCenterDecision(False, None, "deepcenter_dataset")
+
+    try:
+        frame = read_test_frame(cfg.TEST_DIR, dataset, int(t), frame_cache)
+    except Exception:
+        return TwinDeepCenterDecision(False, None, "deepcenter_frame")
+    if frame is None or np.asarray(frame).size == 0:
+        return TwinDeepCenterDecision(False, None, "deepcenter_frame")
+    frame_array = np.asarray(frame)
+    if not np.all(np.isfinite(frame_array)):
+        return TwinDeepCenterDecision(False, None, "deepcenter_nonfinite")
+    if frame_array.ndim != 3:
+        return TwinDeepCenterDecision(False, None, "deepcenter_frame")
+
+    try:
+        heatmap = deepcenter_heatmap_for_frame(
+            cfg,
+            dataset,
+            int(t),
+            detector_bundle,
+            frame_cache,
+            heatmap_cache,
+        )
+    except Exception:
+        return TwinDeepCenterDecision(False, None, "deepcenter_heatmap")
+    if heatmap is None or np.asarray(heatmap).size == 0:
+        return TwinDeepCenterDecision(False, None, "deepcenter_heatmap")
+    heatmap_array = np.asarray(heatmap)
+    if not np.all(np.isfinite(heatmap_array)):
+        return TwinDeepCenterDecision(False, None, "deepcenter_nonfinite")
+    if heatmap_array.ndim != 3:
+        return TwinDeepCenterDecision(False, None, "deepcenter_heatmap")
+
+    point_array = np.asarray(point, dtype=np.float64)
+    if point_array.shape != (3,) or not np.all(np.isfinite(point_array)):
+        return TwinDeepCenterDecision(False, None, "deepcenter_heatmap")
+    z = int(round(float(point_array[0])))
+    y = int(round(float(point_array[1]) / pool_factor))
+    x = int(round(float(point_array[2]) / pool_factor))
+    if not (0 <= z < heatmap_array.shape[0] and 0 <= y < heatmap_array.shape[1] and 0 <= x < heatmap_array.shape[2]):
+        return TwinDeepCenterDecision(False, None, "deepcenter_heatmap")
+    z0, z1 = max(0, z - cfg.DEEPCENTER_SCORE_WIN_Z), min(
+        heatmap_array.shape[0], z + cfg.DEEPCENTER_SCORE_WIN_Z + 1
+    )
+    y0, y1 = max(0, y - cfg.DEEPCENTER_SCORE_WIN_YX), min(
+        heatmap_array.shape[1], y + cfg.DEEPCENTER_SCORE_WIN_YX + 1
+    )
+    x0, x1 = max(0, x - cfg.DEEPCENTER_SCORE_WIN_YX), min(
+        heatmap_array.shape[2], x + cfg.DEEPCENTER_SCORE_WIN_YX + 1
+    )
+    patch = heatmap_array[z0:z1, y0:y1, x0:x1]
+    if patch.size == 0:
+        return TwinDeepCenterDecision(False, None, "deepcenter_heatmap")
+    if not np.all(np.isfinite(patch)):
+        return TwinDeepCenterDecision(False, None, "deepcenter_nonfinite")
+    raw_value = np.max(patch)
+    if np.ndim(raw_value) != 0:
+        return TwinDeepCenterDecision(False, None, "deepcenter_heatmap")
+    raw_score = float(raw_value)
+    if not np.isfinite(raw_score):
+        return TwinDeepCenterDecision(False, None, "deepcenter_nonfinite")
+    if raw_score < 0.12:
+        return TwinDeepCenterDecision(False, raw_score, "deepcenter_threshold")
+    return TwinDeepCenterDecision(True, raw_score, None)
 
 
 def add_safe_divisions_postlink(

@@ -197,6 +197,7 @@ def load_deepcenter_veto_detector(cfg: PostprocConfig) -> dict[str, object] | No
                 "device": device,
                 "path": checkpoint_path,
                 "torch": torch,
+                "checkpoint_epoch": checkpoint_epoch,
             }
         except Exception as exc:
             load_errors.append(f"{checkpoint_path}: {type(exc).__name__}: {exc}")

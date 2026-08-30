@@ -1537,3 +1537,414 @@ def test_stats_schema_uses_observed_node_bypass_name():
     assert stats["deepcenter_gap_bypassed_observed_node"] == 0
     # No schema key may keep the stale pre-Phase-4 synthetic-node suffix.
     assert not any(key.endswith("synthetic_node") for key in stats)
+
+
+# --------------------------------------------------------------------------
+# ST-R1a: frozen twin-only config and strict DeepCenter adapter
+# --------------------------------------------------------------------------
+_STEAL_TWIN_R1A_DEFAULTS = {
+    "OUTPUT_STEAL_TWIN_REWIRE": False,
+    "STEAL_TWIN_MODE": "twin_only_v1",
+    "STEAL_TWIN_DRY_RUN": False,
+    "STEAL_TWIN_PARENT_MAX_UM": 8.0,
+    "STEAL_TWIN_EXISTING_CHILD_MAX_UM": 10.0,
+    "STEAL_TWIN_SISTER_MIN_UM": 5.5,
+    "STEAL_TWIN_SISTER_MAX_UM": 11.0,
+    "STEAL_TWIN_DIVERGE_UM": 2.25,
+    "STEAL_TWIN_TWIN_MAX_UM": 5.0,
+    "STEAL_TWIN_REQUIRE_TWO_SUCCESSORS": True,
+    "STEAL_TWIN_REJECT_SYNTHETIC": True,
+    "STEAL_TWIN_DEEPCENTER_VETO": True,
+    "STEAL_TWIN_FRAME_CAP_ABS": 1,
+    "STEAL_TWIN_VIDEO_CAP_ABS": 2,
+    "STEAL_TWIN_DEBUG_JSONL": "",
+    "STEAL_TWIN_DEBUG_MAX_RECORDS": 200,
+}
+
+
+def test_steal_twin_r1a_exact_defaults_profile_and_diff_whitelist():
+    from dataclasses import fields
+
+    base1 = build_config(profile="base1")
+    e23 = build_config(profile="e23")
+    candidate = build_config(profile="e23_twin_only_v1")
+    for name, expected in _STEAL_TWIN_R1A_DEFAULTS.items():
+        assert getattr(base1, name) == expected
+        assert getattr(e23, name) == expected
+
+    candidate_expected = {
+        **_STEAL_TWIN_R1A_DEFAULTS,
+        "OUTPUT_STEAL_TWIN_REWIRE": True,
+    }
+    for name, expected in candidate_expected.items():
+        assert getattr(candidate, name) == expected
+    assert candidate.EXPERIMENT_TAG == "e23_twin_only_v1"
+
+    actual_diff = {
+        field.name
+        for field in fields(PostprocConfig)
+        if getattr(candidate, field.name) != getattr(e23, field.name)
+    }
+    allowed = {*_STEAL_TWIN_R1A_DEFAULTS, "EXPERIMENT_TAG"}
+    assert actual_diff <= allowed
+    assert {"OUTPUT_STEAL_TWIN_REWIRE", "EXPERIMENT_TAG"} <= actual_diff
+    assert base1.EXPERIMENT_TAG == "biohub_132_clean_short_track_rescue_lightcv_nohack"
+    assert e23.EXPERIMENT_TAG == "e23_pub923_parity"
+
+
+def test_steal_twin_r1a_master_off_validation_is_inert():
+    cfg = build_config(
+        {
+            "BIOHUB_STEAL_TWIN_MODE": "future_unknown_mode",
+            "BIOHUB_STEAL_TWIN_PARENT_MAX_UM": "99.0",
+            "BIOHUB_STEAL_TWIN_EXISTING_CHILD_MAX_UM": "98.0",
+            "BIOHUB_STEAL_TWIN_SISTER_MIN_UM": "97.0",
+            "BIOHUB_STEAL_TWIN_SISTER_MAX_UM": "96.0",
+            "BIOHUB_STEAL_TWIN_DIVERGE_UM": "95.0",
+            "BIOHUB_STEAL_TWIN_TWIN_MAX_UM": "94.0",
+            "BIOHUB_STEAL_TWIN_REQUIRE_TWO_SUCCESSORS": "0",
+            "BIOHUB_STEAL_TWIN_REJECT_SYNTHETIC": "0",
+            "BIOHUB_STEAL_TWIN_DEEPCENTER_VETO": "0",
+            "BIOHUB_STEAL_TWIN_FRAME_CAP_ABS": "93",
+            "BIOHUB_STEAL_TWIN_VIDEO_CAP_ABS": "92",
+            "BIOHUB_STEAL_TWIN_DEBUG_MAX_RECORDS": "91",
+        },
+        profile="e23",
+    )
+    assert cfg.OUTPUT_STEAL_TWIN_REWIRE is False
+    assert cfg.STEAL_TWIN_MODE == "future_unknown_mode"
+    assert cfg.STEAL_TWIN_FRAME_CAP_ABS == 93
+
+
+@pytest.mark.parametrize(
+    ("name", "bad_value"),
+    [
+        ("BIOHUB_STEAL_TWIN_MODE", "off"),
+        ("BIOHUB_STEAL_TWIN_PARENT_MAX_UM", "8.0001"),
+        ("BIOHUB_STEAL_TWIN_EXISTING_CHILD_MAX_UM", "10.0001"),
+        ("BIOHUB_STEAL_TWIN_SISTER_MIN_UM", "5.5001"),
+        ("BIOHUB_STEAL_TWIN_SISTER_MAX_UM", "11.0001"),
+        ("BIOHUB_STEAL_TWIN_DIVERGE_UM", "2.2501"),
+        ("BIOHUB_STEAL_TWIN_TWIN_MAX_UM", "5.0001"),
+        ("BIOHUB_STEAL_TWIN_REQUIRE_TWO_SUCCESSORS", "0"),
+        ("BIOHUB_STEAL_TWIN_REJECT_SYNTHETIC", "0"),
+        ("BIOHUB_STEAL_TWIN_DEEPCENTER_VETO", "0"),
+        ("BIOHUB_STEAL_TWIN_FRAME_CAP_ABS", "0"),
+        ("BIOHUB_STEAL_TWIN_VIDEO_CAP_ABS", "3"),
+        ("BIOHUB_STEAL_TWIN_DEBUG_MAX_RECORDS", "201"),
+    ],
+)
+def test_steal_twin_r1a_master_on_rejects_every_frozen_value_violation(name: str, bad_value: str):
+    with pytest.raises(ValueError, match=name.removeprefix("BIOHUB_")):
+        build_config({name: bad_value}, profile="e23_twin_only_v1")
+
+
+def test_steal_twin_r1a_allows_only_dry_run_and_debug_path_operational_overrides(tmp_path: Path):
+    debug_path = tmp_path / "twin.jsonl"
+    cfg = build_config(
+        {
+            "BIOHUB_STEAL_TWIN_DRY_RUN": "1",
+            "BIOHUB_STEAL_TWIN_DEBUG_JSONL": str(debug_path),
+        },
+        profile="e23_twin_only_v1",
+    )
+    assert cfg.STEAL_TWIN_DRY_RUN is True
+    assert cfg.STEAL_TWIN_DEBUG_JSONL == str(debug_path)
+
+
+def test_steal_twin_r1a_loader_bundle_exposes_verified_epoch(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    checkpoint_path.write_bytes(b"synthetic")
+
+    class FakeModel:
+        def load_state_dict(self, state):
+            assert state == {"weight": "synthetic"}
+
+        def to(self, device):
+            assert device == "cpu"
+
+        def eval(self):
+            return None
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+        device=lambda value: value,
+        load=lambda *args, **kwargs: {
+            "model_state": {"weight": "synthetic"},
+            "epoch": 2,
+            "config": {"pool_factor": 4},
+        },
+    )
+    monkeypatch.setattr(deepcenter_module, "torch", fake_torch)
+    monkeypatch.setattr(deepcenter_module, "_DCDeepCenterUNet3D", lambda **kwargs: FakeModel())
+    monkeypatch.setattr(deepcenter_module, "_dc_checkpoint_candidates", lambda cfg: [checkpoint_path])
+
+    bundle = deepcenter_module.load_deepcenter_veto_detector(build_config(profile="e23"))
+    assert bundle is not None
+    assert set(bundle) == {"model", "cfg", "device", "path", "torch", "checkpoint_epoch"}
+    assert bundle["checkpoint_epoch"] == 2
+    assert type(bundle["checkpoint_epoch"]) is int
+    assert bundle["path"] == checkpoint_path
+
+
+def _steal_twin_r1a_cfg(tmp_path: Path, **overrides: str) -> PostprocConfig:
+    values = {"BIOHUB_STEAL_TWIN_DRY_RUN": "1", **overrides}
+    return build_config(values, test_dir=tmp_path, profile="e23_twin_only_v1")
+
+
+def _steal_twin_r1a_bundle(**overrides: object) -> dict[str, object]:
+    from types import SimpleNamespace
+
+    bundle: dict[str, object] = {
+        "model": object(),
+        "cfg": SimpleNamespace(pool_factor=1),
+        "device": object(),
+        "torch": object(),
+        "path": Path("synthetic.pt"),
+        "checkpoint_epoch": 2,
+    }
+    bundle.update(overrides)
+    return bundle
+
+
+def _steal_twin_r1a_score(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    bundle: dict[str, object] | None = None,
+    dataset: str | None = "ds0",
+    frame: object = None,
+    heatmap: object = None,
+):
+    if frame is None:
+        frame = np.ones((3, 5, 5), dtype=np.float32)
+    if heatmap is None:
+        heatmap = np.full((3, 5, 5), 0.12, dtype=np.float32)
+    monkeypatch.setattr(divisions_module, "read_test_frame", lambda *args: frame)
+    monkeypatch.setattr(divisions_module, "deepcenter_heatmap_for_frame", lambda *args: heatmap)
+    return divisions_module.score_twin_deepcenter(
+        _steal_twin_r1a_cfg(tmp_path),
+        dataset,
+        4,
+        (1.0, 2.0, 2.0),
+        _steal_twin_r1a_bundle() if bundle is None else bundle,
+        {},
+        {},
+    )
+
+
+@pytest.mark.parametrize("missing_key", ["model", "cfg", "device", "torch", "path", "checkpoint_epoch"])
+def test_steal_twin_r1a_rejects_each_missing_bundle_key(tmp_path: Path, monkeypatch, missing_key: str):
+    bundle = _steal_twin_r1a_bundle()
+    del bundle[missing_key]
+    decision = _steal_twin_r1a_score(tmp_path, monkeypatch, bundle=bundle)
+    assert decision == divisions_module.TwinDeepCenterDecision(False, None, "deepcenter_bundle")
+
+
+@pytest.mark.parametrize("epoch", [True, 2.0, "2", 1, 3, None])
+def test_steal_twin_r1a_rejects_invalid_epoch(tmp_path: Path, monkeypatch, epoch: object):
+    decision = _steal_twin_r1a_score(
+        tmp_path,
+        monkeypatch,
+        bundle=_steal_twin_r1a_bundle(checkpoint_epoch=epoch),
+    )
+    assert decision.reason == "deepcenter_bundle"
+    assert decision.raw_score is None
+
+
+@pytest.mark.parametrize("pool_factor", [None, "1", 1.0, True, 0, -1])
+def test_steal_twin_r1a_rejects_invalid_pool_factor(tmp_path: Path, monkeypatch, pool_factor: object):
+    from types import SimpleNamespace
+
+    decision = _steal_twin_r1a_score(
+        tmp_path,
+        monkeypatch,
+        bundle=_steal_twin_r1a_bundle(cfg=SimpleNamespace(pool_factor=pool_factor)),
+    )
+    assert decision.reason == "deepcenter_bundle"
+
+
+def test_steal_twin_r1a_rejects_missing_pool_factor(tmp_path: Path, monkeypatch):
+    decision = _steal_twin_r1a_score(tmp_path, monkeypatch, bundle=_steal_twin_r1a_bundle(cfg=object()))
+    assert decision.reason == "deepcenter_bundle"
+
+
+def test_steal_twin_r1a_rejects_when_global_or_twin_veto_is_off(tmp_path: Path):
+    bundle = _steal_twin_r1a_bundle()
+    global_off = build_config({"BIOHUB_USE_DEEPCENTER_VETO": "0"}, test_dir=tmp_path, profile="e23")
+    twin_off = build_config({"BIOHUB_STEAL_TWIN_DEEPCENTER_VETO": "0"}, test_dir=tmp_path, profile="e23")
+    for cfg in (global_off, twin_off):
+        decision = divisions_module.score_twin_deepcenter(cfg, "ds0", 0, (0, 0, 0), bundle, {}, {})
+        assert decision.reason == "deepcenter_bundle"
+
+
+def test_steal_twin_r1a_bundle_and_dataset_reason_precedence(tmp_path: Path, monkeypatch):
+    cfg = _steal_twin_r1a_cfg(tmp_path)
+    assert divisions_module.score_twin_deepcenter(cfg, None, 0, (0, 0, 0), None, {}, {}).reason == "deepcenter_bundle"
+    for dataset in (None, "", "   "):
+        decision = divisions_module.score_twin_deepcenter(
+            cfg,
+            dataset,
+            0,
+            (0, 0, 0),
+            _steal_twin_r1a_bundle(),
+            {},
+            {},
+        )
+        assert decision.reason == "deepcenter_dataset"
+
+
+@pytest.mark.parametrize(
+    ("frame", "reason"),
+    [
+        (np.array([], dtype=np.float32), "deepcenter_frame"),
+        (np.ones((3, 5), dtype=np.float32), "deepcenter_frame"),
+        (np.array([[np.nan]], dtype=np.float32), "deepcenter_nonfinite"),
+        (np.array([[np.inf]], dtype=np.float32), "deepcenter_nonfinite"),
+    ],
+)
+def test_steal_twin_r1a_frame_reason_map_and_nonfinite_precedence(tmp_path: Path, monkeypatch, frame, reason: str):
+    decision = _steal_twin_r1a_score(tmp_path, monkeypatch, frame=frame)
+    assert decision.reason == reason
+
+
+def test_steal_twin_r1a_frame_read_exception_maps_to_frame(tmp_path: Path, monkeypatch):
+    def fail(*args):
+        raise OSError("synthetic read failure")
+
+    monkeypatch.setattr(divisions_module, "read_test_frame", fail)
+    decision = divisions_module.score_twin_deepcenter(
+        _steal_twin_r1a_cfg(tmp_path), "ds0", 0, (0, 0, 0), _steal_twin_r1a_bundle(), {}, {}
+    )
+    assert decision.reason == "deepcenter_frame"
+
+
+def test_steal_twin_r1a_missing_frame_maps_to_frame(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(divisions_module, "read_test_frame", lambda *args: None)
+    decision = divisions_module.score_twin_deepcenter(
+        _steal_twin_r1a_cfg(tmp_path), "ds0", 0, (0, 0, 0), _steal_twin_r1a_bundle(), {}, {}
+    )
+    assert decision.reason == "deepcenter_frame"
+
+
+@pytest.mark.parametrize(
+    ("heatmap", "reason"),
+    [
+        (np.array([], dtype=np.float32), "deepcenter_heatmap"),
+        (np.ones((3, 5), dtype=np.float32), "deepcenter_heatmap"),
+        (np.array([[np.nan]], dtype=np.float32), "deepcenter_nonfinite"),
+        (np.array([[np.inf]], dtype=np.float32), "deepcenter_nonfinite"),
+    ],
+)
+def test_steal_twin_r1a_heatmap_reason_map_and_nonfinite_precedence(
+    tmp_path: Path, monkeypatch, heatmap, reason: str
+):
+    decision = _steal_twin_r1a_score(tmp_path, monkeypatch, heatmap=heatmap)
+    assert decision.reason == reason
+
+
+def test_steal_twin_r1a_inference_exception_and_out_of_bounds_map_to_heatmap(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(divisions_module, "read_test_frame", lambda *args: np.ones((3, 5, 5)))
+
+    def fail(*args):
+        raise RuntimeError("synthetic inference failure")
+
+    monkeypatch.setattr(divisions_module, "deepcenter_heatmap_for_frame", fail)
+    cfg = _steal_twin_r1a_cfg(tmp_path)
+    bundle = _steal_twin_r1a_bundle()
+    inference_failure = divisions_module.score_twin_deepcenter(cfg, "ds0", 0, (1, 2, 2), bundle, {}, {})
+    assert inference_failure.reason == "deepcenter_heatmap"
+    monkeypatch.setattr(divisions_module, "deepcenter_heatmap_for_frame", lambda *args: np.ones((3, 5, 5)))
+    out_of_bounds = divisions_module.score_twin_deepcenter(cfg, "ds0", 0, (9, 2, 2), bundle, {}, {})
+    assert out_of_bounds.reason == "deepcenter_heatmap"
+
+
+def test_steal_twin_r1a_missing_heatmap_and_nonfinite_point_map_to_heatmap(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(divisions_module, "read_test_frame", lambda *args: np.ones((3, 5, 5)))
+    cfg = _steal_twin_r1a_cfg(tmp_path)
+    bundle = _steal_twin_r1a_bundle()
+    monkeypatch.setattr(divisions_module, "deepcenter_heatmap_for_frame", lambda *args: None)
+    missing = divisions_module.score_twin_deepcenter(cfg, "ds0", 0, (1, 2, 2), bundle, {}, {})
+    assert missing.reason == "deepcenter_heatmap"
+    monkeypatch.setattr(divisions_module, "deepcenter_heatmap_for_frame", lambda *args: np.ones((3, 5, 5)))
+    nonfinite_point = divisions_module.score_twin_deepcenter(cfg, "ds0", 0, (np.nan, 2, 2), bundle, {}, {})
+    assert nonfinite_point.reason == "deepcenter_heatmap"
+
+
+@pytest.mark.parametrize(
+    ("score", "accepted", "reason"),
+    [
+        (np.nextafter(0.12, -np.inf), False, "deepcenter_threshold"),
+        (0.12, True, None),
+        (np.nextafter(0.12, np.inf), True, None),
+    ],
+)
+def test_steal_twin_r1a_fixed_threshold_adjacent_floats(
+    tmp_path: Path, monkeypatch, score: float, accepted: bool, reason: str | None
+):
+    decision = _steal_twin_r1a_score(
+        tmp_path,
+        monkeypatch,
+        heatmap=np.full((3, 5, 5), score, dtype=np.float64),
+    )
+    assert decision.accepted is accepted
+    assert decision.raw_score == score
+    assert decision.reason == reason
+
+
+def test_steal_twin_r1a_frame_read_precedes_inference_and_shared_caches_reuse(tmp_path: Path, monkeypatch):
+    calls: list[str] = []
+    physical_reads = 0
+    inferences = 0
+
+    def read_frame(_test_dir, _dataset, t, frame_cache):
+        nonlocal physical_reads
+        calls.append("frame")
+        if t not in frame_cache:
+            physical_reads += 1
+            frame_cache[t] = np.ones((3, 5, 5), dtype=np.float32)
+        return frame_cache[t]
+
+    def infer(_cfg, dataset, t, _bundle, frame_cache, heatmap_cache):
+        nonlocal inferences
+        calls.append("inference")
+        key = (dataset, t)
+        if key not in heatmap_cache:
+            assert t in frame_cache
+            inferences += 1
+            heatmap_cache[key] = np.full((3, 5, 5), 0.2, dtype=np.float32)
+        return heatmap_cache[key]
+
+    monkeypatch.setattr(divisions_module, "read_test_frame", read_frame)
+    monkeypatch.setattr(divisions_module, "deepcenter_heatmap_for_frame", infer)
+    frame_cache: dict[int, np.ndarray] = {}
+    heatmap_cache: dict[tuple[str, int], np.ndarray] = {}
+    cfg = _steal_twin_r1a_cfg(tmp_path)
+    bundle = _steal_twin_r1a_bundle()
+    first = divisions_module.score_twin_deepcenter(cfg, "ds0", 4, (1, 2, 2), bundle, frame_cache, heatmap_cache)
+    second = divisions_module.score_twin_deepcenter(cfg, "ds0", 4, (1, 2, 2), bundle, frame_cache, heatmap_cache)
+    assert first.accepted and second.accepted
+    assert calls == ["frame", "inference", "frame", "inference"]
+    assert physical_reads == 1
+    assert inferences == 1
+
+
+def test_steal_twin_r1a_existing_fail_open_helper_is_unchanged(tmp_path: Path):
+    cfg = _steal_twin_r1a_cfg(tmp_path)
+    stats = {"deepcenter_gap_missing": 0}
+    accepted = deepcenter_module.deepcenter_accept_repair_point(
+        cfg,
+        "ds0",
+        0,
+        (0, 0, 0),
+        None,
+        {},
+        {},
+        stats,
+        "gap",
+        0.99,
+    )
+    assert accepted is True
+    assert stats == {"deepcenter_gap_missing": 1}

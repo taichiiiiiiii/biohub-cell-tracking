@@ -23,6 +23,8 @@ This mirrors two notebook cells almost verbatim:
   notebook's effective post-processing settings (public LB 0.924), per the
   E23 parity contract in ``analysis/gold_loop_protocol.md``. It is built
   directly on ``CODE_DEFAULTS`` and never inherits the base1 preset.
+* ``e23_twin_only_v1`` -- ``CODE_DEFAULTS`` + :data:`TWIN_ONLY_V1_PRESET`;
+  the frozen twin-only experiment configuration layered on E23.
 
 Only the variables that ``filter_output_graph`` and the CSV/run_stats
 writers actually read are modelled here. Variables that only affect the
@@ -133,6 +135,22 @@ CODE_DEFAULTS: dict[str, str] = {
     "BIOHUB_SAFE_DIV_REQUIRE_MUTUAL_NN": "0",
     "BIOHUB_SAFE_DIV_REQUIRE_DIVERGENCE": "0",
     "BIOHUB_SAFE_DIV_DIVERGE_UM": "2.25",
+    "BIOHUB_OUTPUT_STEAL_TWIN_REWIRE": "0",
+    "BIOHUB_STEAL_TWIN_MODE": "twin_only_v1",
+    "BIOHUB_STEAL_TWIN_DRY_RUN": "0",
+    "BIOHUB_STEAL_TWIN_PARENT_MAX_UM": "8.0",
+    "BIOHUB_STEAL_TWIN_EXISTING_CHILD_MAX_UM": "10.0",
+    "BIOHUB_STEAL_TWIN_SISTER_MIN_UM": "5.5",
+    "BIOHUB_STEAL_TWIN_SISTER_MAX_UM": "11.0",
+    "BIOHUB_STEAL_TWIN_DIVERGE_UM": "2.25",
+    "BIOHUB_STEAL_TWIN_TWIN_MAX_UM": "5.0",
+    "BIOHUB_STEAL_TWIN_REQUIRE_TWO_SUCCESSORS": "1",
+    "BIOHUB_STEAL_TWIN_REJECT_SYNTHETIC": "1",
+    "BIOHUB_STEAL_TWIN_DEEPCENTER_VETO": "1",
+    "BIOHUB_STEAL_TWIN_FRAME_CAP_ABS": "1",
+    "BIOHUB_STEAL_TWIN_VIDEO_CAP_ABS": "2",
+    "BIOHUB_STEAL_TWIN_DEBUG_JSONL": "",
+    "BIOHUB_STEAL_TWIN_DEBUG_MAX_RECORDS": "200",
     "BIOHUB_EXPERIMENT_TAG": "biohub_132_clean_short_track_rescue_lightcv_nohack",
 }
 
@@ -240,11 +258,33 @@ E23_PRESET: dict[str, str] = {
     "BIOHUB_EXPERIMENT_TAG": "e23_pub923_parity",
 }
 
+TWIN_ONLY_V1_PRESET: dict[str, str] = {
+    **E23_PRESET,
+    "BIOHUB_OUTPUT_STEAL_TWIN_REWIRE": "1",
+    "BIOHUB_STEAL_TWIN_MODE": "twin_only_v1",
+    "BIOHUB_STEAL_TWIN_DRY_RUN": "0",
+    "BIOHUB_STEAL_TWIN_PARENT_MAX_UM": "8.0",
+    "BIOHUB_STEAL_TWIN_EXISTING_CHILD_MAX_UM": "10.0",
+    "BIOHUB_STEAL_TWIN_SISTER_MIN_UM": "5.5",
+    "BIOHUB_STEAL_TWIN_SISTER_MAX_UM": "11.0",
+    "BIOHUB_STEAL_TWIN_DIVERGE_UM": "2.25",
+    "BIOHUB_STEAL_TWIN_TWIN_MAX_UM": "5.0",
+    "BIOHUB_STEAL_TWIN_REQUIRE_TWO_SUCCESSORS": "1",
+    "BIOHUB_STEAL_TWIN_REJECT_SYNTHETIC": "1",
+    "BIOHUB_STEAL_TWIN_DEEPCENTER_VETO": "1",
+    "BIOHUB_STEAL_TWIN_FRAME_CAP_ABS": "1",
+    "BIOHUB_STEAL_TWIN_VIDEO_CAP_ABS": "2",
+    "BIOHUB_STEAL_TWIN_DEBUG_JSONL": "",
+    "BIOHUB_STEAL_TWIN_DEBUG_MAX_RECORDS": "200",
+    "BIOHUB_EXPERIMENT_TAG": "e23_twin_only_v1",
+}
+
 # Named post-processing profiles: profile name -> preset layered on top of
 # CODE_DEFAULTS by build_config. Adding a profile never changes base1.
 PROFILES: dict[str, dict[str, str]] = {
     "base1": BASE1_PRESET,
     "e23": E23_PRESET,
+    "e23_twin_only_v1": TWIN_ONLY_V1_PRESET,
 }
 
 
@@ -358,6 +398,23 @@ class PostprocConfig:
     SAFE_DIV_REQUIRE_DIVERGENCE: bool
     SAFE_DIV_DIVERGE_UM: float
 
+    OUTPUT_STEAL_TWIN_REWIRE: bool
+    STEAL_TWIN_MODE: str
+    STEAL_TWIN_DRY_RUN: bool
+    STEAL_TWIN_PARENT_MAX_UM: float
+    STEAL_TWIN_EXISTING_CHILD_MAX_UM: float
+    STEAL_TWIN_SISTER_MIN_UM: float
+    STEAL_TWIN_SISTER_MAX_UM: float
+    STEAL_TWIN_DIVERGE_UM: float
+    STEAL_TWIN_TWIN_MAX_UM: float
+    STEAL_TWIN_REQUIRE_TWO_SUCCESSORS: bool
+    STEAL_TWIN_REJECT_SYNTHETIC: bool
+    STEAL_TWIN_DEEPCENTER_VETO: bool
+    STEAL_TWIN_FRAME_CAP_ABS: int
+    STEAL_TWIN_VIDEO_CAP_ABS: int
+    STEAL_TWIN_DEBUG_JSONL: str
+    STEAL_TWIN_DEBUG_MAX_RECORDS: int
+
     USE_DEEPCENTER_VETO: bool
     REQUIRE_DEEPCENTER_VETO: bool
     DEEPCENTER_GAP_VETO: bool
@@ -412,6 +469,43 @@ def build_config(
     safe_div_mode = _get_str(env, "BIOHUB_SAFE_DIV_MODE")
     if safe_div_mode not in ("legacy", "e23"):
         raise ValueError(f"BIOHUB_SAFE_DIV_MODE must be 'legacy' or 'e23', got {safe_div_mode!r}")
+
+    output_steal_twin_rewire = _get_bool(env, "BIOHUB_OUTPUT_STEAL_TWIN_REWIRE")
+    steal_twin_values: dict[str, object] = {
+        "STEAL_TWIN_MODE": _get_str(env, "BIOHUB_STEAL_TWIN_MODE"),
+        "STEAL_TWIN_PARENT_MAX_UM": _get_float(env, "BIOHUB_STEAL_TWIN_PARENT_MAX_UM"),
+        "STEAL_TWIN_EXISTING_CHILD_MAX_UM": _get_float(env, "BIOHUB_STEAL_TWIN_EXISTING_CHILD_MAX_UM"),
+        "STEAL_TWIN_SISTER_MIN_UM": _get_float(env, "BIOHUB_STEAL_TWIN_SISTER_MIN_UM"),
+        "STEAL_TWIN_SISTER_MAX_UM": _get_float(env, "BIOHUB_STEAL_TWIN_SISTER_MAX_UM"),
+        "STEAL_TWIN_DIVERGE_UM": _get_float(env, "BIOHUB_STEAL_TWIN_DIVERGE_UM"),
+        "STEAL_TWIN_TWIN_MAX_UM": _get_float(env, "BIOHUB_STEAL_TWIN_TWIN_MAX_UM"),
+        "STEAL_TWIN_REQUIRE_TWO_SUCCESSORS": _get_bool(env, "BIOHUB_STEAL_TWIN_REQUIRE_TWO_SUCCESSORS"),
+        "STEAL_TWIN_REJECT_SYNTHETIC": _get_bool(env, "BIOHUB_STEAL_TWIN_REJECT_SYNTHETIC"),
+        "STEAL_TWIN_DEEPCENTER_VETO": _get_bool(env, "BIOHUB_STEAL_TWIN_DEEPCENTER_VETO"),
+        "STEAL_TWIN_FRAME_CAP_ABS": _get_int(env, "BIOHUB_STEAL_TWIN_FRAME_CAP_ABS"),
+        "STEAL_TWIN_VIDEO_CAP_ABS": _get_int(env, "BIOHUB_STEAL_TWIN_VIDEO_CAP_ABS"),
+        "STEAL_TWIN_DEBUG_MAX_RECORDS": _get_int(env, "BIOHUB_STEAL_TWIN_DEBUG_MAX_RECORDS"),
+    }
+    frozen_steal_twin_values: dict[str, object] = {
+        "STEAL_TWIN_MODE": "twin_only_v1",
+        "STEAL_TWIN_PARENT_MAX_UM": 8.0,
+        "STEAL_TWIN_EXISTING_CHILD_MAX_UM": 10.0,
+        "STEAL_TWIN_SISTER_MIN_UM": 5.5,
+        "STEAL_TWIN_SISTER_MAX_UM": 11.0,
+        "STEAL_TWIN_DIVERGE_UM": 2.25,
+        "STEAL_TWIN_TWIN_MAX_UM": 5.0,
+        "STEAL_TWIN_REQUIRE_TWO_SUCCESSORS": True,
+        "STEAL_TWIN_REJECT_SYNTHETIC": True,
+        "STEAL_TWIN_DEEPCENTER_VETO": True,
+        "STEAL_TWIN_FRAME_CAP_ABS": 1,
+        "STEAL_TWIN_VIDEO_CAP_ABS": 2,
+        "STEAL_TWIN_DEBUG_MAX_RECORDS": 200,
+    }
+    if output_steal_twin_rewire:
+        for name, expected in frozen_steal_twin_values.items():
+            actual = steal_twin_values[name]
+            if actual != expected:
+                raise ValueError(f"BIOHUB_{name} must equal frozen twin_only_v1 value {expected!r}, got {actual!r}")
 
     return PostprocConfig(
         TEST_DIR=Path(test_dir),
@@ -482,6 +576,22 @@ def build_config(
         SAFE_DIV_REQUIRE_MUTUAL_NN=_get_bool(env, "BIOHUB_SAFE_DIV_REQUIRE_MUTUAL_NN"),
         SAFE_DIV_REQUIRE_DIVERGENCE=_get_bool(env, "BIOHUB_SAFE_DIV_REQUIRE_DIVERGENCE"),
         SAFE_DIV_DIVERGE_UM=_get_float(env, "BIOHUB_SAFE_DIV_DIVERGE_UM"),
+        OUTPUT_STEAL_TWIN_REWIRE=output_steal_twin_rewire,
+        STEAL_TWIN_MODE=str(steal_twin_values["STEAL_TWIN_MODE"]),
+        STEAL_TWIN_DRY_RUN=_get_bool(env, "BIOHUB_STEAL_TWIN_DRY_RUN"),
+        STEAL_TWIN_PARENT_MAX_UM=float(steal_twin_values["STEAL_TWIN_PARENT_MAX_UM"]),
+        STEAL_TWIN_EXISTING_CHILD_MAX_UM=float(steal_twin_values["STEAL_TWIN_EXISTING_CHILD_MAX_UM"]),
+        STEAL_TWIN_SISTER_MIN_UM=float(steal_twin_values["STEAL_TWIN_SISTER_MIN_UM"]),
+        STEAL_TWIN_SISTER_MAX_UM=float(steal_twin_values["STEAL_TWIN_SISTER_MAX_UM"]),
+        STEAL_TWIN_DIVERGE_UM=float(steal_twin_values["STEAL_TWIN_DIVERGE_UM"]),
+        STEAL_TWIN_TWIN_MAX_UM=float(steal_twin_values["STEAL_TWIN_TWIN_MAX_UM"]),
+        STEAL_TWIN_REQUIRE_TWO_SUCCESSORS=bool(steal_twin_values["STEAL_TWIN_REQUIRE_TWO_SUCCESSORS"]),
+        STEAL_TWIN_REJECT_SYNTHETIC=bool(steal_twin_values["STEAL_TWIN_REJECT_SYNTHETIC"]),
+        STEAL_TWIN_DEEPCENTER_VETO=bool(steal_twin_values["STEAL_TWIN_DEEPCENTER_VETO"]),
+        STEAL_TWIN_FRAME_CAP_ABS=int(steal_twin_values["STEAL_TWIN_FRAME_CAP_ABS"]),
+        STEAL_TWIN_VIDEO_CAP_ABS=int(steal_twin_values["STEAL_TWIN_VIDEO_CAP_ABS"]),
+        STEAL_TWIN_DEBUG_JSONL=_get_str(env, "BIOHUB_STEAL_TWIN_DEBUG_JSONL"),
+        STEAL_TWIN_DEBUG_MAX_RECORDS=int(steal_twin_values["STEAL_TWIN_DEBUG_MAX_RECORDS"]),
         USE_DEEPCENTER_VETO=_get_bool(env, "BIOHUB_USE_DEEPCENTER_VETO"),
         REQUIRE_DEEPCENTER_VETO=_get_bool(env, "BIOHUB_REQUIRE_DEEPCENTER_VETO"),
         DEEPCENTER_GAP_VETO=_get_bool(env, "BIOHUB_DEEPCENTER_GAP_VETO"),
