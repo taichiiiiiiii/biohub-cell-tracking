@@ -91,11 +91,11 @@ Parity is accepted only when the notebook reference and local port agree on:
 
 ## Experiment assets
 
-- E22/E23 bidirectional-weight `0.30` raw predictions were verified as 36 GEFF
-  roots, 1,188 files, 10,090,215 bytes. A separate workspace consolidation
-  removed the ignored local copy; a verified re-fetch into the primary
-  checkout's `outputs/` is in progress. Do not treat it as available until the
-  same root/file/byte checks pass again.
+- E22/E23 bidirectional-weight `0.30` raw predictions are available in the
+  primary checkout at
+  `outputs/kaggle/e22_bidir030_eval36_raw/tracking_repo/predictions/unknown/unet_transformer_val/split_0`.
+  Workspace consolidation reverified 36 GEFF roots, 1,188 files, and
+  10,090,215 bytes on 2026-08-30.
 - No usable `0.20` raw predictions exist in kernel versions v1-v10: v1 reached
   the `0.20` guard but stopped before writing raw GEFF; successful versions are
   `0.30`.
