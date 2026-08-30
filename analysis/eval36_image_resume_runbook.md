@@ -82,6 +82,35 @@ data/train/44b6_587a1e22.zarr/0/c/30/0/0/0.kaggle-partial
 でも同じ DNS failure を確認した。新規取得成功は 0 件であり、上の部分
 snapshot は evaluation-ready ではないまま変わらない。
 
+### 2026-08-31 resume progress and rate-limit hold
+
+2026-08-31 01:44 JST の再監査では、manifest SHA/行数、Kaggle CLI 2.2.4、
+competition-files の認証/DNS preflight、固定 36 stems の dry-run
+`4942 files, 17.84 GB selected` を再確認してから `--jobs 1` で再開した。
+途中の不足 chunk を単一 CLI で取得できることも確認し、部分 tree は次まで
+前進した。
+
+| 状態 | 実測 |
+|---|---:|
+| 現存 | 7 non-empty roots / 669 files / 3,080,791,311 bytes |
+| manifest とサイズ一致 | 669 files / 3,080,791,311 bytes |
+| 完全 root | 6 / 36 |
+| 不足 | 3,003 manifest files |
+| サイズ不一致 / manifest 外 / partial marker | 0 / 0 / 0 |
+
+完全 root は `44b6_12dfb391`, `44b6_267148e4`, `44b6_2a2eff9f`,
+`44b6_341df25f`, `44b6_587a1e22`, `44b6_5f15d135`。現在の partial root
+`44b6_706092f0` は 57/102 files がすべてサイズ一致している。
+
+次の不足 file
+`train/44b6_706092f0.zarr/0/c/60/0/0/0`（期待 5,509,026 bytes）の
+単一-file probe は HTTP `429 Too Many Requests` を明示して終了した。全 download
+process を停止し、tree に破損や `.kaggle-partial` がないことを確認済みである。
+これは DNS/auth failure ではなく Kaggle competition-download API の rate limit
+として分類する。cooldown 中は再試行を連打せず、次回は fresh preflight から同一
+36-stem/one-job command を再開する。最終 verifier が PASS するまで引き続き
+**NOT_READY** である。
+
 ## 実行前 preflight
 
 以下は repo root で実行する。認証情報の値を印字する `env`, `cat`,
