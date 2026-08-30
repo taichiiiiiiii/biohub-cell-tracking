@@ -8,7 +8,7 @@
 set -eu
 
 PROG="qwen-implement"
-MODEL="qwen3.8-max"
+MODEL="qwen3.7-max"
 PROVIDER="qwen_token_plan"
 REASONING="medium"
 MAX_TASK_BYTES=1048576

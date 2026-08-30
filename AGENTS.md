@@ -34,7 +34,7 @@ Use the minimum useful specialists. Read-heavy specification, literature, and re
   `printf '%s\n' "$TASK" | .codex/bin/qwen-implement /absolute/linked/worktree`.
   Do not use native `spawn_agent` for Qwen implementation. Codex 0.151.0 does
   not propagate a custom `model_provider` into native child roles.
-- The external worker uses `qwen3.8-max` with machine-local
+- The external worker uses `qwen3.7-max` with machine-local
   `qwen_token_plan`. Use `medium` reasoning for bounded implementation phases;
   raise effort only when the task's ambiguity or review risk justifies it.
   Never copy provider credentials into this repository.
