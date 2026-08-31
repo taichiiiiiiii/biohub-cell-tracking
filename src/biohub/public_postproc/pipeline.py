@@ -13,7 +13,12 @@ motion-relink / gap-close / safe-division passes.
 from __future__ import annotations
 
 import json
+import math
+import os
 import pickle
+import struct
+import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +28,23 @@ from biohub.io import load_geff_graph
 from biohub.public_postproc.config import PostprocConfig
 from biohub.public_postproc.csv_out import SubmissionCsvWriter, write_run_stats
 from biohub.public_postproc.deepcenter import load_deepcenter_veto_detector
-from biohub.public_postproc.divisions import add_safe_divisions_postlink
+from biohub.public_postproc.divisions import (
+    _TWIN_COUNTER_KEYS,
+    TwinDebugRecord,
+    TwinDeepCenterDecision,
+    TwinEdgeRecord,
+    TwinFrozenArray,
+    TwinFrozenBuffer,
+    TwinFrozenDType,
+    TwinFrozenMapping,
+    TwinFrozenNumpyScalar,
+    TwinFrozenStructuredScalar,
+    TwinPlannedEdge,
+    TwinSnapshotNode,
+    add_safe_divisions_postlink,
+    plan_twin_only_v1,
+    score_twin_deepcenter,
+)
 from biohub.public_postproc.frames import refine_all_centroids
 from biohub.public_postproc.geometry import edge_distance_um, edge_sort_key
 from biohub.public_postproc.graph_ops import (
@@ -52,7 +73,7 @@ def new_stats() -> dict[str, int]:
     ``add_safe_divisions_postlink`` -- the documented notebook-only
     broken-counter exception of the E23 parity contract.
     """
-    return {
+    stats = {
         "raw_edges": 0,
         "dropped_nonconsecutive_edges": 0,
         "dropped_long_edges": 0,
@@ -118,6 +139,488 @@ def new_stats() -> dict[str, int]:
         "linefit_smoothed_nodes": 0,
         "linefit_skipped_nodes": 0,
     }
+    stats.update(dict.fromkeys(_TWIN_COUNTER_KEYS, 0))
+    return stats
+
+
+def _require_steal_twin_r1_dry_run(cfg: PostprocConfig) -> None:
+    if cfg.OUTPUT_STEAL_TWIN_REWIRE and not cfg.STEAL_TWIN_DRY_RUN:
+        raise RuntimeError(
+            "twin_only_v1 graph mutation is unavailable in ST-R1; "
+            "set BIOHUB_STEAL_TWIN_DRY_RUN=1 or implement ST-R2"
+        )
+
+
+def _twin_float_plain(value: float) -> float | dict[str, str]:
+    if math.isfinite(value):
+        return value
+    if math.isnan(value):
+        label = "nan"
+    elif value > 0:
+        label = "+inf"
+    else:
+        label = "-inf"
+    return {
+        "__twin_type__": "float",
+        "value": label,
+        "bits_hex": struct.pack(">d", value).hex(),
+    }
+
+
+def _twin_frozen_value_plain(value: object) -> object:
+    value_type = type(value)
+    if value is None or value_type in (bool, int, str):
+        return value
+    if value_type is float:
+        return _twin_float_plain(value)
+    if value_type is complex:
+        return {
+            "__twin_type__": "complex",
+            "real": _twin_float_plain(value.real),
+            "imag": _twin_float_plain(value.imag),
+        }
+    if value_type is bytes:
+        return {"__twin_type__": "bytes", "hex": value.hex()}
+    if value_type is tuple:
+        return {
+            "__twin_type__": "tuple",
+            "items": [_twin_frozen_value_plain(item) for item in value],
+        }
+    if value_type is frozenset:
+        items = [_twin_frozen_value_plain(item) for item in value]
+        items.sort(
+            key=lambda item: json.dumps(
+                item,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
+        return {"__twin_type__": "frozenset", "items": items}
+    if value_type is TwinFrozenMapping:
+        return {
+            "__twin_type__": "mapping",
+            "items": [
+                [_twin_frozen_value_plain(key), _twin_frozen_value_plain(item)]
+                for key, item in value.items_snapshot
+            ],
+        }
+    if value_type is TwinFrozenDType:
+        return {
+            "__twin_type__": "numpy_dtype",
+            "string": value.string,
+            "descriptor": _twin_frozen_value_plain(value.descriptor),
+            "metadata": _twin_frozen_value_plain(value.metadata),
+            "itemsize": value.itemsize,
+            "alignment": value.alignment,
+            "byteorder": value.byteorder,
+            "names": None if value.names is None else list(value.names),
+            "hasobject": value.hasobject,
+            "aligned_struct": value.aligned_struct,
+        }
+    if value_type is TwinFrozenStructuredScalar:
+        return {
+            "__twin_type__": "numpy_structured_scalar",
+            "fields": [
+                [name, _twin_frozen_value_plain(item)] for name, item in value.fields
+            ],
+        }
+    if value_type is TwinFrozenNumpyScalar:
+        return {
+            "__twin_type__": "numpy_scalar",
+            "dtype": _twin_frozen_value_plain(value.dtype),
+            "content": value.content.hex(),
+        }
+    if value_type is TwinFrozenArray:
+        plain = {
+            "__twin_type__": "numpy_array",
+            "dtype": _twin_frozen_value_plain(value.dtype),
+            "shape": list(value.shape),
+            "strides": list(value.strides),
+            "c_contiguous": value.c_contiguous,
+            "f_contiguous": value.f_contiguous,
+            "object_content": value.object_content,
+        }
+        if type(value.content) is bytes:
+            plain["content_hex"] = value.content.hex()
+        elif type(value.content) is tuple:
+            plain["content"] = _twin_frozen_value_plain(value.content)
+        else:
+            raise TypeError("unsupported TwinFrozenArray content type")
+        return plain
+    if value_type is TwinFrozenBuffer:
+        return {
+            "__twin_type__": "buffer",
+            "kind": value.kind,
+            "format": value.format,
+            "itemsize": value.itemsize,
+            "shape": list(value.shape),
+            "strides": list(value.strides),
+            "readonly": value.readonly,
+            "content_hex": value.content.hex(),
+        }
+    raise TypeError(f"unsupported frozen twin value type: {value_type.__qualname__}")
+
+
+def _twin_debug_record_plain(record: TwinDebugRecord) -> dict[str, object]:
+    return {
+        "dataset": record.dataset,
+        "decision": record.decision,
+        "reason": record.reason,
+        "p": record.p,
+        "q": record.q,
+        "a": record.a,
+        "b": record.b,
+        "a2": record.a2,
+        "b2": record.b2,
+        "sort_key": list(record.sort_key),
+        "d_pq": record.d_pq,
+        "d_pa": record.d_pa,
+        "d_pb": record.d_pb,
+        "d_ab": record.d_ab,
+        "d_a2b2": record.d_a2b2,
+        "divergence_growth": record.divergence_growth,
+        "raw_deepcenter_score": record.raw_deepcenter_score,
+        "deepcenter_threshold": record.deepcenter_threshold,
+        "deepcenter_decision": {
+            "accepted": record.deepcenter_decision.accepted,
+            "raw_score": record.deepcenter_decision.raw_score,
+            "reason": record.deepcenter_decision.reason,
+        },
+        "removed_edge": {
+            "source_id": record.removed_edge.source_id,
+            "target_id": record.removed_edge.target_id,
+            "metadata": _twin_frozen_value_plain(record.removed_edge.metadata),
+        },
+        "planned_edge": {
+            "source_id": record.planned_edge.source_id,
+            "target_id": record.planned_edge.target_id,
+            "distance_um": record.planned_edge.distance_um,
+            "edge_prob": None,
+        },
+    }
+
+
+def _twin_record_type_error(index: int, field: str) -> TypeError:
+    return TypeError(f"twin debug record {index}: invalid type for {field}")
+
+
+def _twin_record_value_error(index: int, field: str) -> ValueError:
+    return ValueError(f"twin debug record {index}: invalid value for {field}")
+
+
+def _validate_twin_debug_record(
+    record: object,
+    index: int,
+    expected_dataset: str | None,
+    *,
+    first: bool,
+) -> str | None:
+    if type(record) is not TwinDebugRecord:
+        raise _twin_record_type_error(index, "record")
+    if record.dataset is not None and type(record.dataset) is not str:
+        raise _twin_record_type_error(index, "dataset")
+    if not first and record.dataset != expected_dataset:
+        raise _twin_record_value_error(index, "dataset")
+    if type(record.decision) is not str:
+        raise _twin_record_type_error(index, "decision")
+    if record.decision == "accepted":
+        if record.reason is not None:
+            raise _twin_record_value_error(index, "decision/reason")
+    elif record.decision == "rejected":
+        if type(record.reason) is not str:
+            raise _twin_record_type_error(index, "reason")
+        if record.reason not in ("conflict", "frame_cap", "video_cap"):
+            raise _twin_record_value_error(index, "reason")
+    else:
+        raise _twin_record_value_error(index, "decision")
+
+    roles = (record.p, record.q, record.a, record.b, record.a2, record.b2)
+    if any(type(value) is not int for value in roles):
+        raise _twin_record_type_error(index, "roles")
+    if type(record.sort_key) is not tuple:
+        raise _twin_record_type_error(index, "sort_key")
+    if len(record.sort_key) != 9:
+        raise _twin_record_value_error(index, "sort_key length")
+    if any(type(value) is not float for value in record.sort_key[:3]):
+        raise _twin_record_type_error(index, "sort_key numeric prefix")
+    if not all(math.isfinite(value) for value in record.sort_key[:3]):
+        raise _twin_record_value_error(index, "sort_key numeric prefix")
+    if any(type(value) is not int for value in record.sort_key[3:]):
+        raise _twin_record_type_error(index, "sort_key role suffix")
+    if record.sort_key[3:] != roles:
+        raise _twin_record_value_error(index, "sort_key role suffix")
+
+    float_fields = (
+        ("d_pq", record.d_pq),
+        ("d_pa", record.d_pa),
+        ("d_pb", record.d_pb),
+        ("d_ab", record.d_ab),
+        ("d_a2b2", record.d_a2b2),
+        ("divergence_growth", record.divergence_growth),
+        ("raw_deepcenter_score", record.raw_deepcenter_score),
+        ("deepcenter_threshold", record.deepcenter_threshold),
+    )
+    for field, value in float_fields:
+        if type(value) is not float:
+            raise _twin_record_type_error(index, field)
+        if not math.isfinite(value):
+            raise _twin_record_value_error(index, field)
+    if record.deepcenter_threshold != 0.12:
+        raise _twin_record_value_error(index, "deepcenter_threshold")
+
+    decision = record.deepcenter_decision
+    if type(decision) is not TwinDeepCenterDecision:
+        raise _twin_record_type_error(index, "deepcenter_decision")
+    if type(decision.accepted) is not bool:
+        raise _twin_record_type_error(index, "deepcenter_decision.accepted")
+    if decision.accepted is not True or decision.reason is not None:
+        raise _twin_record_value_error(index, "deepcenter_decision")
+    if type(decision.raw_score) is not float:
+        raise _twin_record_type_error(index, "deepcenter_decision.raw_score")
+    if not math.isfinite(decision.raw_score):
+        raise _twin_record_value_error(index, "deepcenter_decision.raw_score")
+    if decision.raw_score != record.raw_deepcenter_score:
+        raise _twin_record_value_error(index, "deepcenter_decision.raw_score")
+
+    removed = record.removed_edge
+    if type(removed) is not TwinEdgeRecord:
+        raise _twin_record_type_error(index, "removed_edge")
+    if type(removed.source_id) is not int or type(removed.target_id) is not int:
+        raise _twin_record_type_error(index, "removed_edge endpoints")
+    if type(removed.metadata) is not TwinFrozenMapping:
+        raise _twin_record_type_error(index, "removed_edge.metadata")
+    if (removed.source_id, removed.target_id) != (record.q, record.b):
+        raise _twin_record_value_error(index, "removed_edge endpoints")
+
+    planned = record.planned_edge
+    if type(planned) is not TwinPlannedEdge:
+        raise _twin_record_type_error(index, "planned_edge")
+    if type(planned.source_id) is not int or type(planned.target_id) is not int:
+        raise _twin_record_type_error(index, "planned_edge endpoints")
+    if type(planned.distance_um) is not float:
+        raise _twin_record_type_error(index, "planned_edge.distance_um")
+    if not math.isfinite(planned.distance_um):
+        raise _twin_record_value_error(index, "planned_edge.distance_um")
+    if planned.edge_prob is not None:
+        raise _twin_record_value_error(index, "planned_edge.edge_prob")
+    if (planned.source_id, planned.target_id, planned.distance_um) != (
+        record.p,
+        record.b,
+        record.d_pb,
+    ):
+        raise _twin_record_value_error(index, "planned_edge")
+    return record.dataset
+
+
+class _TwinDebugCollector:
+    def __init__(self, max_records: int) -> None:
+        if type(max_records) is not int or max_records < 0:
+            raise ValueError("max_records must be a nonnegative built-in int")
+        self._max_records = max_records
+        self._lines: list[str] = []
+        self._records_written = 0
+        self._records_dropped = 0
+        self._finalized = False
+
+    @property
+    def records_written(self) -> int:
+        return self._records_written
+
+    @property
+    def records_dropped(self) -> int:
+        return self._records_dropped
+
+    def allocate(self, records: Sequence[TwinDebugRecord]) -> tuple[int, int]:
+        if self._finalized:
+            raise RuntimeError("twin debug collector is already finalized")
+        if not isinstance(records, Sequence):
+            raise TypeError("twin debug records must be a Sequence")
+        records_snapshot = tuple(records)
+        expected_dataset: str | None = None
+        for index, record in enumerate(records_snapshot):
+            expected_dataset = _validate_twin_debug_record(
+                record,
+                index,
+                expected_dataset,
+                first=index == 0,
+            )
+
+        written = min(len(records_snapshot), self._max_records - self._records_written)
+        dropped = len(records_snapshot) - written
+        encoded = [
+            json.dumps(
+                _twin_debug_record_plain(records_snapshot[index]),
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+            for index in range(written)
+        ]
+        self._lines.extend(encoded)
+        self._records_written += written
+        self._records_dropped += dropped
+        return written, dropped
+
+    def finalize(self, output_path: Path) -> None:
+        if self._finalized:
+            raise RuntimeError("twin debug collector is already finalized")
+        handle = None
+        temp_path: Path | None = None
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=output_path.parent,
+                prefix=f".{output_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            )
+            temp_path = Path(handle.name)
+            handle.write("".join(self._lines))
+            handle.flush()
+            os.fsync(handle.fileno())
+            handle.close()
+            handle = None
+            os.replace(temp_path, output_path)
+            temp_path = None
+            self._finalized = True
+        except BaseException:
+            if handle is not None:
+                try:
+                    handle.close()
+                except BaseException:
+                    pass
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except BaseException:
+                    pass
+            raise
+
+
+def _run_steal_twin_r1_dry_run(
+    cfg: PostprocConfig,
+    dataset: str | None,
+    nodes_by_id: dict[int, dict[str, object]],
+    edges: list[dict[str, object]],
+    stats: dict[str, int],
+    deepcenter_bundle: dict[str, object] | None,
+    repair_frame_cache: dict[int, np.ndarray],
+    deepcenter_heatmap_cache: dict[tuple[str, int], np.ndarray],
+    twin_debug_collector: _TwinDebugCollector | None,
+) -> None:
+    def score_callback(node: TwinSnapshotNode) -> TwinDeepCenterDecision:
+        return score_twin_deepcenter(
+            cfg,
+            dataset,
+            node.t,
+            (node.z, node.y, node.x),
+            deepcenter_bundle,
+            repair_frame_cache,
+            deepcenter_heatmap_cache,
+        )
+
+    plan = plan_twin_only_v1(
+        cfg,
+        dataset,
+        tuple(nodes_by_id.values()),
+        tuple(edges),
+        score_callback,
+    )
+    try:
+        counter_keys = tuple(plan.counters)
+        counter_values = tuple(plan.counters[key] for key in counter_keys)
+    except Exception as exc:
+        raise RuntimeError("invalid twin planner counter mapping") from exc
+    if counter_keys != _TWIN_COUNTER_KEYS:
+        raise RuntimeError("invalid twin planner counter key schema")
+    if any(type(value) is not int or value < 0 for value in counter_values):
+        raise RuntimeError("invalid twin planner counter value")
+    if any(
+        plan.counters[key] != 0
+        for key in ("steal_twin_debug_records_written", "steal_twin_debug_records_dropped")
+    ):
+        raise RuntimeError("twin planner must not allocate debug counters")
+    if any(key not in stats or type(stats[key]) is not int or stats[key] != 0 for key in _TWIN_COUNTER_KEYS):
+        raise RuntimeError("twin destination counters must be preseeded exact integer zero")
+
+    for key, value in zip(counter_keys, counter_values, strict=True):
+        stats[key] = value
+    if cfg.STEAL_TWIN_DEBUG_JSONL:
+        if twin_debug_collector is None:
+            raise RuntimeError("twin debug path requires a run-level collector")
+        written, dropped = twin_debug_collector.allocate(plan.debug_records)
+        stats["steal_twin_debug_records_written"] = written
+        stats["steal_twin_debug_records_dropped"] = dropped
+
+
+def _twin_debug_path_identities(debug_path: Path) -> tuple[Path, Path]:
+    debug_resolved = debug_path.resolve(strict=False)
+    debug_parent_resolved = debug_path.parent.resolve(strict=False)
+    return debug_resolved, debug_parent_resolved / debug_path.name
+
+
+def _twin_paths_samefile(first: Path, second: Path) -> bool:
+    if not first.exists() or not second.exists():
+        return False
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _raise_twin_debug_alias(debug_path: Path, artifact: Path) -> None:
+    raise ValueError(f"twin debug target {debug_path} aliases run artifact {artifact}")
+
+
+def _twin_debug_identity_overlaps_protected_path(
+    debug_identities: Sequence[Path], protected_resolved: Path
+) -> bool:
+    return any(
+        identity == protected_resolved
+        or identity.is_relative_to(protected_resolved)
+        or protected_resolved.is_relative_to(identity)
+        for identity in debug_identities
+    )
+
+
+def _reject_twin_debug_aliases(
+    geff_dir: Path,
+    geffs: Sequence[Path],
+    debug_path: Path,
+    ordinary_artifacts: Sequence[Path],
+) -> None:
+    debug_resolved, debug_entry_resolved = _twin_debug_path_identities(debug_path)
+    debug_identities = (debug_resolved, debug_entry_resolved)
+    bundle_resolved = geff_dir.resolve(strict=True)
+    if not bundle_resolved.is_dir():
+        raise ValueError(f"GEFF input bundle is not a directory: {geff_dir}")
+    if _twin_debug_identity_overlaps_protected_path(debug_identities, bundle_resolved):
+        _raise_twin_debug_alias(debug_path, geff_dir)
+
+    for geff_path in geffs:
+        geff_resolved = geff_path.resolve(strict=True)
+        if geff_resolved.is_dir():
+            if _twin_debug_identity_overlaps_protected_path(debug_identities, geff_resolved):
+                _raise_twin_debug_alias(debug_path, geff_path)
+        elif geff_resolved.is_file():
+            if _twin_debug_identity_overlaps_protected_path(
+                debug_identities, geff_resolved
+            ) or _twin_paths_samefile(debug_path, geff_path):
+                _raise_twin_debug_alias(debug_path, geff_path)
+        else:
+            raise ValueError(f"GEFF input is not a regular file or directory: {geff_path}")
+
+    for artifact in ordinary_artifacts:
+        artifact_resolved = artifact.resolve(strict=False)
+        if _twin_debug_identity_overlaps_protected_path(
+            debug_identities, artifact_resolved
+        ) or _twin_paths_samefile(debug_path, artifact):
+            _raise_twin_debug_alias(debug_path, artifact)
 
 
 def filter_output_graph_pre_linefit(
@@ -126,6 +629,8 @@ def filter_output_graph_pre_linefit(
     raw_edges: list[dict[str, object]],
     dataset: str | None = None,
     deepcenter_bundle: dict[str, object] | None = None,
+    *,
+    twin_debug_collector: _TwinDebugCollector | None = None,
 ) -> tuple[dict[int, dict[str, object]], list[dict[str, object]], dict[str, int]]:
     """Everything ``filter_output_graph`` does *except* the final linefit-smoothing call.
 
@@ -133,6 +638,10 @@ def filter_output_graph_pre_linefit(
     (``filter_short_track_components`` already ran); only coordinates can
     still move.
     """
+    _require_steal_twin_r1_dry_run(cfg)
+    if cfg.OUTPUT_STEAL_TWIN_REWIRE and cfg.STEAL_TWIN_DEBUG_JSONL and twin_debug_collector is None:
+        raise RuntimeError("twin debug path requires a run-level collector")
+
     stats = new_stats()
     stats["raw_edges"] = len(raw_edges)
 
@@ -227,6 +736,19 @@ def filter_output_graph_pre_linefit(
         deepcenter_cache=deepcenter_heatmap_cache,
     )
 
+    if cfg.OUTPUT_STEAL_TWIN_REWIRE:
+        _run_steal_twin_r1_dry_run(
+            cfg,
+            dataset,
+            nodes_by_id,
+            edges,
+            stats,
+            deepcenter_bundle,
+            repair_frame_cache,
+            deepcenter_heatmap_cache,
+            twin_debug_collector,
+        )
+
     if cfg.OUTPUT_DIVISION_GEOMETRY_FILTER and edges:
         by_source: dict[int, list[dict[str, object]]] = {}
         for edge in edges:
@@ -280,9 +802,16 @@ def filter_output_graph(
     raw_edges: list[dict[str, object]],
     dataset: str | None = None,
     deepcenter_bundle: dict[str, object] | None = None,
+    *,
+    twin_debug_collector: _TwinDebugCollector | None = None,
 ) -> tuple[dict[int, dict[str, object]], list[dict[str, object]], dict[str, int]]:
     nodes_by_id, edges, stats = filter_output_graph_pre_linefit(
-        cfg, nodes_by_id, raw_edges, dataset=dataset, deepcenter_bundle=deepcenter_bundle
+        cfg,
+        nodes_by_id,
+        raw_edges,
+        dataset=dataset,
+        deepcenter_bundle=deepcenter_bundle,
+        twin_debug_collector=twin_debug_collector,
     )
     nodes_by_id = linefit_smooth_output_graph(cfg, nodes_by_id, edges, stats)
     return nodes_by_id, edges, stats
@@ -294,6 +823,8 @@ def _load_geff_as_dicts(geff_path: Path) -> tuple[dict[int, dict[str, object]], 
     nodes_by_id: dict[int, dict[str, object]] = {}
     for row in graph.node_attrs().iter_rows(named=True):
         node_id = int(row["node_id"])
+        if node_id in nodes_by_id:
+            raise ValueError(f"{geff_path}: duplicate node_id {node_id}")
         nodes_by_id[node_id] = {
             "node_id": node_id,
             "t": int(row["t"]),
@@ -372,6 +903,20 @@ def run_postproc(
     if not geffs:
         raise RuntimeError(f"no *.geff files found in {geff_dir}")
 
+    _require_steal_twin_r1_dry_run(cfg)
+    effective_run_stats_path = run_stats_path or out_csv.parent / "run_stats.csv"
+    twin_debug_collector: _TwinDebugCollector | None = None
+    twin_debug_path: Path | None = None
+    if cfg.OUTPUT_STEAL_TWIN_REWIRE and cfg.STEAL_TWIN_DEBUG_JSONL:
+        twin_debug_path = Path(cfg.STEAL_TWIN_DEBUG_JSONL)
+        _reject_twin_debug_aliases(
+            geff_dir,
+            geffs,
+            twin_debug_path,
+            (out_csv, effective_run_stats_path),
+        )
+        twin_debug_collector = _TwinDebugCollector(cfg.STEAL_TWIN_DEBUG_MAX_RECORDS)
+
     deepcenter_detector = load_deepcenter_veto_detector(cfg)
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -388,7 +933,12 @@ def run_postproc(
 
             raw_node_count = len(nodes_by_id)
             nodes_by_id, edges, filter_stats = filter_output_graph(
-                cfg, nodes_by_id, raw_edges, dataset=dataset, deepcenter_bundle=deepcenter_detector
+                cfg,
+                nodes_by_id,
+                raw_edges,
+                dataset=dataset,
+                deepcenter_bundle=deepcenter_detector,
+                twin_debug_collector=twin_debug_collector,
             )
             if not nodes_by_id:
                 raise AssertionError(f"{dataset}: post-processing removed every node")
@@ -401,8 +951,16 @@ def run_postproc(
             stats_rows.append(_dataset_stats_row(dataset, nodes_by_id, edges, filter_stats, raw_node_count, division_sources))
 
     stats_frame = _finish_run(
-        writer, stats_rows, total_nodes, total_edges, cfg, run_stats_path or out_csv.parent / "run_stats.csv", predict_seconds
+        writer,
+        stats_rows,
+        total_nodes,
+        total_edges,
+        cfg,
+        effective_run_stats_path,
+        predict_seconds,
     )
+    if twin_debug_collector is not None and twin_debug_path is not None:
+        twin_debug_collector.finalize(twin_debug_path)
 
     return {
         "datasets": [p.stem for p in geffs],
@@ -431,6 +989,23 @@ def save_prelinefit_checkpoint(geff_dir: Path, checkpoint_dir: Path, cfg: Postpr
     if not geffs:
         raise RuntimeError(f"no *.geff files found in {geff_dir}")
 
+    _require_steal_twin_r1_dry_run(cfg)
+    twin_debug_collector: _TwinDebugCollector | None = None
+    twin_debug_path: Path | None = None
+    if cfg.OUTPUT_STEAL_TWIN_REWIRE and cfg.STEAL_TWIN_DEBUG_JSONL:
+        twin_debug_path = Path(cfg.STEAL_TWIN_DEBUG_JSONL)
+        _reject_twin_debug_aliases(
+            geff_dir,
+            geffs,
+            twin_debug_path,
+            (
+                checkpoint_dir,
+                checkpoint_dir / CHECKPOINT_MANIFEST_NAME,
+                *(checkpoint_dir / f"{geff_path.stem}.pkl" for geff_path in geffs),
+            ),
+        )
+        twin_debug_collector = _TwinDebugCollector(cfg.STEAL_TWIN_DEBUG_MAX_RECORDS)
+
     deepcenter_detector = load_deepcenter_veto_detector(cfg)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -440,7 +1015,12 @@ def save_prelinefit_checkpoint(geff_dir: Path, checkpoint_dir: Path, cfg: Postpr
         nodes_by_id, raw_edges = _load_geff_as_dicts(geff_path)
         raw_node_count = len(nodes_by_id)
         nodes_by_id, edges, stats = filter_output_graph_pre_linefit(
-            cfg, nodes_by_id, raw_edges, dataset=dataset, deepcenter_bundle=deepcenter_detector
+            cfg,
+            nodes_by_id,
+            raw_edges,
+            dataset=dataset,
+            deepcenter_bundle=deepcenter_detector,
+            twin_debug_collector=twin_debug_collector,
         )
         if not nodes_by_id:
             raise AssertionError(f"{dataset}: post-processing removed every node")
@@ -457,6 +1037,8 @@ def save_prelinefit_checkpoint(geff_dir: Path, checkpoint_dir: Path, cfg: Postpr
 
     manifest = {"geff_dir": str(geff_dir), "datasets": datasets}
     (checkpoint_dir / CHECKPOINT_MANIFEST_NAME).write_text(json.dumps(manifest, indent=2))
+    if twin_debug_collector is not None and twin_debug_path is not None:
+        twin_debug_collector.finalize(twin_debug_path)
     return manifest
 
 

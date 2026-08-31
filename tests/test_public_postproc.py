@@ -9,8 +9,11 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
+import pickle
+import struct
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from enum import IntEnum
 from pathlib import Path
 
@@ -21,6 +24,7 @@ from biohub.public_postproc import deepcenter as deepcenter_module
 from biohub.public_postproc import divisions as divisions_module
 from biohub.public_postproc import frames as frames_module
 from biohub.public_postproc import graph_ops as graph_ops_module
+from biohub.public_postproc import pipeline as pipeline_module
 from biohub.public_postproc.config import PostprocConfig, build_config
 from biohub.public_postproc.csv_out import CSV_COLUMNS, SubmissionCsvWriter
 from biohub.public_postproc.divisions import add_safe_divisions_postlink
@@ -3020,3 +3024,1422 @@ def test_steal_twin_r1b_nonfinite_derived_geometry_maps_to_exact_gate(
     assert plan.counters[f"steal_twin_rejected_{reason}"] == 1
     assert not plan.candidates
     _assert_twin_conservation(plan)
+
+
+# --------------------------------------------------------------------------
+# ST-R1c: pipeline dry-run integration and bounded debug publication
+# --------------------------------------------------------------------------
+
+
+def _r1c_cfg(tmp_path: Path, debug_path: Path | None = None, **overrides: str) -> PostprocConfig:
+    values = {
+        "BIOHUB_REFINE_ALL_CENTROIDS": "0",
+        "BIOHUB_OUTPUT_MOTION_RELINK": "0",
+        "BIOHUB_OUTPUT_GAP_CLOSE": "0",
+        "BIOHUB_OUTPUT_GAP2_RECOVERY": "0",
+        "BIOHUB_OUTPUT_SAFE_DIVISIONS": "0",
+        "BIOHUB_OUTPUT_DIVISION_GEOMETRY_FILTER": "0",
+        "BIOHUB_OUTPUT_PRUNE_ISOLATED": "0",
+        "BIOHUB_OUTPUT_FILTER_SHORT_TRACKS": "0",
+        "BIOHUB_OUTPUT_LINEFIT_SMOOTH": "0",
+        "BIOHUB_STEAL_TWIN_DRY_RUN": "1",
+        **overrides,
+    }
+    if debug_path is not None:
+        values["BIOHUB_STEAL_TWIN_DEBUG_JSONL"] = str(debug_path)
+    return build_config(values, test_dir=tmp_path, profile="e23_twin_only_v1")
+
+
+def _r1c_record(
+    dataset: str | None = "ds0",
+    reason: str | None = None,
+    metadata: divisions_module.TwinFrozenMapping | None = None,
+):
+    return divisions_module.TwinDebugRecord(
+        dataset,
+        "accepted" if reason is None else "rejected",
+        reason,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        (6.9, -3.0, 4.0, 1, 2, 3, 4, 5, 6),
+        4.0,
+        0.0,
+        6.0,
+        6.0,
+        9.0,
+        3.0,
+        0.2,
+        0.12,
+        divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+        divisions_module.TwinEdgeRecord(
+            2,
+            4,
+            metadata
+            if metadata is not None
+            else divisions_module.TwinFrozenMapping(
+                (("source_id", 2), ("target_id", 4), ("edge_prob", 0.7))
+            ),
+        ),
+        divisions_module.TwinPlannedEdge(1, 4, 6.0),
+    )
+
+
+def _r1c_empty_plan(counters: object | None = None):
+    if counters is None:
+        counters = divisions_module.TwinFrozenMapping(
+            tuple((key, 0) for key in divisions_module._TWIN_COUNTER_KEYS)
+        )
+    return divisions_module.TwinPlan(None, (), (), (), (), (), counters, ())
+
+
+def test_steal_twin_r1c_new_stats_appends_exact_frozen_counter_schema():
+    stats = new_stats()
+    keys = tuple(stats)
+    twin_keys = divisions_module._TWIN_COUNTER_KEYS
+    assert keys[-len(twin_keys) :] == twin_keys
+    assert not any(key.startswith("steal_twin_") for key in keys[: -len(twin_keys)])
+    assert all(type(stats[key]) is int and stats[key] == 0 for key in twin_keys)
+
+
+def test_steal_twin_r1c_non_dry_guard_precedes_direct_graph_work(tmp_path: Path, monkeypatch):
+    cfg = build_config(test_dir=tmp_path, profile="e23_twin_only_v1")
+    monkeypatch.setattr(pipeline_module, "new_stats", lambda: pytest.fail("new_stats called"))
+    for function in (filter_output_graph_pre_linefit, filter_output_graph):
+        with pytest.raises(RuntimeError) as error:
+            function(cfg, {}, [])
+        message = str(error.value)
+        assert "ST-R1" in message and "ST-R2" in message
+        assert "BIOHUB_STEAL_TWIN_DRY_RUN=1" in message
+
+
+def test_steal_twin_r1c_direct_debug_collector_requirement_and_empty_path_inert(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _r1c_cfg(tmp_path, tmp_path / "debug.jsonl")
+    monkeypatch.setattr(pipeline_module, "new_stats", lambda: pytest.fail("graph work started"))
+    with pytest.raises(RuntimeError, match="run-level collector"):
+        filter_output_graph_pre_linefit(cfg, {}, [])
+
+    cfg = _r1c_cfg(tmp_path)
+
+    class ForbiddenCollector:
+        def allocate(self, _records):
+            pytest.fail("collector called with empty debug path")
+
+    monkeypatch.undo()
+    nodes = {1: _twin_node(1, 0, 0.0)}
+    out_nodes, edges, stats = filter_output_graph_pre_linefit(
+        cfg, nodes, [], twin_debug_collector=ForbiddenCollector()
+    )
+    assert out_nodes is nodes and edges == []
+    assert stats["steal_twin_validation_failed"] == 0
+
+
+def test_steal_twin_r1c_master_off_never_reads_debug_or_calls_twin_components(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _cfg(tmp_path, BIOHUB_STEAL_TWIN_DEBUG_JSONL=str(tmp_path / "forbidden.jsonl"))
+    monkeypatch.setattr(pipeline_module, "plan_twin_only_v1", lambda *args: pytest.fail("planner called"))
+    monkeypatch.setattr(pipeline_module, "score_twin_deepcenter", lambda *args: pytest.fail("scorer called"))
+    nodes = {1: _node(1, 0)}
+    original = nodes[1]
+    out_nodes, edges, stats = filter_output_graph_pre_linefit(cfg, nodes, [])
+    assert out_nodes is nodes and out_nodes[1] is original and edges == []
+    assert all(stats[key] == 0 for key in divisions_module._TWIN_COUNTER_KEYS)
+    assert not (tmp_path / "forbidden.jsonl").exists()
+
+
+def test_steal_twin_r1c_hook_order_planner_rows_callback_and_shared_caches(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _r1c_cfg(tmp_path)
+    nodes = {1: _twin_node(1, 0, 0.0), 2: _twin_node(2, 1, 1.0)}
+    edge = {"source_id": 1, "target_id": 2, "edge_prob": 0.5}
+    events: list[str] = []
+    cache_ids: dict[str, tuple[int, int]] = {}
+
+    def gap(_cfg, current_nodes, current_edges, _stats, **kwargs):
+        events.append("gap")
+        cache_ids["gap"] = (id(kwargs["frame_cache"]), id(kwargs["deepcenter_cache"]))
+        return current_nodes, current_edges
+
+    def gap2(_cfg, current_nodes, current_edges, _stats, **_kwargs):
+        events.append("gap2")
+        return current_nodes, current_edges
+
+    def safe(_cfg, _nodes, current_edges, _stats, **kwargs):
+        events.append("safe")
+        cache_ids["safe"] = (id(kwargs["frame_cache"]), id(kwargs["deepcenter_cache"]))
+        return current_edges
+
+    def planner(_cfg, _dataset, node_rows, edge_rows, callback):
+        events.append("planner")
+        assert type(node_rows) is tuple and type(edge_rows) is tuple
+        assert list(node_rows) == list(nodes.values())
+        assert edge_rows == (edge,)
+        decision = callback(divisions_module.TwinSnapshotNode(4, 9, 1.0, 2.0, 3.0, False))
+        assert decision.accepted
+        return _r1c_empty_plan()
+
+    bundle = {"bundle": True}
+
+    def scorer(_cfg, dataset, t, point, seen_bundle, frame_cache, heatmap_cache):
+        events.append("scorer")
+        assert (dataset, t, point, seen_bundle) == ("ds0", 9, (1.0, 2.0, 3.0), bundle)
+        cache_ids["scorer"] = (id(frame_cache), id(heatmap_cache))
+        return divisions_module.TwinDeepCenterDecision(True, 0.2, None)
+
+    def short(_cfg, current_nodes, current_edges, _stats):
+        events.append("short")
+        return current_nodes, current_edges
+
+    def linefit(_cfg, current_nodes, _edges, _stats):
+        events.append("linefit")
+        return current_nodes
+
+    monkeypatch.setattr(pipeline_module, "close_single_frame_gaps", gap)
+    monkeypatch.setattr(pipeline_module, "recover_strict_gap2", gap2)
+    monkeypatch.setattr(pipeline_module, "add_safe_divisions_postlink", safe)
+    monkeypatch.setattr(pipeline_module, "plan_twin_only_v1", planner)
+    monkeypatch.setattr(pipeline_module, "score_twin_deepcenter", scorer)
+    monkeypatch.setattr(pipeline_module, "filter_short_track_components", short)
+    monkeypatch.setattr(pipeline_module, "linefit_smooth_output_graph", linefit)
+    filter_output_graph(cfg, nodes, [edge], dataset="ds0", deepcenter_bundle=bundle)
+    assert events == ["gap", "gap2", "safe", "planner", "scorer", "short", "linefit"]
+    assert cache_ids["gap"] == cache_ids["safe"] == cache_ids["scorer"]
+
+
+def test_steal_twin_r1c_counter_merge_and_debug_allocation_are_exact(tmp_path: Path, monkeypatch):
+    cfg = _r1c_cfg(tmp_path, tmp_path / "debug.jsonl")
+    planner_values = {key: index for index, key in enumerate(divisions_module._TWIN_COUNTER_KEYS)}
+    planner_values["steal_twin_debug_records_written"] = 0
+    planner_values["steal_twin_debug_records_dropped"] = 0
+    plan = replace(
+        _r1c_empty_plan(),
+        counters=divisions_module.TwinFrozenMapping(tuple(planner_values.items())),
+        debug_records=(_r1c_record(),),
+    )
+    monkeypatch.setattr(pipeline_module, "plan_twin_only_v1", lambda *args: plan)
+    collector = pipeline_module._TwinDebugCollector(0)
+    stats = new_stats()
+    pipeline_module._run_steal_twin_r1_dry_run(cfg, "ds0", {}, [], stats, None, {}, {}, collector)
+    for key, value in planner_values.items():
+        expected = 1 if key == "steal_twin_debug_records_dropped" else value
+        assert stats[key] == expected
+    assert collector.records_written == 0 and collector.records_dropped == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["missing", "extra", "reordered", "bool", "nonint", "negative", "debug", "destination"],
+)
+def test_steal_twin_r1c_counter_corruption_fails_before_allocation(
+    tmp_path: Path, monkeypatch, failure: str
+):
+    cfg = _r1c_cfg(tmp_path, tmp_path / "debug.jsonl")
+    items = [(key, 0) for key in divisions_module._TWIN_COUNTER_KEYS]
+    stats = new_stats()
+    if failure == "missing":
+        items.pop()
+    elif failure == "extra":
+        items.append(("steal_twin_unreviewed", 0))
+    elif failure == "reordered":
+        items = list(reversed(items))
+    elif failure == "bool":
+        items[0] = (items[0][0], False)
+    elif failure == "nonint":
+        items[0] = (items[0][0], 0.0)
+    elif failure == "negative":
+        items[0] = (items[0][0], -1)
+    elif failure == "debug":
+        index = divisions_module._TWIN_COUNTER_KEYS.index("steal_twin_debug_records_written")
+        items[index] = (items[index][0], 1)
+    else:
+        stats[divisions_module._TWIN_COUNTER_KEYS[0]] = 1
+    monkeypatch.setattr(
+        pipeline_module,
+        "plan_twin_only_v1",
+        lambda *args: _r1c_empty_plan(divisions_module.TwinFrozenMapping(tuple(items))),
+    )
+
+    class ForbiddenCollector:
+        def allocate(self, _records):
+            pytest.fail("collector called")
+
+    baseline = dict(stats)
+    with pytest.raises(RuntimeError):
+        pipeline_module._run_steal_twin_r1_dry_run(
+            cfg, "ds0", {}, [], stats, None, {}, {}, ForbiddenCollector()
+        )
+    assert stats == baseline
+
+
+def test_steal_twin_r1c_validation_failed_plan_merges_and_downstream_continues(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _r1c_cfg(tmp_path)
+    counters = [(key, 0) for key in divisions_module._TWIN_COUNTER_KEYS]
+    by_key = dict(counters)
+    by_key["steal_twin_validation_failed"] = 1
+    by_key["steal_twin_validation_missing_node_field"] = 1
+    failed_plan = replace(
+        _r1c_empty_plan(divisions_module.TwinFrozenMapping(tuple(by_key.items()))),
+        validation_reason="missing_node_field",
+    )
+    downstream: list[str] = []
+    monkeypatch.setattr(pipeline_module, "plan_twin_only_v1", lambda *args: failed_plan)
+    monkeypatch.setattr(
+        pipeline_module,
+        "filter_short_track_components",
+        lambda _cfg, nodes, edges, _stats: (downstream.append("short") or nodes, edges),
+    )
+    nodes = {1: _twin_node(1, 0, 0.0)}
+    _, _, stats = filter_output_graph_pre_linefit(cfg, nodes, [], dataset="ds0")
+    assert downstream == ["short"]
+    assert stats["steal_twin_validation_failed"] == 1
+    assert stats["steal_twin_validation_missing_node_field"] == 1
+    assert all(
+        stats[key] == 0
+        for key in divisions_module._TWIN_COUNTER_KEYS
+        if key
+        not in ("steal_twin_validation_failed", "steal_twin_validation_missing_node_field")
+    )
+
+
+def test_steal_twin_r1c_loader_rejects_duplicate_canonical_node_before_overwrite(
+    tmp_path: Path, monkeypatch
+):
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def iter_rows(self, named):
+            assert named is True
+            return iter(self.rows)
+
+    class Graph:
+        def node_attrs(self):
+            return Rows(
+                [
+                    {"node_id": np.int64(1), "t": 0, "z": 0, "y": 0, "x": 0},
+                    {"node_id": 1, "t": 1, "z": 1, "y": 1, "x": 1},
+                ]
+            )
+
+        def edge_attrs(self):
+            pytest.fail("edges read after duplicate")
+
+    geff = tmp_path / "duplicate.geff"
+    monkeypatch.setattr(pipeline_module, "load_geff_graph", lambda path: Graph())
+    with pytest.raises(ValueError, match=r"duplicate\.geff: duplicate node_id 1"):
+        pipeline_module._load_geff_as_dicts(geff)
+
+    class UniqueGraph(Graph):
+        def node_attrs(self):
+            return Rows([{"node_id": np.int64(1), "t": 0, "z": 1, "y": 2, "x": 3}])
+
+        def edge_attrs(self):
+            return Rows([])
+
+    monkeypatch.setattr(pipeline_module, "load_geff_graph", lambda path: UniqueGraph())
+    assert pipeline_module._load_geff_as_dicts(geff) == (
+        {1: {"node_id": 1, "t": 0, "z": 1.0, "y": 2.0, "x": 3.0}},
+        [],
+    )
+
+
+@pytest.mark.parametrize("reason", [None, "conflict", "frame_cap", "video_cap"])
+def test_steal_twin_r1c_exact_debug_top_level_json(reason: str | None, tmp_path: Path):
+    record = _r1c_record(reason=reason)
+    collector = pipeline_module._TwinDebugCollector(1)
+    assert collector.allocate((record,)) == (1, 0)
+    target = tmp_path / "record.jsonl"
+    collector.finalize(target)
+    line = target.read_text()
+    assert line.endswith("\n") and line.count("\n") == 1
+    plain = json.loads(line)
+    assert list(plain) == sorted(plain)
+    assert plain == {
+        "dataset": "ds0",
+        "decision": "accepted" if reason is None else "rejected",
+        "reason": reason,
+        "p": 1,
+        "q": 2,
+        "a": 3,
+        "b": 4,
+        "a2": 5,
+        "b2": 6,
+        "sort_key": [6.9, -3.0, 4.0, 1, 2, 3, 4, 5, 6],
+        "d_pq": 4.0,
+        "d_pa": 0.0,
+        "d_pb": 6.0,
+        "d_ab": 6.0,
+        "d_a2b2": 9.0,
+        "divergence_growth": 3.0,
+        "raw_deepcenter_score": 0.2,
+        "deepcenter_threshold": 0.12,
+        "deepcenter_decision": {"accepted": True, "raw_score": 0.2, "reason": None},
+        "removed_edge": {
+            "source_id": 2,
+            "target_id": 4,
+            "metadata": {
+                "__twin_type__": "mapping",
+                "items": [["source_id", 2], ["target_id", 4], ["edge_prob", 0.7]],
+            },
+        },
+        "planned_edge": {"source_id": 1, "target_id": 4, "distance_um": 6.0, "edge_prob": None},
+    }
+
+
+def test_steal_twin_r1c_codec_covers_every_frozen_type_bits_order_and_unicode(tmp_path: Path):
+    nan_a = struct.unpack(">d", bytes.fromhex("7ff8000000000001"))[0]
+    nan_b = struct.unpack(">d", bytes.fromhex("fff8000000000002"))[0]
+    dtype = divisions_module.TwinFrozenDType(
+        "<i2",
+        (("", "<i2"),),
+        divisions_module.TwinFrozenMapping((("unit", "µm"),)),
+        2,
+        2,
+        "=",
+        None,
+        False,
+        False,
+    )
+    structured = divisions_module.TwinFrozenStructuredScalar((("field", (1, 2)),))
+    scalar = divisions_module.TwinFrozenNumpyScalar(dtype, b"\x01\x02")
+    array_bytes = divisions_module.TwinFrozenArray(dtype, (1,), (2,), True, True, b"\x03\x04", False)
+    array_objects = divisions_module.TwinFrozenArray(dtype, (1,), (8,), True, True, (structured,), True)
+    buffer = divisions_module.TwinFrozenBuffer("memoryview", "B", 1, (2,), (1,), True, b"ab")
+    mapping = divisions_module.TwinFrozenMapping(
+        (
+            (7, (b"raw", complex(1.0, -2.0))),
+            ("set", frozenset(("z", "a"))),
+            ("nan_a", nan_a),
+            ("nan_b", nan_b),
+            ("inf", float("inf")),
+            ("dtype", dtype),
+            ("structured", structured),
+            ("scalar", scalar),
+            ("array_bytes", array_bytes),
+            ("array_objects", array_objects),
+            ("buffer", buffer),
+            ("input_position", "caller-owned"),
+        )
+    )
+    record = _r1c_record(metadata=mapping)
+    mapping_clone = pickle.loads(pickle.dumps(mapping))
+    assert mapping_clone is not mapping
+    assert tuple(key for key, _value in mapping_clone.items_snapshot) == tuple(
+        key for key, _value in mapping.items_snapshot
+    )
+    assert struct.pack(">d", mapping_clone.items_snapshot[2][1]).hex() == "7ff8000000000001"
+    assert struct.pack(">d", mapping_clone.items_snapshot[3][1]).hex() == "fff8000000000002"
+    first = pipeline_module._TwinDebugCollector(1)
+    second = pipeline_module._TwinDebugCollector(1)
+    first.allocate((record,))
+    second.allocate((_r1c_record(metadata=mapping_clone),))
+    path_a, path_b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    first.finalize(path_a)
+    second.finalize(path_b)
+    assert path_a.read_bytes() == path_b.read_bytes()
+    assert b"\\u00b5m" in path_a.read_bytes()
+    metadata_plain = json.loads(path_a.read_text())["removed_edge"]["metadata"]
+    dtype_plain = {
+        "__twin_type__": "numpy_dtype",
+        "string": "<i2",
+        "descriptor": {
+            "__twin_type__": "tuple",
+            "items": [
+                {"__twin_type__": "tuple", "items": ["", "<i2"]},
+            ],
+        },
+        "metadata": {
+            "__twin_type__": "mapping",
+            "items": [["unit", "µm"]],
+        },
+        "itemsize": 2,
+        "alignment": 2,
+        "byteorder": "=",
+        "names": None,
+        "hasobject": False,
+        "aligned_struct": False,
+    }
+    structured_plain = {
+        "__twin_type__": "numpy_structured_scalar",
+        "fields": [["field", {"__twin_type__": "tuple", "items": [1, 2]}]],
+    }
+    assert metadata_plain == {
+        "__twin_type__": "mapping",
+        "items": [
+            [
+                7,
+                {
+                    "__twin_type__": "tuple",
+                    "items": [
+                        {"__twin_type__": "bytes", "hex": "726177"},
+                        {"__twin_type__": "complex", "real": 1.0, "imag": -2.0},
+                    ],
+                },
+            ],
+            ["set", {"__twin_type__": "frozenset", "items": ["a", "z"]}],
+            ["nan_a", {"__twin_type__": "float", "value": "nan", "bits_hex": "7ff8000000000001"}],
+            ["nan_b", {"__twin_type__": "float", "value": "nan", "bits_hex": "fff8000000000002"}],
+            ["inf", {"__twin_type__": "float", "value": "+inf", "bits_hex": "7ff0000000000000"}],
+            ["dtype", dtype_plain],
+            ["structured", structured_plain],
+            ["scalar", {"__twin_type__": "numpy_scalar", "dtype": dtype_plain, "content": "0102"}],
+            [
+                "array_bytes",
+                {
+                    "__twin_type__": "numpy_array",
+                    "dtype": dtype_plain,
+                    "shape": [1],
+                    "strides": [2],
+                    "c_contiguous": True,
+                    "f_contiguous": True,
+                    "object_content": False,
+                    "content_hex": "0304",
+                },
+            ],
+            [
+                "array_objects",
+                {
+                    "__twin_type__": "numpy_array",
+                    "dtype": dtype_plain,
+                    "shape": [1],
+                    "strides": [8],
+                    "c_contiguous": True,
+                    "f_contiguous": True,
+                    "object_content": True,
+                    "content": {"__twin_type__": "tuple", "items": [structured_plain]},
+                },
+            ],
+            [
+                "buffer",
+                {
+                    "__twin_type__": "buffer",
+                    "kind": "memoryview",
+                    "format": "B",
+                    "itemsize": 1,
+                    "shape": [2],
+                    "strides": [1],
+                    "readonly": True,
+                    "content_hex": "6162",
+                },
+            ],
+            ["input_position", "caller-owned"],
+        ],
+    }
+    items = dict((json.dumps(key, sort_keys=True), value) for key, value in metadata_plain["items"])
+    assert items['"nan_a"']["bits_hex"] == "7ff8000000000001"
+    assert items['"nan_b"']["bits_hex"] == "fff8000000000002"
+    assert items['"inf"']["value"] == "+inf"
+    assert items['"dtype"']["__twin_type__"] == "numpy_dtype"
+    assert items['"structured"']["__twin_type__"] == "numpy_structured_scalar"
+    assert items['"scalar"']["__twin_type__"] == "numpy_scalar"
+    assert items['"array_bytes"']["content_hex"] == "0304"
+    assert items['"array_objects"']["content"]["__twin_type__"] == "tuple"
+    assert items['"buffer"']["content_hex"] == "6162"
+    assert items['"input_position"'] == "caller-owned"
+    assert "input_position" not in json.loads(path_a.read_text())["removed_edge"]
+
+
+def test_steal_twin_r1c_mapping_order_is_lossless_and_frozenset_is_canonical():
+    mapping_a = divisions_module.TwinFrozenMapping((("a", 1), ("b", 2)))
+    mapping_b = divisions_module.TwinFrozenMapping((("b", 2), ("a", 1)))
+    plain_a = pipeline_module._twin_frozen_value_plain(mapping_a)
+    plain_b = pipeline_module._twin_frozen_value_plain(mapping_b)
+    assert plain_a["items"] == [["a", 1], ["b", 2]]
+    assert plain_b["items"] == [["b", 2], ["a", 1]]
+    assert json.dumps(plain_a, sort_keys=True) != json.dumps(plain_b, sort_keys=True)
+    set_a = frozenset(["a", "b", "c"])
+    set_b = frozenset(reversed(["a", "b", "c"]))
+    assert pipeline_module._twin_frozen_value_plain(set_a) == pipeline_module._twin_frozen_value_plain(set_b)
+
+
+def _r1c_malformed_record(case: str):
+    record = _r1c_record()
+    if case == "record":
+        return object()
+    if case == "dataset":
+        return replace(record, dataset=1)
+    if case == "decision":
+        return replace(record, decision="unknown")
+    if case == "reason":
+        return replace(record, decision="rejected", reason="unknown")
+    if case == "role":
+        return replace(record, p=True)
+    if case == "sort_type":
+        return replace(record, sort_key=list(record.sort_key))
+    if case == "sort_length":
+        return replace(record, sort_key=record.sort_key[:-1])
+    if case == "sort_float":
+        return replace(record, sort_key=(float("nan"), *record.sort_key[1:]))
+    if case == "sort_roles":
+        return replace(record, sort_key=(*record.sort_key[:3], 9, 2, 3, 4, 5, 6))
+    if case == "distance_type":
+        return replace(record, d_pq=4)
+    if case == "distance_nonfinite":
+        return replace(record, d_pq=float("inf"))
+    if case == "threshold":
+        return replace(record, deepcenter_threshold=0.13)
+    if case == "deepcenter":
+        return replace(record, deepcenter_decision=divisions_module.TwinDeepCenterDecision(False, 0.2, None))
+    if case == "deepcenter_accepted_int":
+        return replace(record, deepcenter_decision=divisions_module.TwinDeepCenterDecision(1, 0.2, None))
+    if case == "deepcenter_accepted_numpy_bool":
+        return replace(
+            record,
+            deepcenter_decision=divisions_module.TwinDeepCenterDecision(np.bool_(True), 0.2, None),
+        )
+    if case == "removed":
+        return replace(record, removed_edge=divisions_module.TwinEdgeRecord(9, 4, record.removed_edge.metadata))
+    if case == "planned_type":
+        return replace(record, planned_edge=object())
+    return replace(record, planned_edge=divisions_module.TwinPlannedEdge(1, 4, 6.1))
+
+
+@pytest.mark.parametrize("capacity", [0, 1])
+@pytest.mark.parametrize(
+    ("case", "error_type"),
+    [
+        ("record", TypeError),
+        ("dataset", TypeError),
+        ("decision", ValueError),
+        ("reason", ValueError),
+        ("role", TypeError),
+        ("sort_type", TypeError),
+        ("sort_length", ValueError),
+        ("sort_float", ValueError),
+        ("sort_roles", ValueError),
+        ("distance_type", TypeError),
+        ("distance_nonfinite", ValueError),
+        ("threshold", ValueError),
+        ("deepcenter", ValueError),
+        ("deepcenter_accepted_int", TypeError),
+        ("deepcenter_accepted_numpy_bool", TypeError),
+        ("removed", ValueError),
+        ("planned_type", TypeError),
+        ("planned_value", ValueError),
+    ],
+)
+def test_steal_twin_r1c_all_common_record_failures_are_capacity_independent(
+    capacity: int, case: str, error_type: type[Exception]
+):
+    collector = pipeline_module._TwinDebugCollector(capacity)
+    with pytest.raises(error_type, match=r"record 0"):
+        collector.allocate((_r1c_malformed_record(case),))
+    assert collector.records_written == collector.records_dropped == 0
+
+
+def test_steal_twin_r1c_mixed_dataset_and_nonsequence_fail_atomically():
+    collector = pipeline_module._TwinDebugCollector(2)
+    with pytest.raises(TypeError, match="Sequence"):
+        collector.allocate(iter((_r1c_record(),)))
+    with pytest.raises(ValueError, match=r"record 1.*dataset"):
+        collector.allocate((_r1c_record("a"), _r1c_record("b")))
+    assert collector.records_written == collector.records_dropped == 0
+
+
+def test_steal_twin_r1c_dropped_metadata_is_not_encoded_but_retained_metadata_is():
+    forged = divisions_module.TwinFrozenMapping((("unsupported", object()),))
+    record = _r1c_record(metadata=forged)
+    retained = pipeline_module._TwinDebugCollector(1)
+    with pytest.raises(TypeError, match="unsupported frozen twin value"):
+        retained.allocate((record,))
+    assert retained.records_written == retained.records_dropped == 0
+    dropped = pipeline_module._TwinDebugCollector(0)
+    assert dropped.allocate((record,)) == (0, 1)
+    assert dropped.records_written == 0 and dropped.records_dropped == 1
+
+
+def test_steal_twin_r1c_global_capacity_and_finalized_state(tmp_path: Path):
+    for invalid in (-1, True, 1.0):
+        with pytest.raises(ValueError, match="nonnegative built-in int"):
+            pipeline_module._TwinDebugCollector(invalid)
+
+    empty = pipeline_module._TwinDebugCollector(0)
+    zero_target = tmp_path / "zero.jsonl"
+    assert empty.allocate(()) == (0, 0)
+    empty.finalize(zero_target)
+    assert zero_target.read_bytes() == b""
+
+    collector = pipeline_module._TwinDebugCollector(2)
+    assert collector.allocate((_r1c_record("a"),)) == (1, 0)
+    assert collector.allocate((_r1c_record("b"),)) == (1, 0)
+    assert collector.allocate((_r1c_record("c"),)) == (0, 1)
+    assert collector.allocate(()) == (0, 0)
+    target = tmp_path / "bounded.jsonl"
+    collector.finalize(target)
+    assert [json.loads(line)["dataset"] for line in target.read_text().splitlines()] == ["a", "b"]
+    assert collector.records_written == 2 and collector.records_dropped == 1
+    with pytest.raises(RuntimeError):
+        collector.allocate(())
+    with pytest.raises(RuntimeError):
+        collector.finalize(target)
+
+
+class _R1cFaultingFile:
+    def __init__(self, wrapped, phase: str, *, cleanup_close_fails: bool = False):
+        self._wrapped = wrapped
+        self._phase = phase
+        self._failed = False
+        self._cleanup_close_fails = cleanup_close_fails
+        self.name = wrapped.name
+
+    def _fail_once(self, phase: str):
+        if self._phase == phase and not self._failed:
+            self._failed = True
+            raise OSError(f"synthetic {phase}")
+
+    def write(self, value):
+        self._fail_once("write")
+        return self._wrapped.write(value)
+
+    def flush(self):
+        self._fail_once("flush")
+        return self._wrapped.flush()
+
+    def fileno(self):
+        return self._wrapped.fileno()
+
+    def close(self):
+        if self._cleanup_close_fails and self._failed:
+            raise OSError("synthetic cleanup close")
+        self._fail_once("close")
+        return self._wrapped.close()
+
+
+@pytest.mark.parametrize("phase", ["parent", "temp", "write", "flush", "fsync", "close", "replace"])
+def test_steal_twin_r1c_every_finalize_failure_is_atomic_and_retryable(
+    tmp_path: Path, monkeypatch, phase: str
+):
+    collector = pipeline_module._TwinDebugCollector(1)
+    collector.allocate((_r1c_record(),))
+    expected_lines = tuple(collector._lines)
+    expected_bytes = "".join(expected_lines).encode("utf-8")
+    target = tmp_path / "atomic" / "debug.jsonl"
+    target.parent.mkdir()
+    target.write_bytes(b"stale\n")
+    real_factory = pipeline_module.tempfile.NamedTemporaryFile
+
+    with monkeypatch.context() as patch:
+        if phase == "parent":
+            patch.setattr(Path, "mkdir", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("synthetic parent")))
+        elif phase == "temp":
+            patch.setattr(
+                pipeline_module.tempfile,
+                "NamedTemporaryFile",
+                lambda **kwargs: (_ for _ in ()).throw(OSError("synthetic temp")),
+            )
+        elif phase in ("write", "flush", "close"):
+            patch.setattr(
+                pipeline_module.tempfile,
+                "NamedTemporaryFile",
+                lambda **kwargs: _R1cFaultingFile(real_factory(**kwargs), phase),
+            )
+        elif phase == "fsync":
+            patch.setattr(pipeline_module.os, "fsync", lambda _fd: (_ for _ in ()).throw(OSError("synthetic fsync")))
+        else:
+            patch.setattr(
+                pipeline_module.os,
+                "replace",
+                lambda *_args: (_ for _ in ()).throw(OSError("synthetic replace")),
+            )
+        with pytest.raises(OSError, match=f"synthetic {phase}"):
+            collector.finalize(target)
+
+    assert target.read_bytes() == b"stale\n"
+    assert tuple(collector._lines) == expected_lines
+    assert collector._finalized is False
+    assert collector.records_written == 1 and collector.records_dropped == 0
+    assert list(target.parent.glob(f".{target.name}.*.tmp")) == []
+    collector.finalize(target)
+    assert target.read_bytes() == expected_bytes
+
+
+@pytest.mark.parametrize("cleanup_failure", ["close", "unlink", "both"])
+def test_steal_twin_r1c_cleanup_failure_never_masks_operational_error(
+    tmp_path: Path, monkeypatch, cleanup_failure: str
+):
+    collector = pipeline_module._TwinDebugCollector(1)
+    collector.allocate((_r1c_record(),))
+    expected_lines = tuple(collector._lines)
+    expected_bytes = "".join(expected_lines).encode("utf-8")
+    target = tmp_path / "debug.jsonl"
+    target.write_bytes(b"stale")
+    real_factory = pipeline_module.tempfile.NamedTemporaryFile
+    real_unlink = Path.unlink
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            pipeline_module.tempfile,
+            "NamedTemporaryFile",
+            lambda **kwargs: _R1cFaultingFile(
+                real_factory(**kwargs),
+                "write",
+                cleanup_close_fails=cleanup_failure in ("close", "both"),
+            ),
+        )
+        if cleanup_failure in ("unlink", "both"):
+            patch.setattr(
+                Path,
+                "unlink",
+                lambda *args, **kwargs: (_ for _ in ()).throw(OSError("cleanup unlink")),
+            )
+        with pytest.raises(OSError, match="synthetic write"):
+            collector.finalize(target)
+    residual = list(tmp_path.glob(f".{target.name}.*.tmp"))
+    assert len(residual) == (1 if cleanup_failure in ("unlink", "both") else 0)
+    assert target.read_bytes() == b"stale"
+    assert tuple(collector._lines) == expected_lines
+    assert collector._finalized is False
+    assert collector.records_written == 1 and collector.records_dropped == 0
+    if residual:
+        real_unlink(residual[0])
+    collector.finalize(target)
+    assert target.read_bytes() == expected_bytes
+
+
+def _r1c_assert_alias_rejected_by_both_runs(
+    tmp_path: Path,
+    monkeypatch,
+    geff_dir: Path,
+    debug_path: Path,
+) -> None:
+    cfg = _r1c_cfg(tmp_path, debug_path)
+    monkeypatch.setattr(
+        pipeline_module,
+        "load_deepcenter_veto_detector",
+        lambda _cfg: pytest.fail("detector loaded before alias rejection"),
+    )
+    with pytest.raises(ValueError) as run_error:
+        pipeline_module.run_postproc(geff_dir, tmp_path / "submission.csv", cfg)
+    assert str(debug_path) in str(run_error.value)
+    with pytest.raises(ValueError) as checkpoint_error:
+        pipeline_module.save_prelinefit_checkpoint(geff_dir, tmp_path / "checkpoint", cfg)
+    assert str(debug_path) in str(checkpoint_error.value)
+    assert not (tmp_path / "submission.csv").exists()
+    assert not (tmp_path / "checkpoint").exists()
+
+
+@pytest.mark.parametrize("location", ["root", "child", "deep"])
+@pytest.mark.parametrize("symlink_bundle", [False, True])
+def test_steal_twin_r1c_rejects_complete_bundle_tree_before_activity(
+    tmp_path: Path, monkeypatch, location: str, symlink_bundle: bool
+):
+    real_bundle = tmp_path / "real_bundle"
+    real_bundle.mkdir()
+    (real_bundle / "a.geff").mkdir()
+    if symlink_bundle:
+        geff_dir = tmp_path / "bundle_link"
+        geff_dir.symlink_to(real_bundle, target_is_directory=True)
+    else:
+        geff_dir = real_bundle
+    debug_path = {
+        "root": real_bundle,
+        "child": real_bundle / "debug.jsonl",
+        "deep": real_bundle / "nested" / "debug.jsonl",
+    }[location]
+    _r1c_assert_alias_rejected_by_both_runs(tmp_path, monkeypatch, geff_dir, debug_path)
+
+
+@pytest.mark.parametrize("debug_kind", ["inside", "below_symlink", "leaf_symlink"])
+def test_steal_twin_r1c_rejects_resolved_symlinked_geff_tree(
+    tmp_path: Path, monkeypatch, debug_kind: str
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    external_geff = tmp_path / "external" / "a-real.geff"
+    external_geff.mkdir(parents=True)
+    (bundle / "a.geff").symlink_to(external_geff, target_is_directory=True)
+    if debug_kind == "inside":
+        debug = external_geff / "debug.jsonl"
+    elif debug_kind == "below_symlink":
+        debug = bundle / "a.geff" / "nested" / "debug.jsonl"
+    else:
+        outside = tmp_path / "outside.jsonl"
+        outside.write_text("outside")
+        debug = external_geff / "debug-link.jsonl"
+        debug.symlink_to(outside)
+    _r1c_assert_alias_rejected_by_both_runs(tmp_path, monkeypatch, bundle, debug)
+
+
+@pytest.mark.parametrize("kind", ["equal", "hardlink", "bundle_sibling"])
+def test_steal_twin_r1c_regular_file_geff_alias_rules(
+    tmp_path: Path, monkeypatch, kind: str
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    geff = bundle / "a.geff"
+    geff.write_bytes(b"geff")
+    if kind == "equal":
+        debug = geff
+    elif kind == "hardlink":
+        debug = tmp_path / "hardlink.jsonl"
+        os.link(geff, debug)
+    else:
+        debug = bundle / "debug.jsonl"
+    _r1c_assert_alias_rejected_by_both_runs(tmp_path, monkeypatch, bundle, debug)
+
+
+def test_steal_twin_r1c_regular_geff_external_sibling_and_unrelated_target_are_allowed(
+    tmp_path: Path,
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    geff_target = external / "a-real.geff"
+    geff_target.write_bytes(b"geff")
+    geff = bundle / "a.geff"
+    geff.symlink_to(geff_target)
+    for debug in (external / "sibling.jsonl", tmp_path / "unrelated.jsonl"):
+        pipeline_module._reject_twin_debug_aliases(bundle, (geff,), debug, ())
+
+
+def test_steal_twin_r1c_rejects_run_and_checkpoint_artifact_aliases(
+    tmp_path: Path, monkeypatch
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "a.geff").mkdir()
+    out_csv = tmp_path / "submission.csv"
+    stats_path = tmp_path / "stats.csv"
+    checkpoint = tmp_path / "checkpoint"
+    monkeypatch.setattr(
+        pipeline_module,
+        "load_deepcenter_veto_detector",
+        lambda _cfg: pytest.fail("detector loaded before artifact alias rejection"),
+    )
+    for debug in (out_csv, stats_path):
+        cfg = _r1c_cfg(tmp_path, debug)
+        with pytest.raises(ValueError):
+            pipeline_module.run_postproc(bundle, out_csv, cfg, run_stats_path=stats_path)
+    for debug in (
+        checkpoint,
+        checkpoint / pipeline_module.CHECKPOINT_MANIFEST_NAME,
+        checkpoint / "a.pkl",
+    ):
+        cfg = _r1c_cfg(tmp_path, debug)
+        with pytest.raises(ValueError):
+            pipeline_module.save_prelinefit_checkpoint(bundle, checkpoint, cfg)
+    assert not out_csv.exists() and not checkpoint.exists()
+
+
+@pytest.mark.parametrize("artifact_kind", ["out_csv", "run_stats"])
+@pytest.mark.parametrize("debug_kind", ["directory", "symlink"])
+def test_steal_twin_r1c_rejects_run_artifact_below_debug_target_before_activity(
+    tmp_path: Path,
+    monkeypatch,
+    artifact_kind: str,
+    debug_kind: str,
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "a.geff").mkdir()
+    protected_root = tmp_path / "protected-root"
+    protected_root.mkdir()
+    sentinel = protected_root / "sentinel.txt"
+    sentinel.write_bytes(b"sentinel")
+    if debug_kind == "symlink":
+        debug = tmp_path / "protected-link"
+        debug.symlink_to(protected_root, target_is_directory=True)
+    else:
+        debug = protected_root
+    out_csv = debug / "submission.csv" if artifact_kind == "out_csv" else tmp_path / "submission.csv"
+    stats_path = debug / "run_stats.csv" if artifact_kind == "run_stats" else tmp_path / "run_stats.csv"
+    cfg = _r1c_cfg(tmp_path, debug)
+    monkeypatch.setattr(
+        pipeline_module,
+        "load_deepcenter_veto_detector",
+        lambda _cfg: pytest.fail("detector loaded before ancestor alias rejection"),
+    )
+    with pytest.raises(ValueError) as error:
+        pipeline_module.run_postproc(bundle, out_csv, cfg, run_stats_path=stats_path)
+    assert str(debug) in str(error.value)
+    assert sentinel.read_bytes() == b"sentinel"
+    assert not out_csv.exists() and not stats_path.exists()
+    if debug_kind == "symlink":
+        assert debug.is_symlink() and debug.resolve() == protected_root.resolve()
+    else:
+        assert debug.is_dir()
+
+
+@pytest.mark.parametrize("debug_kind", ["directory", "symlink"])
+def test_steal_twin_r1c_rejects_checkpoint_below_debug_target_before_activity(
+    tmp_path: Path, monkeypatch, debug_kind: str
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "a.geff").mkdir()
+    protected_root = tmp_path / "protected-root"
+    protected_root.mkdir()
+    sentinel = protected_root / "sentinel.txt"
+    sentinel.write_bytes(b"sentinel")
+    if debug_kind == "symlink":
+        debug = tmp_path / "protected-link"
+        debug.symlink_to(protected_root, target_is_directory=True)
+    else:
+        debug = protected_root
+    checkpoint = debug / "checkpoint"
+    cfg = _r1c_cfg(tmp_path, debug)
+    monkeypatch.setattr(
+        pipeline_module,
+        "load_deepcenter_veto_detector",
+        lambda _cfg: pytest.fail("detector loaded before ancestor alias rejection"),
+    )
+    with pytest.raises(ValueError) as error:
+        pipeline_module.save_prelinefit_checkpoint(bundle, checkpoint, cfg)
+    assert str(debug) in str(error.value)
+    assert sentinel.read_bytes() == b"sentinel" and not checkpoint.exists()
+    if debug_kind == "symlink":
+        assert debug.is_symlink() and debug.resolve() == protected_root.resolve()
+    else:
+        assert debug.is_dir()
+
+
+@pytest.mark.parametrize(
+    "artifact_kind",
+    ["out_csv", "run_stats", "checkpoint_manifest", "checkpoint_pickle"],
+)
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_steal_twin_r1c_rejects_debug_below_ordinary_artifact_before_activity(
+    tmp_path: Path,
+    monkeypatch,
+    artifact_kind: str,
+    preexisting: bool,
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "a.geff").mkdir()
+    out_csv = tmp_path / "submission.csv"
+    stats_path = tmp_path / "run_stats.csv"
+    checkpoint = tmp_path / "checkpoint"
+    protected = {
+        "out_csv": out_csv,
+        "run_stats": stats_path,
+        "checkpoint_manifest": checkpoint / pipeline_module.CHECKPOINT_MANIFEST_NAME,
+        "checkpoint_pickle": checkpoint / "a.pkl",
+    }[artifact_kind]
+    if preexisting:
+        protected.parent.mkdir(parents=True, exist_ok=True)
+        protected.write_bytes(b"protected-sentinel")
+    debug = protected / "debug.jsonl"
+    cfg = _r1c_cfg(tmp_path, debug)
+    monkeypatch.setattr(
+        pipeline_module,
+        "load_deepcenter_veto_detector",
+        lambda _cfg: pytest.fail("detector loaded before descendant alias rejection"),
+    )
+
+    with pytest.raises(ValueError) as error:
+        if artifact_kind.startswith("checkpoint_"):
+            pipeline_module.save_prelinefit_checkpoint(bundle, checkpoint, cfg)
+        else:
+            pipeline_module.run_postproc(bundle, out_csv, cfg, run_stats_path=stats_path)
+
+    assert str(debug) in str(error.value)
+    assert not debug.exists()
+    if preexisting:
+        assert protected.read_bytes() == b"protected-sentinel"
+    else:
+        assert not protected.exists()
+    if artifact_kind == "out_csv":
+        assert not stats_path.exists()
+    elif artifact_kind == "run_stats":
+        assert not out_csv.exists()
+
+
+@pytest.mark.parametrize("input_kind", ["bundle_ancestor", "external_geff_ancestor"])
+@pytest.mark.parametrize("debug_kind", ["directory", "symlink"])
+def test_steal_twin_r1c_rejects_input_below_debug_target_before_both_runs(
+    tmp_path: Path,
+    monkeypatch,
+    input_kind: str,
+    debug_kind: str,
+):
+    real_root = tmp_path / "real-input"
+    real_root.mkdir()
+    sentinel = real_root / "sentinel.txt"
+    sentinel.write_bytes(b"sentinel")
+    if debug_kind == "symlink":
+        debug = tmp_path / "input-link"
+        debug.symlink_to(real_root, target_is_directory=True)
+    else:
+        debug = real_root
+
+    if input_kind == "bundle_ancestor":
+        geff_dir = debug / "bundle"
+        geff_dir.mkdir()
+        (geff_dir / "a.geff").mkdir()
+        protected_geff = geff_dir / "a.geff"
+    else:
+        geff_dir = tmp_path / "bundle"
+        geff_dir.mkdir()
+        real_geff = debug / "a-real.geff"
+        real_geff.mkdir()
+        protected_geff = geff_dir / "a.geff"
+        protected_geff.symlink_to(real_geff, target_is_directory=True)
+
+    _r1c_assert_alias_rejected_by_both_runs(tmp_path, monkeypatch, geff_dir, debug)
+    assert sentinel.read_bytes() == b"sentinel"
+    assert protected_geff.resolve(strict=True).is_dir()
+    if debug_kind == "symlink":
+        assert debug.is_symlink() and debug.resolve() == real_root.resolve()
+    else:
+        assert debug.is_dir()
+
+
+def test_steal_twin_r1c_run_entry_guards_precede_detector_and_outputs(tmp_path: Path, monkeypatch):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "a.geff").mkdir()
+    cfg = build_config(test_dir=tmp_path, profile="e23_twin_only_v1")
+    monkeypatch.setattr(
+        pipeline_module,
+        "load_deepcenter_veto_detector",
+        lambda _cfg: pytest.fail("detector loaded"),
+    )
+    with pytest.raises(RuntimeError, match="ST-R1"):
+        pipeline_module.run_postproc(bundle, tmp_path / "submission.csv", cfg)
+    with pytest.raises(RuntimeError, match="ST-R1"):
+        pipeline_module.save_prelinefit_checkpoint(bundle, tmp_path / "checkpoint", cfg)
+    assert not (tmp_path / "submission.csv").exists()
+    assert not (tmp_path / "checkpoint").exists()
+
+
+def test_steal_twin_r1c_dry_run_preserves_graph_rows_metadata_and_never_applies_plan(
+    tmp_path: Path, monkeypatch
+):
+    cfg_on = _r1c_cfg(tmp_path)
+    cfg_off = replace(cfg_on, OUTPUT_STEAL_TWIN_REWIRE=False)
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    on_nodes_list, on_edges = _twin_motif()
+    off_nodes_list = [dict(node) for node in on_nodes_list]
+    off_edges = [dict(edge) for edge in on_edges]
+    on_nodes = {int(node["node_id"]): node for node in on_nodes_list}
+    off_nodes = {int(node["node_id"]): node for node in off_nodes_list}
+    on_node_ids = {key: id(value) for key, value in on_nodes.items()}
+    on_edge_ids = [id(edge) for edge in on_edges]
+    nested = on_edges[2]["nested"]
+
+    result_on = filter_output_graph_pre_linefit(cfg_on, on_nodes, on_edges, dataset="ds0")
+    result_off = filter_output_graph_pre_linefit(cfg_off, off_nodes, off_edges, dataset="ds0")
+    on_out_nodes, on_out_edges, on_stats = result_on
+    off_out_nodes, off_out_edges, off_stats = result_off
+    assert on_out_nodes == off_out_nodes
+    assert on_out_edges == off_out_edges
+    assert {key: id(value) for key, value in on_out_nodes.items()} == on_node_ids
+    assert [id(edge) for edge in on_out_edges] == on_edge_ids
+    assert on_out_edges[2]["nested"] is nested
+    assert on_stats["steal_twin_accepted"] == 1
+    assert on_stats["steal_twin_edges_removed"] == on_stats["steal_twin_edges_added"] == 0
+    assert next(edge for edge in on_out_edges if edge["source_id"] == 2 and edge["target_id"] == 4) is on_edges[2]
+    assert not any(edge["source_id"] == 1 and edge["target_id"] == 4 for edge in on_out_edges)
+    assert all(off_stats[key] == 0 for key in divisions_module._TWIN_COUNTER_KEYS)
+    non_twin = [key for key in on_stats if not key.startswith("steal_twin_")]
+    assert {key: on_stats[key] for key in non_twin} == {key: off_stats[key] for key in non_twin}
+
+    repeated_nodes, repeated_edges, repeated_stats = filter_output_graph_pre_linefit(
+        cfg_on, on_nodes, on_edges, dataset="ds0"
+    )
+    assert repeated_nodes is on_out_nodes
+    assert [id(edge) for edge in repeated_edges] == on_edge_ids
+    assert repeated_edges == on_out_edges and repeated_stats == on_stats
+
+
+def test_steal_twin_r1c_master_off_and_dry_run_write_identical_csv_rows(
+    tmp_path: Path, monkeypatch
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "ds0.geff").mkdir()
+    cfg_on = _r1c_cfg(tmp_path)
+    cfg_off = replace(cfg_on, OUTPUT_STEAL_TWIN_REWIRE=False)
+
+    def load(_path):
+        nodes, edges = _twin_motif()
+        return {int(node["node_id"]): node for node in nodes}, edges
+
+    monkeypatch.setattr(pipeline_module, "_load_geff_as_dicts", load)
+    monkeypatch.setattr(pipeline_module, "load_deepcenter_veto_detector", lambda _cfg: None)
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    off_csv = tmp_path / "off.csv"
+    on_csv = tmp_path / "on.csv"
+    pipeline_module.run_postproc(bundle, off_csv, cfg_off, tmp_path / "off-stats.csv")
+    pipeline_module.run_postproc(bundle, on_csv, cfg_on, tmp_path / "on-stats.csv")
+    assert on_csv.read_bytes() == off_csv.read_bytes()
+
+
+def test_steal_twin_r1c_run_and_checkpoint_share_one_collector_and_serialize_final_counts(
+    tmp_path: Path, monkeypatch
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    for dataset in ("b", "a"):
+        (bundle / f"{dataset}.geff").mkdir()
+
+    def load(_path):
+        nodes, edges = _twin_motif()
+        return {int(node["node_id"]): node for node in nodes}, edges
+
+    monkeypatch.setattr(pipeline_module, "_load_geff_as_dicts", load)
+    monkeypatch.setattr(pipeline_module, "load_deepcenter_veto_detector", lambda _cfg: None)
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    real_adapter = pipeline_module._run_steal_twin_r1_dry_run
+    collector_ids: list[int] = []
+    dataset_stats_seen: list[tuple[str, int, int]] = []
+    run_stats_seen: list[list[tuple[str, int, int]]] = []
+    pickle_stats_seen: list[tuple[str, int, int]] = []
+    finalize_totals: dict[str, tuple[int, int]] = {}
+
+    def adapter(*args):
+        collector_ids.append(id(args[-1]))
+        return real_adapter(*args)
+
+    monkeypatch.setattr(pipeline_module, "_run_steal_twin_r1_dry_run", adapter)
+    real_dataset_stats_row = pipeline_module._dataset_stats_row
+
+    def dataset_stats_row(dataset, nodes, edges, stats, raw_count, sources):
+        dataset_stats_seen.append(
+            (
+                dataset,
+                stats["steal_twin_debug_records_written"],
+                stats["steal_twin_debug_records_dropped"],
+            )
+        )
+        return real_dataset_stats_row(dataset, nodes, edges, stats, raw_count, sources)
+
+    monkeypatch.setattr(pipeline_module, "_dataset_stats_row", dataset_stats_row)
+    real_write_run_stats = pipeline_module.write_run_stats
+
+    def write_run_stats(rows, path):
+        run_stats_seen.append(
+            [
+                (
+                    row["dataset"],
+                    row["steal_twin_debug_records_written"],
+                    row["steal_twin_debug_records_dropped"],
+                )
+                for row in rows
+            ]
+        )
+        return real_write_run_stats(rows, path)
+
+    monkeypatch.setattr(pipeline_module, "write_run_stats", write_run_stats)
+    real_pickle_dump = pipeline_module.pickle.dump
+
+    def pickle_dump(payload, handle, *, protocol):
+        pickle_stats_seen.append(
+            (
+                payload["dataset"],
+                payload["stats"]["steal_twin_debug_records_written"],
+                payload["stats"]["steal_twin_debug_records_dropped"],
+            )
+        )
+        return real_pickle_dump(payload, handle, protocol=protocol)
+
+    monkeypatch.setattr(pipeline_module.pickle, "dump", pickle_dump)
+    real_finalize = pipeline_module._TwinDebugCollector.finalize
+    finalized_after: list[str] = []
+
+    def finalize(self, path):
+        finalize_totals[path.name] = (self.records_written, self.records_dropped)
+        if path.name == "run.jsonl":
+            assert (tmp_path / "submission.csv").read_text().startswith("id,dataset")
+            assert (tmp_path / "run_stats.csv").exists()
+        else:
+            checkpoint = tmp_path / "checkpoint"
+            assert (checkpoint / "manifest.json").exists()
+            assert all((checkpoint / f"{dataset}.pkl").exists() for dataset in ("a", "b"))
+        finalized_after.append(path.name)
+        return real_finalize(self, path)
+
+    monkeypatch.setattr(pipeline_module._TwinDebugCollector, "finalize", finalize)
+
+    run_debug = tmp_path / "run.jsonl"
+    run_cfg = _r1c_cfg(tmp_path, run_debug)
+    result = pipeline_module.run_postproc(bundle, tmp_path / "submission.csv", run_cfg)
+    assert result["datasets"] == ["a", "b"]
+    assert [json.loads(line)["dataset"] for line in run_debug.read_text().splitlines()] == ["a", "b"]
+    with (tmp_path / "run_stats.csv").open(newline="") as handle:
+        stats_rows = list(csv.DictReader(handle))
+    assert [row["dataset"] for row in stats_rows] == ["a", "b"]
+    assert sum(int(row["steal_twin_debug_records_written"]) for row in stats_rows) == 2
+    assert len(set(collector_ids)) == 1
+    assert dataset_stats_seen == [("a", 1, 0), ("b", 1, 0)]
+    assert run_stats_seen == [[("a", 1, 0), ("b", 1, 0)]]
+    assert finalize_totals["run.jsonl"] == (2, 0)
+
+    collector_ids.clear()
+    checkpoint_debug = tmp_path / "checkpoint.jsonl"
+    checkpoint_cfg = _r1c_cfg(tmp_path, checkpoint_debug)
+    manifest = pipeline_module.save_prelinefit_checkpoint(
+        bundle, tmp_path / "checkpoint", checkpoint_cfg
+    )
+    assert manifest["datasets"] == ["a", "b"]
+    assert [json.loads(line)["dataset"] for line in checkpoint_debug.read_text().splitlines()] == ["a", "b"]
+    checkpoint_written = 0
+    for dataset in ("a", "b"):
+        with (tmp_path / "checkpoint" / f"{dataset}.pkl").open("rb") as handle:
+            payload = pickle.load(handle)
+        checkpoint_written += payload["stats"]["steal_twin_debug_records_written"]
+    assert checkpoint_written == 2 and len(set(collector_ids)) == 1
+    assert pickle_stats_seen == [("a", 1, 0), ("b", 1, 0)]
+    assert finalize_totals["checkpoint.jsonl"] == (2, 0)
+    assert finalized_after == ["run.jsonl", "checkpoint.jsonl"]
+
+
+@pytest.mark.parametrize("entrypoint", ["run", "checkpoint"])
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_steal_twin_r1c_second_dataset_failure_never_publishes_debug(
+    tmp_path: Path, monkeypatch, entrypoint: str, preexisting: bool
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    for dataset in ("a", "b"):
+        (bundle / f"{dataset}.geff").mkdir()
+    debug = tmp_path / f"{entrypoint}.jsonl"
+    if preexisting:
+        debug.write_bytes(b"stale-debug")
+    cfg = _r1c_cfg(tmp_path, debug)
+    calls = 0
+
+    def load(_path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("second dataset")
+        return {1: _twin_node(1, 0, 0.0)}, []
+
+    monkeypatch.setattr(pipeline_module, "_load_geff_as_dicts", load)
+    monkeypatch.setattr(pipeline_module, "load_deepcenter_veto_detector", lambda _cfg: None)
+    with pytest.raises(RuntimeError, match="second dataset"):
+        if entrypoint == "run":
+            pipeline_module.run_postproc(bundle, tmp_path / "submission.csv", cfg)
+        else:
+            pipeline_module.save_prelinefit_checkpoint(bundle, tmp_path / "checkpoint", cfg)
+    if preexisting:
+        assert debug.read_bytes() == b"stale-debug"
+    else:
+        assert not debug.exists()
+
+
+@pytest.mark.parametrize(
+    ("phase", "entrypoint"),
+    [
+        ("downstream", "run"),
+        ("downstream", "checkpoint"),
+        ("csv", "run"),
+        ("stats", "run"),
+        ("pickle", "checkpoint"),
+        ("manifest", "checkpoint"),
+    ],
+)
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_steal_twin_r1c_downstream_artifact_failures_never_publish_debug(
+    tmp_path: Path,
+    monkeypatch,
+    phase: str,
+    entrypoint: str,
+    preexisting: bool,
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "a.geff").mkdir()
+    debug = tmp_path / f"{entrypoint}-{phase}.jsonl"
+    if preexisting:
+        debug.write_bytes(b"stale-debug")
+    cfg = _r1c_cfg(tmp_path, debug)
+    monkeypatch.setattr(
+        pipeline_module,
+        "_load_geff_as_dicts",
+        lambda _path: ({1: _twin_node(1, 0, 0.0)}, []),
+    )
+    monkeypatch.setattr(pipeline_module, "load_deepcenter_veto_detector", lambda _cfg: None)
+    if phase == "downstream":
+        monkeypatch.setattr(
+            pipeline_module,
+            "filter_short_track_components",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("synthetic downstream")),
+        )
+    elif phase == "csv":
+        monkeypatch.setattr(
+            pipeline_module.SubmissionCsvWriter,
+            "write_nodes",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("synthetic csv")),
+        )
+    elif phase == "stats":
+        monkeypatch.setattr(
+            pipeline_module,
+            "_finish_run",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("synthetic stats")),
+        )
+    elif phase == "pickle":
+        monkeypatch.setattr(
+            pipeline_module.pickle,
+            "dump",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("synthetic pickle")),
+        )
+    else:
+        real_write_text = Path.write_text
+
+        def write_text(path, *args, **kwargs):
+            if path.name == pipeline_module.CHECKPOINT_MANIFEST_NAME:
+                raise RuntimeError("synthetic manifest")
+            return real_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", write_text)
+
+    with pytest.raises(RuntimeError, match=f"synthetic {phase}"):
+        if entrypoint == "run":
+            pipeline_module.run_postproc(bundle, tmp_path / "submission.csv", cfg)
+        else:
+            pipeline_module.save_prelinefit_checkpoint(bundle, tmp_path / "checkpoint", cfg)
+    if preexisting:
+        assert debug.read_bytes() == b"stale-debug"
+    else:
+        assert not debug.exists()
+
+
+def test_steal_twin_r1c_run_relinefit_never_constructs_or_publishes_collector(
+    tmp_path: Path, monkeypatch
+):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "manifest.json").write_text(json.dumps({"datasets": ["ds0"]}))
+    stats = new_stats()
+    payload = {
+        "dataset": "ds0",
+        "raw_node_count": 1,
+        "nodes_by_id": {1: _twin_node(1, 0, 0.0)},
+        "edges": [],
+        "stats": stats,
+    }
+    with (checkpoint / "ds0.pkl").open("wb") as handle:
+        pickle.dump(payload, handle)
+    monkeypatch.setattr(
+        pipeline_module,
+        "_TwinDebugCollector",
+        lambda *_args: pytest.fail("collector constructed during relinefit"),
+    )
+    cfg = _r1c_cfg(tmp_path, tmp_path / "must-not-exist.jsonl")
+    result = pipeline_module.run_relinefit(checkpoint, tmp_path / "submission.csv", cfg)
+    assert result["datasets"] == ["ds0"]
+    assert not (tmp_path / "must-not-exist.jsonl").exists()
