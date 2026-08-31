@@ -412,6 +412,18 @@ Containers:
   value recursively converted, preserving `items_snapshot` order.  Never turn
   it into a JSON object because keys need not be strings.
 
+`TwinFrozenMapping.items_snapshot` order is part of the lossless frozen value;
+do not sort it.  In this contract, two independently constructed records are
+"equivalent" for byte-identity only when their complete frozen snapshots are
+equal, including the item order of every nested `TwinFrozenMapping`, tuple
+order, dtype descriptor/metadata order, array content, and buffer content.
+Mappings containing the same key/value pairs in a different `items_snapshot`
+order are intentionally different frozen snapshots and must produce different
+tagged `items` arrays and different JSONL bytes.  `frozenset` is the sole
+container here whose iteration/construction order is discarded by canonical
+element sorting; two equal frozensets built in different orders must encode to
+the same bytes.
+
 Frozen NumPy/buffer values:
 
 - `TwinFrozenDType`: tag `"numpy_dtype"` and include fields `string`,
@@ -572,13 +584,33 @@ append.  A zero-record successful run atomically publishes a zero-byte file.
 The exact commit/failure boundary is:
 
 - before `os.replace` succeeds, the configured target is untouched;
-- on any handled encode, parent creation, temp creation, write, flush, fsync,
-  close, or replace exception, propagate the original exception and remove the
-  temporary file best-effort; an existing target retains its old bytes;
+- on any handled parent creation, temp creation, write, flush, fsync, close, or
+  replace exception, propagate the original exception and remove the temporary
+  file best-effort if one was created; an existing target retains its old bytes;
 - successful `os.replace` is the sole JSONL commit point.  Mark the collector
   finalized and return without a later fallible durability operation;
 - a second `finalize`, or any later `allocate`, raises `RuntimeError` and does
   not touch the published file.
+
+`finalize` is transactional with respect to collector state as well as the
+target.  It must not clear or rewrite buffered lines or change
+`records_written/records_dropped`.  Set the finalized flag only after
+`os.replace` succeeds.  If parent-directory creation, temp-file creation,
+write, flush, file fsync, close, or replace fails, the collector remains
+unfinalized with the identical buffer and cumulative counters, so restoring the
+fault and calling `finalize` again on the **same collector** publishes the
+original buffered bytes successfully.
+
+Track whether a temporary path was actually created.  On any failure after
+creation, attempt to close any still-open handle and unlink that exact temp
+path best-effort.  Preserve and re-raise the first operational exception from
+the phase under test; a secondary close/unlink cleanup exception must never
+replace or mask it.  When cleanup succeeds, no matching temp file remains.  If
+cleanup itself is injected to fail, a temp file may remain as the already
+documented best-effort limitation, but the original operational exception,
+old target bytes, collector buffer/counters, and unfinalized/retryable state
+remain unchanged.  The implementation must not claim temp cleanup succeeded in
+that case.
 
 Do not require a parent-directory fsync: a failure after a successful replace
 would make it impossible to preserve the promised failure boundary.  Crash
@@ -610,6 +642,16 @@ resolved-path comparisons):
   `checkpoint_dir/manifest.json`, or any planned
   `checkpoint_dir/<dataset>.pkl`.
 
+Protect the complete input bundle before considering individual GEFF entries.
+Resolve `geff_dir` itself with `geff_dir.resolve(strict=True)` and require the
+result to be a directory.  Reject when either `debug_resolved` or
+`debug_entry_resolved` equals that resolved bundle root or is any descendant of
+it.  This rule intentionally rejects a debug target that is merely a sibling of
+one `*.geff` but still lies anywhere inside the input bundle: publishing a JSONL
+there would mutate the input inventory and could affect later `*.geff`
+discovery.  It also covers a `geff_dir` symlink because comparisons use its
+resolved directory and the resolved debug entry/target identities.
+
 Input GEFF paths need a stronger tree rule because a GEFF is normally a
 directory and may itself be reached through a symlink.  Resolve each discovered
 GEFF with `geff_path.resolve(strict=True)` before detector/output activity:
@@ -621,7 +663,9 @@ GEFF with `geff_path.resolve(strict=True)` before detector/output activity:
   tree, not just its root name;
 - if the resolved GEFF is a regular file, treat it as a leaf artifact: reject
   either debug-identity equality or existing-file `os.path.samefile`; a sibling
-  path is allowed and there is no descendant rule;
+  path is allowed only when it is outside the resolved input bundle and is
+  otherwise unrelated.  A sibling located inside the bundle was already
+  rejected by the bundle rule above; there is no per-file descendant rule;
 - a symlink to a GEFF directory uses the directory/tree rule after resolution,
   and a symlink to a regular-file GEFF uses the leaf rule.  A debug symlink or
   a debug path below a symlinked GEFF directory is therefore rejected based on
@@ -694,7 +738,7 @@ Cover every item below.
   resolution reason, including all role, sort, distance, DeepCenter,
   removed-edge, and planned-edge fields.
 - For nested `TwinFrozenMapping` with non-string keys, tuple, frozenset under
-  permuted construction order, bytes, complex and nonfinite metadata floats
+  construction-order variation, bytes, complex and nonfinite metadata floats
   (including distinct NaN bit patterns), and every frozen
   dtype/scalar/array/structured-scalar/buffer representation supported by R1b,
   assert `json.loads(encoded_line) == exact_expected_tagged_plain_object`.
@@ -702,8 +746,14 @@ Cover every item below.
   Do not implement or test a production inverse decoder.  Assert the separate
   snapshot `input_position` ordinal does not leak, while a caller-owned
   metadata key also named `input_position` remains intact.
-- Two independently constructed equivalent inputs and repeated runs produce
-  byte-identical JSONL.  Unicode uses the frozen default escaped form.
+- Two independently constructed records with the same complete frozen snapshot,
+  including identical nested mapping item order, and repeated encodes/runs
+  produce byte-identical JSONL.  Unicode uses the frozen default escaped form.
+- Separately prove that reversing `TwinFrozenMapping.items_snapshot` order while
+  keeping the same key/value pairs preserves that reversed order in the tagged
+  plain object and intentionally changes the JSONL bytes.  In a distinct test,
+  construct equal frozensets through different insertion/iteration orders and
+  prove canonical element sorting produces the same tagged object and bytes.
 - A capacity-two collector allocated records in dataset order `a`, `b`, `c`
   retains the first two globally, returns exact per-call written/dropped values,
   and reports exact cumulative totals.  It never serializes or retains dropped
@@ -729,20 +779,36 @@ Cover every item below.
 - A failure on the second dataset, downstream filter, CSV writer, stats writer,
   pickle dump, or manifest write leaves a pre-existing JSONL byte-for-byte
   unchanged and publishes no new target when none existed.
-- Inject write, fsync, and `os.replace` failures during finalization.  The old
-  target remains unchanged, the original exception propagates, and handled
-  failures leave no same-directory temp file.
+- Inject failures independently at **every** finalization phase: parent
+  directory creation, temp-file creation, write, flush, file fsync, close, and
+  `os.replace`.  For each phase, assert the old target is unchanged, the
+  phase's original exception propagates, the collector remains unfinalized,
+  its buffered bytes and written/dropped counters are identical, and no temp
+  remains when cleanup succeeds.  Restore the injected fault and prove a retry
+  on that same collector atomically succeeds with the original buffered bytes.
+- Independently inject cleanup close/unlink failure after an operational
+  failure.  Assert cleanup is best-effort: it never masks the original
+  exception, never changes old target or collector state, and leaves the
+  collector retryable; permit and explicitly detect the residual temp only in
+  this cleanup-failure case, then remove it in test teardown.
 - In both `run_postproc` and `save_prelinefit_checkpoint`, a debug target equal
-  to a GEFF directory, directly below its tree, or below it through either a
-  GEFF symlink or debug-path symlink is rejected before detector/output
-  activity.  Use a sentinel child within each synthetic GEFF tree to prove no
-  target/temporary file is touched.  Also cover a debug leaf symlink located
-  inside the GEFF tree but pointing outside; the protected directory entry and
-  same-directory temp location still require rejection.
+  to the resolved input-bundle root, directly below that root, or anywhere in a
+  deeper bundle descendant is rejected before detector/output activity.  Cover
+  the same root/descendant cases when `geff_dir` itself is a symlink.  Use a
+  sentinel child to prove no target/temporary file is touched.
+- In both run paths, also reject a debug target equal to a GEFF directory,
+  directly below its tree, or below it through either a GEFF symlink or
+  debug-path symlink.  Keep this per-GEFF-tree test outside the bundle via a
+  symlinked `*.geff` entry, proving the individual resolved-root rule remains in
+  force even when that GEFF resolves elsewhere.  Also cover a debug leaf
+  symlink located inside a GEFF tree but pointing outside; the protected
+  directory entry and same-directory temp location still require rejection.
 - In both run paths, a regular-file GEFF rejects an equal/samefile debug target
-  but allows a sibling debug target.  CSV/stats, manifest, and dataset-pickle
-  aliases, plus equality with `checkpoint_dir` itself, are also rejected; an
-  unrelated existing target is allowed.
+  and rejects every sibling debug target that remains inside the input bundle.
+  A regular-file GEFF sibling is allowed only outside the bundle and otherwise
+  unrelated.  CSV/stats, manifest, and dataset-pickle aliases, plus equality
+  with `checkpoint_dir` itself, are also rejected; an unrelated existing target
+  outside the bundle is allowed.
 - `run_relinefit` never constructs, allocates, or publishes a collector.
 
 ### 10.5 Off/dry-run identity and no R2 mutation
