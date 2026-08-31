@@ -514,8 +514,9 @@ each index, finish all checks below before moving to the next record:
 6. `d_pq,d_pa,d_pb,d_ab,d_a2b2,divergence_growth`,
    `raw_deepcenter_score`, and `deepcenter_threshold` each have exact type
    `float` and are finite, and `deepcenter_threshold == 0.12`;
-7. `deepcenter_decision` has exact type `TwinDeepCenterDecision`, has
-   `accepted is True`, exact finite-float `raw_score` equal to
+7. `deepcenter_decision` has exact type `TwinDeepCenterDecision`, its
+   `accepted` field has exact type `bool` and is `True`, and it has exact
+   finite-float `raw_score` equal to
    `raw_deepcenter_score`, and `reason is None`;
 8. `removed_edge` has exact type `TwinEdgeRecord`, exact-int endpoints, and
    exact `TwinFrozenMapping` metadata; its endpoints equal `(q,b)`;
@@ -631,10 +632,16 @@ debug_entry_resolved = debug_parent_resolved / debug_path.name
 `debug_resolved` follows an existing final-component symlink, while
 `debug_entry_resolved` identifies the directory entry that `os.replace` would
 replace without following that final symlink.  Both identities matter.  For
-ordinary file artifacts, alias comparison means either debug identity equals
-the resolved artifact, or `os.path.samefile` when both paths already exist
-(handle a samefile `OSError` as non-equality, not as permission to skip the
-resolved-path comparisons):
+every protected path, alias comparison is bidirectional containment: reject if
+either debug identity equals the resolved protected path, either debug identity
+is a descendant of it, or the resolved protected path is a descendant of
+either debug identity.  The reverse direction is required because a successful
+`os.replace` of a final-component debug symlink or ancestor entry can otherwise
+make an already-written output or an input bundle/GEFF unreachable through its
+configured lexical path while the run falsely returns success.  For ordinary
+file artifacts and regular-file GEFFs, also use `os.path.samefile` when both
+paths already exist (handle a samefile `OSError` as non-equality, not as
+permission to skip the resolved-path comparisons):
 
 - for `run_postproc`: any input GEFF, `out_csv`, or the effective
   `run_stats_path`;
@@ -644,28 +651,30 @@ resolved-path comparisons):
 
 Protect the complete input bundle before considering individual GEFF entries.
 Resolve `geff_dir` itself with `geff_dir.resolve(strict=True)` and require the
-result to be a directory.  Reject when either `debug_resolved` or
-`debug_entry_resolved` equals that resolved bundle root or is any descendant of
-it.  This rule intentionally rejects a debug target that is merely a sibling of
-one `*.geff` but still lies anywhere inside the input bundle: publishing a JSONL
-there would mutate the input inventory and could affect later `*.geff`
-discovery.  It also covers a `geff_dir` symlink because comparisons use its
+result to be a directory.  Apply the complete bidirectional containment rule
+above between both debug identities and that resolved bundle root.  This rule
+intentionally rejects a debug target that is merely a sibling of one `*.geff`
+but still lies anywhere inside the input bundle: publishing a JSONL there would
+mutate the input inventory and could affect later `*.geff` discovery.  The
+reverse direction rejects a debug target that is an ancestor of the bundle,
+including a final-component symlink whose replacement would break the lexical
+`geff_dir`.  It also covers a `geff_dir` symlink because comparisons use its
 resolved directory and the resolved debug entry/target identities.
 
 Input GEFF paths need a stronger tree rule because a GEFF is normally a
 directory and may itself be reached through a symlink.  Resolve each discovered
 GEFF with `geff_path.resolve(strict=True)` before detector/output activity:
 
-- if the resolved GEFF is a directory, reject when either `debug_resolved` or
-  `debug_entry_resolved` is equal to that directory **or is any descendant of
-  it**, using `is_relative_to(geff_resolved)`; this protects both the final
+- if the resolved GEFF is a directory, apply bidirectional containment between
+  both debug identities and the GEFF directory.  This protects both the final
   symlink target and the directory entry/temp-file parent in the complete GEFF
-  tree, not just its root name;
+  tree, not just its root name, and rejects a debug ancestor whose replacement
+  would break a GEFF symlink or lexical path;
 - if the resolved GEFF is a regular file, treat it as a leaf artifact: reject
-  either debug-identity equality or existing-file `os.path.samefile`; a sibling
-  path is allowed only when it is outside the resolved input bundle and is
-  otherwise unrelated.  A sibling located inside the bundle was already
-  rejected by the bundle rule above; there is no per-file descendant rule;
+  bidirectional containment or existing-file `os.path.samefile`; a sibling path
+  is allowed only when it is outside the resolved input bundle and is otherwise
+  unrelated.  A sibling located inside the bundle was already rejected by the
+  bundle rule above;
 - a symlink to a GEFF directory uses the directory/tree rule after resolution,
   and a symlink to a regular-file GEFF uses the leaf rule.  A debug symlink or
   a debug path below a symlinked GEFF directory is therefore rejected based on
@@ -673,10 +682,15 @@ GEFF with `geff_path.resolve(strict=True)` before detector/output activity:
   tree but pointing outside is also rejected because replacing that leaf and
   creating its same-directory temp file would still modify the GEFF tree.
 
-Do not use lexical `str.startswith`, unresolved `Path.parent`, or only
-`debug_path == geff_path`; each misses sibling-prefix or symlink cases.  A
-failure to strictly resolve a discovered GEFF propagates before detector/output
-activity and is not treated as proof that aliasing is safe.
+Apply the same bidirectional containment rule to every ordinary output path
+listed above, including `checkpoint_dir` itself.  Thus a debug target inside an
+output/checkpoint artifact path and a debug target that is an ancestor of one
+are both rejected before activity; do not defer these configurations to a late
+directory/file error.  Do not use lexical `str.startswith`, unresolved
+`Path.parent`, or only `debug_path == geff_path`; each misses sibling-prefix or
+symlink cases.  A failure to strictly resolve a discovered GEFF propagates
+before detector/output activity and is not treated as proof that aliasing is
+safe.
 
 Raise `ValueError` naming both the debug target and conflicting artifact.  An
 unrelated pre-existing debug target is valid and is replaced only after a
@@ -786,16 +800,20 @@ Cover every item below.
   its buffered bytes and written/dropped counters are identical, and no temp
   remains when cleanup succeeds.  Restore the injected fault and prove a retry
   on that same collector atomically succeeds with the original buffered bytes.
-- Independently inject cleanup close/unlink failure after an operational
-  failure.  Assert cleanup is best-effort: it never masks the original
-  exception, never changes old target or collector state, and leaves the
-  collector retryable; permit and explicitly detect the residual temp only in
-  this cleanup-failure case, then remove it in test teardown.
+- Independently inject cleanup close-only failure, unlink-only failure, and
+  both failures after an operational failure.  Assert cleanup is best-effort:
+  it never masks the original exception, never changes old target or collector
+  state, and leaves the collector retryable; permit and explicitly detect the
+  residual temp only in the applicable cleanup-failure case, then remove it in
+  test teardown.
 - In both `run_postproc` and `save_prelinefit_checkpoint`, a debug target equal
   to the resolved input-bundle root, directly below that root, or anywhere in a
   deeper bundle descendant is rejected before detector/output activity.  Cover
   the same root/descendant cases when `geff_dir` itself is a symlink.  Use a
-  sentinel child to prove no target/temporary file is touched.
+  sentinel child to prove no target/temporary file is touched.  Also cover a
+  debug final-component symlink that is an ancestor of the lexical bundle and
+  prove both run paths reject it without replacing the link or touching its
+  resolved target.
 - In both run paths, also reject a debug target equal to a GEFF directory,
   directly below its tree, or below it through either a GEFF symlink or
   debug-path symlink.  Keep this per-GEFF-tree test outside the bundle via a
@@ -803,12 +821,21 @@ Cover every item below.
   force even when that GEFF resolves elsewhere.  Also cover a debug leaf
   symlink located inside a GEFF tree but pointing outside; the protected
   directory entry and same-directory temp location still require rejection.
+  Conversely, cover a debug final-component symlink that is an ancestor of the
+  external resolved GEFF target and prove the bundle's `*.geff` link remains
+  resolvable after rejection.
 - In both run paths, a regular-file GEFF rejects an equal/samefile debug target
   and rejects every sibling debug target that remains inside the input bundle.
   A regular-file GEFF sibling is allowed only outside the bundle and otherwise
   unrelated.  CSV/stats, manifest, and dataset-pickle aliases, plus equality
-  with `checkpoint_dir` itself, are also rejected; an unrelated existing target
-  outside the bundle is allowed.
+  with `checkpoint_dir` itself, are also rejected.  For ordinary artifacts,
+  separately cover `out_csv` and effective run-stats below a debug ancestor,
+  and checkpoint-dir/manifest/pickle below a debug ancestor, using both a real
+  directory and a final-component directory symlink.  Both entrypoints must
+  reject before detector/output activity while preserving the link, sentinel,
+  and resolved target.  A debug descendant of an ordinary artifact also
+  fail-fasts under the bidirectional rule.  An unrelated existing target and
+  an unrelated regular-file GEFF sibling outside the bundle remain allowed.
 - `run_relinefit` never constructs, allocates, or publishes a collector.
 
 ### 10.5 Off/dry-run identity and no R2 mutation
