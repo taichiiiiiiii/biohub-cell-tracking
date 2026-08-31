@@ -135,9 +135,12 @@ safe-stop 後の path/size 再監査は次のとおりであり、引き続き *
 サイズ一致し、88 files が不足している。次の manifest-order missing file は
 `train/44b6_d2f34f90.zarr/0/c/21/0/0/0`（期待 4,915,073 bytes）である。
 
-次回も本 runbook の固定 `EVAL36` と同一 `--jobs 1` command から再開する。
+次回も本 runbook の固定 `EVAL36` と同一 `--jobs 1 --fail-fast` command から再開する。
 開始前に downloader/Kaggle child が 0 process であることを確認し、重複 process
-を決して起動しない。既存の manifest-size exact files は script に skip させる。
+を決して起動しない。script 自身も `data/.download_data.lock` の advisory lock を
+non-blocking で取得し、別 downloader が所有中なら download 前に
+`FAIL class=lock` で拒否する。既存の manifest-size exact files は script に skip
+させる。
 
 ## 実行前 preflight
 
@@ -200,7 +203,7 @@ EVAL36=(
 )
 test "${#EVAL36[@]}" = 36
 PATH="$PWD/.venv/bin:$PATH" .venv/bin/python scripts/download_data.py --train "${EVAL36[@]}" \
-  --jobs 1 --dry-run
+  --jobs 1 --fail-fast --dry-run
 ```
 
 dry-run が一致したら、同じコマンドから `--dry-run` だけを外す。
@@ -209,25 +212,50 @@ dry-run が一致したら、同じコマンドから `--dry-run` だけを外�
 
 ```zsh
 PATH="$PWD/.venv/bin:$PATH" .venv/bin/python scripts/download_data.py --train "${EVAL36[@]}" \
-  --jobs 1
+  --jobs 1 --fail-fast
 ```
 
-script は manifest と同サイズの既存 file を `skip` し、不足/サイズ不一致を
-`kaggle competitions download -f ... --force` で取り直す。ただし内蔵 retry は
-timeout と HTTP 429 向けで、DNS/auth/permission は file 単位で直ちに FAIL に
-なる。現実装は run 全体を fail-fast せず残り file へ進むため、進捗行で
-`fail>0` を観測したら一度 interrupt し、失敗 path 1 件だけを CLI で再現して
-分類する。連続失敗のまま全 4,942 tasks を走らせない。
+script は manifest と同サイズの既存 **regular file** だけを `skip` し、
+不足/サイズ不一致を
+`kaggle competitions download -f ... --force` で取り直す。`--jobs 1` は executor を
+作らない逐次実行である。`--jobs N`（N > 1）でも投入済み task は最大 N 件で、
+全選択を先に executor queue へ積まない。eval-36 再開では `--fail-fast` を必須とし、
+最初の FAIL 後は新しい file を開始しない。
+
+各 download の開始時に `START path=... attempt=... deadline=...`、30 秒以上続く間は
+`HEARTBEAT path=... elapsed=... deadline_in=...` が flush される。5 分の hard
+timeout では Kaggle CLI の process group 全体を TERM、5 秒 grace 後も残れば KILL
+し、timeout だけ最大 2 attempts とする。HTTP 429 は retry/backoff せず
+`FAIL class=rate-limit` として `--fail-fast` の有無にかかわらず run 全体を止める。
+DNS/auth/403/ENOSPC/unknown も同一 file で retry せず分類して FAIL する。
+`KeyboardInterrupt` は現在 path を表示し、未開始 queue を cancel して稼働中 process
+group を停止する。終了コードは 130 である。
+
+target symlink は同サイズでも skip せず、成功時には regular file へ置換する。
+一方、`data` から target parent までの既存 ancestor に symlink があれば、symlink を
+follow せず `FAIL class=integrity` で download 前に止める。
+
+CLI の出力先は target の親に作る一意な `.kaggle-staging` directory である。manifest
+size 一致を確認した payload を同じ親の一意な `.kaggle-ready` file へ移し、staging
+cleanup が成功した後だけ ready を target へ `os.replace` する。この順序により失敗、
+timeout、interrupt、cleanup failure では再開前の target bytes または target symlink
+を変更しない。cleanup は `FileNotFoundError` だけを許容する。それ以外は path 付きの
+`FAIL class=cleanup`（interrupt 中は `CLEANUP FAIL`）として必ず表示し、残留 staging
+を黙って success 扱いしない。表示された staging/ready path は証跡として記録し、
+原因を解消するまで再開しない。
 
 ## 失敗の切り分け
 
 | 分類 | 代表的な観測 | 対処 |
 |---|---|---|
-| DNS/network | `NameResolutionError`, `Temporary failure in name resolution`, `Could not resolve host`, connection timeout | ローカルツリーを触らず中止。DNS/network 復旧後に preflight から再開。 |
+| DNS/network | `FAIL class=dns`, `NameResolutionError`, `Temporary failure in name resolution`, `Could not resolve host` | ローカルツリーを触らず中止。DNS/network 復旧後に preflight から再開。 |
 | 認証 | HTTP `401`, `Unauthorized`, missing/invalid/expired credentials | secret をログに出さず Kaggle CLI で再認証。preflight PASS 後に再開。 |
 | アクセス | HTTP `403`, `Forbidden`, competition rules acceptance required | browser 上の参加/規約同意の有無を確認。トークン再発行と混同しない。 |
-| quota/rate | HTTP `429`, `Too Many Requests`, rate limit | script の backoff に任せる。6 回後 FAIL なら待って同一コマンドを再開。GPU quota とは無関係。 |
+| quota/rate | `FAIL class=rate-limit`, HTTP `429`, `Too Many Requests` | run は即時停止する。追加 request を送らず十分な cooldown 後に preflight から同一コマンドを再開。GPU quota とは無関係。 |
+| hard timeout | `TIMEOUT ... stopping process group`, `FAIL class=timeout after 2 attempts` | process group が残っていないことを確認し、network/CLI 状態を調べて preflight から再開。 |
 | local disk | `No space left on device`, `ENOSPC`, free-space gate FAIL | この runbook では他データを削除しない。容量確保の別途承認を取る。 |
+| path safety | `FAIL class=integrity: symlink ancestor path=...` | symlink を follow せず中止する。この runbook 内ではリンクを削除・置換しない。意図した data tree か別途確認する。 |
+| cleanup | `FAIL class=cleanup ... staging path=...`, `CLEANUP FAIL ...` | target は旧状態のまま。残留 path と元の failure/interrupt の両方を記録し、権限・filesystem 状態を直してから再開する。silent success とみなさない。 |
 | integrity | CLI rc=0 後の `FAIL size mismatch`、zero-byte target、`.kaggle-partial`、最終 verifier の missing/extra/mismatch | evaluation-ready とせず同一コマンドを再実行。繰り返す場合はその path と expected/have size を保存して中止。 |
 
 ## ファイル単位の integrity policy
