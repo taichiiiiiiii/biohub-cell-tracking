@@ -149,13 +149,23 @@ It returns a recursively hashable, type-tagged semantic token.  Exact built-in
 types have distinct tags; Python floats use their IEEE-754 binary64 bytes
 (therefore preserving NaN payload/sign and signed zero); complex values use
 the two component binary64 byte strings; bytes are unchanged; tuples are
-ordered token tuples; frozensets become frozensets of tokens; mapping items
-remain ordered key/value token pairs; and every `TwinFrozen*` dataclass is
-tagged and includes all fields recursively.  Array byte content is exact and
-object-array tuple content is recursive.  Reject anything outside the valid
-frozen tree from section 5.3.  Do not use `repr`, hash values, locale, JSON
-coercion, or ordinary equality.  This private token is not a serializer,
-artifact format, inverse decoder, or R1c debug-codec replacement.
+ordered token tuples; mapping items remain ordered key/value token pairs; and
+every `TwinFrozen*` dataclass is tagged and includes all fields recursively.
+Array byte content is exact and object-array tuple content is recursive.
+
+A frozenset token is an order-independent frozenset of exact
+`(element_token, multiplicity)` pairs, not merely a frozenset of element
+tokens.  Python can retain multiple distinct NaN objects with identical
+binary64 bits in one set; collapsing equal element tokens would therefore make
+one same-bit NaN indistinguishable from two, or confuse different duplicate-
+token distributions.  The multiplicity is an exact positive built-in integer
+and preserves this frozen semantic cardinality without introducing iteration
+order.
+
+Reject anything outside the valid frozen tree from section 5.3.  Do not use
+`repr`, process-random hash values, locale, JSON coercion, or ordinary
+equality.  This private token is not a serializer, artifact format, inverse
+decoder, or R1c debug-codec replacement.
 
 `TwinMutationError.reason` is machine-readable.  Its complete allowed set is:
 
@@ -184,7 +194,8 @@ summary.  It never returns, replaces, or mutates `nodes_by_id`.
 
 ## 4. Atomicity and identity contract
 
-The call is a transaction over caller-owned Python objects.
+The call is a transaction over caller-owned Python objects with respect to
+writes performed by R2 itself.
 
 Before validation completes, the mutator may allocate private snapshots and
 temporary containers only.  It must not write to:
@@ -196,9 +207,24 @@ temporary containers only.  It must not write to:
 - `plan` or anything reachable from it; or
 - global/module state.
 
-On every failure, every input object and nested object is observably unchanged,
-including mapping insertion order and object identity.  There is no partial
-result and no rollback path that first mutates caller state.
+On every failure, R2 itself leaves every input object and nested object
+observably unchanged, including mapping insertion order and object identity.
+There is no partial result and no rollback path that first mutates caller
+state.
+
+The adopted R1b normalization boundary deliberately accepts some protocol
+types rather than exact built-ins: for example a non-boolean `Integral` is
+canonicalized with `int()`, and supported mapping/container/buffer values are
+read through their normal Python protocols.  Those operations can execute
+caller-defined methods.  Side effects performed by such caller code are
+outside this transaction guarantee; R2 cannot promise that an adversarial
+`__int__`, iterator, mapping method, or buffer provider leaves its own object
+or global state unchanged.  R2 must not invoke any protocol beyond what the
+adopted R1b freezer/normalizer requires, catch-and-retry a protocol operation,
+or itself assign to caller/global state.  No-failure-mutation tests that claim
+complete input/global identity use exact built-ins or supported
+side-effect-free protocol values; adversarial protocol tests instead prove
+single-pass exception containment and absence of R2-owned writes.
 
 On first successful application with `k > 0`:
 
@@ -220,7 +246,7 @@ the returned edge list is also the exact `current_edges` object.
 
 ## 5. Plan validation before graph classification
 
-Validation order is binding.  Complete steps 5.1 through 5.5 before deciding
+Validation order is binding.  Complete steps 5.1 through 5.6 before deciding
 whether the current graph is pre-state, post-state, or invalid.  The first
 failing step determines the reason.
 
@@ -229,7 +255,9 @@ failing step determines the reason.
 1. `type(plan) is TwinPlan`; otherwise `invalid_plan_type`.
 2. If `plan.validation_reason is not None`, require a nonempty exact `str` and
    then raise `plan_validation_failed`.  A validation-failed planner result is
-   never mutable, even when it has zero accepted candidates.
+   never mutable, even when it has zero accepted candidates.  A malformed
+   non-`None` reason type or empty string also maps directly to
+   `plan_validation_failed`; do not inspect another plan field first.
 3. If validation reason is `None`, require exact tuple types for `nodes`,
    `edges`, `candidates`, `accepted_candidates`, `decisions`, and
    `debug_records`, and exact `TwinFrozenMapping` for `counters`; otherwise
@@ -237,8 +265,13 @@ failing step determines the reason.
 
 ### 5.2 Counter schema and values
 
-Require `tuple(plan.counters) == _TWIN_COUNTER_KEYS` exactly, with no missing,
-extra, or reordered key.  Failure is `plan_counter_schema`.
+Inspect `plan.counters.items_snapshot` directly before invoking its `Mapping`
+methods: it must be an exact tuple of exact length-two tuple entries whose keys
+are exact built-in strings, and the key sequence must equal
+`_TWIN_COUNTER_KEYS` with no missing, extra, duplicate, or reordered key.
+Malformed entry shape/key structure and any failure that would otherwise occur
+while iterating or indexing the forged mapping are `plan_counter_schema`; do
+not leak an unpacking, comparison, or lookup exception.
 
 Every value must have exact type `int` (not `bool`) and be nonnegative.  Failure
 is `plan_counter_value`.  R2 neither adds to nor changes `_TWIN_COUNTER_KEYS`.
@@ -251,15 +284,26 @@ eligible == accepted + rejected_conflict + rejected_frame_cap + rejected_video_c
 planned_edges_removed == planned_edges_added == accepted
 edges_removed == edges_added == 0
 isolated_donors == accepted
+len(candidates) == eligible
 len(accepted_candidates) == accepted
 accepted <= examined_frames
 ```
 
-Also require the configured-independent facts encoded by the plan: accepted
-frames are unique, so accepted count equals the number of distinct accepted
-frames, and accepted count is at most 2.  This v1 fact follows from the frozen
-cap of one per frame and two per video; R2 does not read config.  Any
-conservation failure is `plan_conservation`.
+Also require the following exact pre-collector coupling:
+
+```text
+debug_records_written == debug_records_dropped == 0
+```
+
+The planner has not yet passed through the R1c collector at this boundary, so
+nonzero debug allocation counters are a forged plan even if every other
+conservation equation balances.
+
+Also require accepted count to be at most 2.  The candidate-dependent
+configured-independent fact that accepted frames are unique is checked only
+after candidate field types are safe to read in section 5.5.  This v1 fact
+follows from the frozen cap of one per frame and two per video; R2 does not read
+config.  Any conservation failure is `plan_conservation`.
 
 ### 5.3 Immutable snapshot structure
 
@@ -298,6 +342,16 @@ mutable container, arbitrary object, subclass used in place of an exact frozen
 type, or malformed frozen dataclass as `plan_candidate`.  Metadata mapping item
 order is semantic and must be preserved; frozenset order is not.
 
+Before traversing a `TwinFrozenMapping`, require `items_snapshot` to be an
+exact tuple of exact length-two tuples.  Apply the same exact-container-first
+rule to every tuple-valued frozen dataclass field.  The validator/tokenizer
+must track the active recursive object IDs (or use an equivalent bounded
+iterative traversal): a forged cycle is `plan_candidate`, shared acyclic
+subtrees remain legal, and excessive nesting or any internal traversal/
+packing/length exception is caught and mapped to `plan_candidate`.  Validation
+must never call `TwinFrozenMapping.__getitem__`, ordinary dataclass equality,
+or a method on an unsupported embedded object before rejecting its exact type.
+
 The required internal checks are bounded and concrete: shape entries are exact
 nonnegative ints; stride entries are exact signed ints; array shape/stride
 ranks agree; buffer strides are either empty (the R1b `None` normalization) or
@@ -309,10 +363,23 @@ declared exact types; and structured-scalar field names are unique exact
 strings.  Do not attempt to reconstruct a live NumPy object or execute
 object-array content during this validation.
 
-Any failure in this subsection is `plan_candidate`, except invalid graph-wide
-duplicate/dangling/time/degree structure, which is `current_graph_invalid`
-only after a well-formed plan has been established and the current graph is
-examined.
+Use `prod(()) == 1`.  Dtype itemsize/alignment are exact nonnegative ints;
+buffer itemsize is an exact positive int.  Array flags, buffer readonly, and
+dtype flags are exact bools.  `object_content is False` requires exact bytes
+content, while `object_content is True` requires exact tuple content.  Dtype
+names, when present, are an exact tuple of unique exact strings; metadata is
+exact `TwinFrozenMapping` or `None`; every string/bytes field has its exact
+built-in type.  Buffer `kind` is exactly `"bytearray"` or `"memoryview"`; the
+bytearray form also has the adopted fixed `format="B"`, `itemsize=1`,
+one-dimensional shape/stride `(len(content),)/(1,)`, and `readonly is False`.
+These checks validate the adopted frozen representation only; they do not
+reconstruct or reinterpret a live NumPy dtype, scalar, array, or buffer.
+
+Any failure in this subsection, including duplicate/dangling/nonconsecutive or
+degree-invalid structure in the immutable `plan.edges` snapshot, is
+`plan_candidate`.  `current_graph_invalid` is reserved for a malformed
+`current_edges` graph encountered only after a well-formed plan has been
+established and the current graph is examined.
 
 ### 5.4 Decisions and acceptance order
 
@@ -325,16 +392,31 @@ Require:
 - accepted decisions have exact `accepted is True` and `reason is None`;
 - rejected decisions have exact `accepted is False` and reason in the frozen
   R1b resolution set `conflict`, `frame_cap`, or `video_cap`;
+- the accepted-decision count equals `steal_twin_accepted`, and the exact
+  counts of rejected decision reasons `conflict`, `frame_cap`, and `video_cap`
+  equal their three corresponding counters;
 - `accepted_candidates` is exactly the identity-preserving subsequence of
-  decision candidates whose decisions are accepted; and
-- candidates and decisions are in nondecreasing complete `sort_key` order.
+  decision candidates whose decisions are accepted.
 
-Do not sort again in R2.  `accepted_candidates` tuple order is the replacement
-edge append order.  Any failure is `plan_acceptance`.
+This subsection performs only exact type, identity, exact-bool, and fixed
+exact-string/`None` checks.  It must not compare or sort a candidate field
+before section 5.5 establishes that field's exact safe type.  Thus a forged
+candidate containing an arbitrary `sort_key`, metadata, numeric object, or
+other malformed field cannot execute its comparison protocol or leak an
+incidental exception here.  `accepted_candidates` tuple order is the
+replacement-edge append order.  Any failure is `plan_acceptance`.
 
 ### 5.5 Candidate integrity
 
-For every candidate, require all of the following or raise `plan_candidate`:
+For every candidate, first complete a structural/type pass before performing
+any equality, ordering, arithmetic, tokenization, mapping lookup, or graph
+relationship check.  Require the candidate and every nested R1b dataclass to
+have its exact type; require every scalar/tuple/`None` field to have its exact
+declared safe type; and validate `removed_edge.metadata` with the frozen-tree
+rules in section 5.3.  Any exception during the subsequent relationship or
+distance checks is caught and mapped to `plan_candidate`; no candidate-owned
+comparison/arithmetic protocol may execute.  Then require all of the following
+or raise `plan_candidate`:
 
 - the six role IDs `P,Q,A,B,A2,B2` are pairwise distinct and exist in
   `plan.nodes`;
@@ -369,16 +451,55 @@ endpoints, and distinct planned endpoints.  Those accepted-only checks prove
 that each accepted donor Q becomes isolated and P becomes a valid two-child
 fork at the pure boundary.  Failure is `plan_candidate`.
 
+After every candidate is structurally valid, require candidates/decisions to
+be in nondecreasing complete `sort_key` order; do not sort again in R2.  Also
+require `steal_twin_accepted` to equal the number of distinct accepted
+candidate frames.  A sort-order failure is `plan_acceptance`; the accepted-
+frame conservation failure is `plan_conservation`.
+
+### 5.6 Debug-record projection
+
+Require `type(plan.debug_records[i]) is TwinDebugRecord` and
+`len(debug_records) == len(decisions) == len(candidates)`.  Each debug record
+must be the exact field-for-field projection of the decision and its candidate
+at the same index.  All records have one homogeneous dataset value whose type
+is exact built-in `str` or `None`; the empty record tuple imposes no dataset
+value.  `decision` is the exact built-in string `"accepted"` or `"rejected"`
+as appropriate, and `reason` is the corresponding exact built-in resolution
+string or `None`.
+
+R1b constructs every remaining projected field by passing the candidate field
+object directly.  Therefore require identity (`is`), not ordinary equality,
+for all six role values, `sort_key`, every distance/growth/raw-score value,
+`deepcenter_decision`, `removed_edge`, and `planned_edge`.  This is valid even
+for scalar objects because it checks the actual adopted constructor behavior,
+and it avoids executing any malformed equality protocol.  Candidate integrity
+has already made every projected object safe.  `deepcenter_threshold` must be
+an exact built-in float whose binary64 bytes equal the binary64 bytes of the
+literal `0.12`.  A record may not describe an equal-but-separately-built
+candidate or a different candidate while preserving aggregate counters.
+
+Any malformed debug dataclass/field/dataset/identity/threshold is
+`plan_acceptance`.  Perform exact type checks before string or binary64 checks,
+catch packing/access exceptions as `plan_acceptance`, and do not use ordinary
+dataclass/dict/NumPy equality or the debug JSON codec.
+
 ## 6. Current node and edge match
 
 ### 6.1 Node mapping
 
-The current node key set must equal the plan node-ID set exactly.  Every key
-must have exact type `int`, and every row must be a dict whose `node_id` has
+Require `type(nodes_by_id) is dict`; otherwise `node_mapping`.  Its current node
+key set must equal the plan node-ID set exactly.  Every key must have exact type
+`int`, and every row must have exact built-in `dict` type whose `node_id` has
 exact type `int` equal to its key.  Reading `t,z,y,x,gap_synthetic` through the
 same R1b normalization must produce the corresponding plan node with exact
 integer/bool values and bit-exact finite coordinate floats under
 `_twin_frozen_token`.  Failure is `node_mapping`.
+
+Check exact mapping/required-field structure before invoking any accepted
+numeric protocol.  Catch missing fields and every normalization/conversion/
+finite/token exception as `node_mapping`, and never retry a caller protocol;
+the section 4 side-effect boundary still applies.
 
 R1b intentionally snapshots only those six core node fields.  Arbitrary extra
 node-row keys are therefore outside plan/current comparison: R2 must neither
@@ -397,13 +518,21 @@ R2.
 
 ### 6.2 Current edge normalization
 
+Require `type(current_edges) is list`; otherwise `current_graph_invalid`.
 Normalize every current edge with the adopted R1b lossless freezer, assigning
 its current list index as `input_position`.  Reject with
-`current_graph_invalid` if any row is not a dict, cannot be losslessly frozen,
-has a boolean/non-`Integral` endpoint, is dangling, is not `t -> t+1`, or
-duplicates an endpoint pair.  As R1b does, canonicalize valid non-boolean
-`Integral` endpoints to built-in `int`; do not demand built-in ints in an edge
-row that R1b accepted.
+`current_graph_invalid` if any row is not an exact built-in dict, cannot be
+losslessly frozen, has a boolean/non-`Integral` endpoint, is dangling, is not
+`t -> t+1`, or duplicates an endpoint pair.  As R1b does, canonicalize valid
+non-boolean `Integral` endpoints to built-in `int`; do not demand built-in ints
+in an edge row that R1b accepted.
+
+Check row/dict/required-field structure before endpoint conversion or metadata
+freezing.  Catch endpoint conversion, recursive freezer/tokenizer, cycle,
+excessive-nesting, buffer, and other normalization exceptions as
+`current_graph_invalid`; do not leak `RecursionError`, `TypeError`, `KeyError`,
+unpacking errors, or a NumPy truth-value exception, and never retry a caller
+protocol.
 
 Defer only the indegree/outdegree cap check until after the exact partial-state
 classification in section 8.  An addition-only interrupted candidate can
@@ -471,9 +600,10 @@ not the expected post-state.
 
 After plan validation and current normalization:
 
-1. If `k == 0`, require exact pre-state.  Return the exact input list and the
-   `no_changes` summary in section 9.  Any drift is
-   `current_graph_mismatch`.
+1. If `k == 0` and the graph is the exact pre-state, return the exact input
+   list and the `no_changes` summary in section 9.  Otherwise apply the deferred
+   degree-cap check from section 6.2: a violation is `current_graph_invalid`,
+   and any remaining well-formed drift is `current_graph_mismatch`.
 2. If `k > 0` and current is exact pre-state, allocate a new result list.
 3. Traverse `current_edges` once in its existing order.  Omit exactly the
    accepted `Q->B` rows whose complete frozen snapshots match
@@ -487,9 +617,14 @@ Endpoint equality alone is never enough to select the removed row.  The
 complete immutable metadata must agree with the plan.  There is no mutation of
 the old list followed by append, and no partially returned list.
 
-Complexity must be bounded by the input: `O(|nodes| + |edges| + k)` expected
-time and `O(|nodes| + |edges| + k)` auxiliary memory, excluding the already
-materialized plan.  No quadratic scan per accepted candidate is allowed.
+Let `M` be the total number of recursively frozen/raw metadata elements plus
+their byte-content length traversed while validating and tokenizing the plan
+and current edge rows.  Complexity must be bounded by the actual input:
+`O(|nodes| + |edges| + k + M)` expected time and
+`O(|nodes| + |edges| + k + M)` auxiliary memory.  The already materialized
+plan object itself is excluded, but private validation/token structures are
+not.  No quadratic scan per accepted candidate or repeated full metadata
+freeze/token pass per candidate is allowed.
 
 ## 8. Direct second application and partial states
 
@@ -521,8 +656,10 @@ section 6.1.  It is not legal to call a graph already applied merely because
 all `P->B` endpoints are present.  Unrelated edge or core-node drift cannot be
 hidden by the idempotence branch.
 
-For `k == 0`, there is only one state.  Exact pre-state returns
-`status="no_changes"`; drift raises `current_graph_mismatch`.
+For `k == 0`, there is only one accepted state.  Exact pre-state returns
+`status="no_changes"`; a non-pre graph with indegree greater than 1 or
+outdegree greater than 2 raises `current_graph_invalid`, and every other
+well-formed drift raises `current_graph_mismatch`.
 
 The production pipeline is a fresh single-application path.  It must never
 silently accept `already_applied`.  If the mutator returns that status from the
@@ -673,7 +810,8 @@ The exact routing table is:
 
 | Master/mode state | Planner | R1 counters/debug | Mutation | R2 counters |
 |---|---:|---:|---:|---:|
-| master off or mode not `twin_only_v1` | no | no | no | all zero |
+| master off, regardless of mode value | no | no | no | all zero |
+| master on, mode/profile lock not exact `twin_only_v1` | hard fail at entry boundary | no | no | no serialization |
 | mode on, dry-run true, valid plan | yes | yes | no | all zero |
 | mode on, dry-run true, failed plan | yes | failure only | no | all zero |
 | mode on, dry-run false, failed plan | yes | failure only | no | all zero |
@@ -698,6 +836,11 @@ The replacement validation must occur at the same run/direct-call boundaries:
 - `run_postproc` before detector/model loading and output creation; and
 - `save_prelinefit_checkpoint` before detector/model loading and checkpoint
   creation.
+
+“At the `filter_output_graph` boundary” may be satisfied only by the exact
+landed call-through to the guarded pre-linefit function if section 13 confirms
+that guard runs before any full-filter work.  Do not add a second guard or
+change failure ordering merely to duplicate the check at both symbols.
 
 The new candidate non-dry path is allowed only for the exact locked
 `twin_only_v1` mode.  Do not weaken the profile or accept another mode.
@@ -756,9 +899,12 @@ steal_twin_linefit_coordinate_changed_nodes_observed
 an exact nonnegative Python `int`, preseeded to zero.  No key is conditional or
 created late.  The existing non-twin counter order remains unchanged.
 
-All R2 keys remain zero for master off, another mode, dry-run, or planner
-validation failure.  Thus graph/CSV/non-twin-stat identity is required in those
-paths; run-stats gains only the documented zero R2 columns.
+All R2 keys remain zero for master off (regardless of the otherwise inert mode
+value), dry-run, or planner validation failure.  Thus graph/CSV/non-twin-stat
+identity is required in those paths; run-stats gains only the documented zero
+R2 columns.  Master on with another mode is not an inert zero-counter path: it
+hard-fails at the entry boundary before planner/model/output activity under
+section 11.4.
 
 For candidate non-dry with a valid plan, ownership is:
 
@@ -775,15 +921,25 @@ For candidate non-dry with a valid plan, ownership is:
   its two fields;
 - after short-track, the pre-linefit adapter assigns final nodes, edges, and
   fork sources; and
-- the direct full-filter or relinefit wrapper snapshots `(z,y,x)` immediately
-  before linefit and assigns the number of node IDs whose exact coordinate
-  tuple differs immediately after linefit.
+- the direct full-filter or relinefit wrapper snapshots each `(z,y,x)` as
+  three binary64 byte tokens immediately before linefit and assigns the number
+  of node IDs for which at least one token differs immediately after linefit.
+  Ordinary tuple equality is forbidden because it collapses `-0.0` and
+  `+0.0`.  Every post-linefit coordinate must be an exact built-in finite
+  `float` before its token is formed.
 
 These `*_observed` values are whole-pass observations in the candidate graph,
 not causal attribution to a particular accepted twin and not candidate-minus-
-baseline deltas.  Geometry/prune/short must each be topology-nonincreasing;
-linefit must preserve node IDs and edge rows.  A negative removal delta or a
-linefit topology change raises before output rather than being clamped.
+baseline deltas.  Geometry/prune/short must each be topology-nonincreasing.
+Across linefit, preserve the exact node-key set and order, node-row identities,
+node mapping identity, every non-coordinate node key/value and nested
+identity, and the complete edge-list identity, row sequence, row identities,
+contents, and nested identities.  Only the three coordinate values may change,
+and their post-values must satisfy the exact finite-float rule above.  Snapshot
+and validate these invariants around the call before assigning the linefit
+counter or writing output.  A negative removal delta, invalid coordinate, or
+linefit identity/topology/metadata change raises rather than being clamped or
+serialized.
 
 For a valid non-dry `k=0` call, actual/pure-symmetric/mutation counts are zero,
 but pure/final graph size and fork fields and downstream observations are
@@ -876,25 +1032,54 @@ metric, image set, network, or Kaggle access is allowed.
 - Replacement key insertion order is exactly source, target, distance,
   edge-probability; probability is `None`; distance is independently
   recomputed and not copied from donor metadata.
-- Surviving row, nested mapping/list/array/buffer/object, and node mapping/row/
-  nested identities are unchanged.  Original relative edge order is exact.
+- Surviving row and supported nested mapping/list/array/buffer values, including
+  recursively supported elements of an object-dtype array, plus the node
+  mapping/row/supported nested identities, are unchanged.  This does not admit
+  an arbitrary custom edge-metadata object.  Put an arbitrary identity sentinel
+  only in extra node metadata that R1b does not read; unsupported custom edge
+  metadata belongs in a failure test.  Original relative edge order is exact.
 - Donor rows containing every supported R1b frozen metadata family can be
   matched and removed without ordinary dict/array equality errors.  Include
   float/complex specials, distinct NaN payloads, signed zero, arbitrary mapping
   key types/order, bytes/buffers, frozensets, dtype metadata, structured
   scalars, and object arrays; mapping-order differences remain distinct while
-  equivalent frozenset construction order compares equal.
+  equivalent frozenset construction order compares equal.  Separately include
+  two distinct same-bit NaN members: the multiset token distinguishes one from
+  two and distinguishes equal-total-cardinality sets with different repeated
+  token distributions.
+- Spy on current-row freezing/tokenization for k=2 and every partial-state
+  mask: each row/metadata tree is normalized once per mutator call, not once
+  per candidate or operation mask, preserving the section 7 complexity bound.
 
 ### 14.2 Validation and fail-closed behavior
 
 Parameterize every exact `TwinMutationError.reason`.  Cover wrong top-level
 type; failure plan; counter missing/extra/reordered/bool/negative; conservation
-forgery; candidate/decision identity or order forgery; role/time/distance/sort
-forgery; removed metadata mismatch; and planned probability not `None`.
+forgery; eligible/candidate-count mismatch; decision-reason/counter mismatch;
+nonzero planner debug-allocation counters; debug-record length, identity, field,
+dataset, or threshold forgery; candidate/decision identity or order forgery;
+role/time/distance/sort forgery; removed metadata mismatch; and planned
+probability not `None`.
+
+Forge a cyclic frozen plan tree and an excessively deep tree and require
+`plan_candidate`; forge cyclic/deep raw current metadata and require
+`current_graph_invalid`.  No recursion or incidental implementation exception
+may escape.
+
+Use forged candidate/debug fields carrying equality, ordering, numeric, or
+mapping protocols that would raise if invoked.  Exact structural checks must
+reject the candidate as `plan_candidate`, or the independently forged debug
+projection as `plan_acceptance`, without invoking those protocols and without
+leaking their exception.  A malformed counter `items_snapshot` entry/key must
+similarly produce `plan_counter_schema` before mapping iteration or lookup.
 
 For every failure, snapshot all input list/mapping bytes or lossless frozen
-values and all relevant object identities before the call.  Assert no mutation,
-no partial result, no global state change, and no counter assignment.
+values and all relevant object identities before the call.  With exact
+built-ins and side-effect-free supported protocol values, assert no mutation,
+no partial result, no R2-owned global state change, and no counter assignment.
+Separately use adversarial protocol objects to prove R2 performs no write or
+retry beyond the adopted R1b normalization call; caller-method side effects
+remain outside the section 4 guarantee.
 
 Cover malformed current rows, duplicate edges, dangling endpoints,
 nonconsecutive time, indegree >1, outdegree >2, nonlossless metadata, node key/
@@ -903,6 +1088,13 @@ reorder.  Exact extra node metadata is ignored for matching but its identity is
 preserved.  A second direct call with edge-post-state and caller-modified extra
 node metadata follows the documented support boundary and is still
 `already_applied`; bit-level core coordinate drift fails `node_mapping`.
+Wrong top-level node-mapping/current-edge container types and dict subclasses
+for node/edge rows exercise the exact built-in API boundary and map to
+`node_mapping`/`current_graph_invalid` without invoking subclass methods.
+Forge each duplicate/dangling/nonconsecutive/degree-invalid condition once in
+the immutable plan snapshot and once only in the current graph: the former is
+`plan_candidate`, while the latter is `current_graph_invalid` after the exact
+partial-state precedence required by sections 6.2 and 8.
 
 ### 14.3 Idempotence classification
 
@@ -910,6 +1102,9 @@ node metadata follows the documented support boundary and is still
   The second call returns the same list object, `already_applied`, and zero
   per-call effects.
 - A zero-acceptance plan returns the same list object and `no_changes`.
+- For zero acceptance, separately prove exact pre-state `no_changes`,
+  degree-invalid non-pre-state `current_graph_invalid`, and every other
+  well-formed drift `current_graph_mismatch` in that precedence order.
 - For k=1 and k=2, test removal-only, addition-only, every nontrivial operation
   mask, and mixed pre/post candidates as `partial_application`.  Wrong
   replacement metadata/order and unrelated drift must not be accepted as post
@@ -928,7 +1123,10 @@ failure and prove the inputs remain unchanged.
 
 After the R1c re-pin, spy on the exact landed hooks and require:
 
-- master off and non-twin mode never plan, allocate, mutate, or populate R2;
+- master off never plans, allocates, mutates, or populates R2 even when the
+  otherwise inert mode value is not `twin_only_v1`;
+- master on with a mode/profile-lock mismatch hard-fails at every entry
+  boundary before planner, detector, collector, mutation, or output activity;
 - dry-run plans/merges/allocates but never mutates and preserves graph/CSV;
 - candidate non-dry valid plan calls plan, merge, allocate, mutate exactly once
   at the frozen order and then geometry/prune/short;
@@ -952,16 +1150,21 @@ replacement caches.
   forks, and exact `2k`; a successful k=0 sets only stage sizes/observations.
 - Synthetic geometry, prune, and short fixtures verify each wrapper measures
   only its immediate before/after whole-pass delta.
-- Full filter counts exact linefit coordinate tuple changes; checkpoint stores
-  zero; relinefit computes on its stats copy without touching disk or topology.
-- A topology-increasing downstream pass, negative delta, or linefit topology
-  change hard-fails instead of clamping.
+- Full filter counts binary64-token coordinate changes, including a
+  `-0.0`/`+0.0` change; checkpoint stores zero; relinefit computes on its stats
+  copy without touching disk.  A non-built-in or nonfinite post-coordinate
+  hard-fails.
+- A topology-increasing downstream pass, negative delta, or linefit change to
+  node keys/order/row identity/non-coordinate data or edge list/order/row
+  identity/content hard-fails before counter assignment or output.
 
 ### 14.7 Profile and regression identity
 
 - Frozen base1/e23 effective configs are unchanged.
-- Master-off and non-twin graph objects, final CSV bytes, and all old non-twin
-  stats match the pre-R2 base; only preseeded zero R2 run-stats columns differ.
+- Master-off graph objects, final CSV bytes, and all old non-twin stats match
+  the pre-R2 base even when the otherwise inert mode value is non-twin; only
+  preseeded zero R2 run-stats columns differ.  Master-on non-twin mode is the
+  separately tested entry-boundary hard failure, not an identity path.
 - Twin dry-run graph objects and final CSV bytes match the same input with
   mutation disabled; R1 plan/decision/sort/counter/debug artifacts remain
   identical between dry and candidate before mutation.
@@ -1012,9 +1215,12 @@ R2 is SHIP only when all of the following are true:
   landed R1c implementation matches its task;
 - the exact pure API, reason set, summaries, first/second-application behavior,
   identity rules, and pure `2k` invariants are implemented and tested;
-- every failure is transactional and fail-closed;
+- every mutator failure is fail-closed and satisfies the R2-owned write
+  transaction boundary, with caller-protocol side effects scoped exactly as in
+  section 4;
 - pipeline order is exact and the R1c non-dry guard alone is replaced;
-- master off, other modes, and dry-run are graph/CSV identity paths;
+- master off (including an inert non-twin mode value) and exact-mode dry-run
+  are graph/CSV identity paths, while master-on mode/lock mismatch hard-fails;
 - planner versus actual versus downstream counter ownership is exact;
 - checkpoint and relinefit have no duplicate planning or mutation;
 - all allowed focused/regression tests pass; and
