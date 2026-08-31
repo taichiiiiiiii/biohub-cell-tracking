@@ -111,6 +111,34 @@ process を停止し、tree に破損や `.kaggle-partial` がないことを確
 36-stem/one-job command を再開する。最終 verifier が PASS するまで引き続き
 **NOT_READY** である。
 
+### 2026-09-01 safe-stop snapshot
+
+21 時間超の cooldown 後、manifest/CLI/help/disk gate と単一の
+competition-files preflight が PASS し、固定 36 stems の dry-run が再び
+`4942 files, 17.84 GB selected` と一致したため、同じ `--jobs 1` command を
+再開した。TTY session `76864` の最後の進捗行は
+`[2300/4942] ok=266 skip=2034 fail=0` だった。その後、Kaggle child がなく
+tree 増分もない状態が 5 分を超えたため fail-closed に interrupt し、session は
+exit 1 で終了した。終了後は downloader/Kaggle child とも 0 process である。
+この resume 中の同型 stall は 1 回、先行 run を含む通算では 2 回である。
+
+safe-stop 後の path/size 再監査は次のとおりであり、引き続き **NOT_READY** である。
+
+| 状態 | 実測 |
+|---|---:|
+| 現存かつ manifest とサイズ一致 | 15 complete roots / 1,544 files / 7,292,313,882 bytes |
+| 不足 | 2,128 files / 8,640,559,056 bytes |
+| manifest 外 / サイズ不一致 / `.kaggle-partial` | 0 / 0 / 0 |
+
+最後の complete root は `44b6_c8e2a523`。現在の partial root
+`44b6_d2f34f90` は 14 files / 67,010,346 bytes がすべて manifest と
+サイズ一致し、88 files が不足している。次の manifest-order missing file は
+`train/44b6_d2f34f90.zarr/0/c/21/0/0/0`（期待 4,915,073 bytes）である。
+
+次回も本 runbook の固定 `EVAL36` と同一 `--jobs 1` command から再開する。
+開始前に downloader/Kaggle child が 0 process であることを確認し、重複 process
+を決して起動しない。既存の manifest-size exact files は script に skip させる。
+
 ## 実行前 preflight
 
 以下は repo root で実行する。認証情報の値を印字する `env`, `cat`,
@@ -309,5 +337,5 @@ parity、公式 metric の正しさは別ゲートである。本 runbook の完
 submission、kernel push/run、Git push/commit への暗黙の許可は発生しない。
 
 残留する外部 blocker は **Kaggle API に到達でき、現行認証と competition
-access/rate quota が有効な環境で、残り 14,015,672,891 bytes を取得すること**
+access/rate quota が有効な環境で、残り 8,640,559,056 bytes を取得すること**
 である。snapshot 時点でこれは未解消である。
