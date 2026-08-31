@@ -1,14 +1,15 @@
 # ST-R2 binding contract: transactional twin-only mutation adapter
 
-Status: **HOLD_R1C_IMPLEMENTATION_DEPENDENCY**
+Status: **READY_FOR_IMPLEMENTATION**
 
 This is a design-only implementation handoff.  It freezes the ST-R2 pure
-mutation boundary and its pipeline semantics, but it does **not** authorize an
-implementation yet.  ST-R1c has a final reviewed task document at commit
-`541a659a67e1b136e930f24a2e63f4e2a73a06bf`; its production implementation is
-not present at this base.  The exact R1c implementation commit, source hashes,
-symbols, signatures, and call order must be pinned in section 13 before any R2
-source change starts.  Until that audit is complete, the disposition is HOLD.
+mutation boundary and its pipeline semantics.  ST-R1c has a final amended task
+document at commit `7f08e00b2dbb5c2a5cb212b60ea7fbcd3557da9b` and a landed,
+independently reviewed production implementation at commit
+`f6f4ad75b0a584dc348b75ca038b2e50bc7d2f7b`.  Section 13 pins the exact source
+hashes, symbols, signatures, call order, and the only R2 adapter change allowed
+at that boundary.  Implementation is authorized only within sections 2, 13,
+and 15; any pinned drift returns this contract to HOLD.
 
 The purpose of R2 is deliberately narrow: consume a validated immutable
 `TwinPlan`, remove each accepted `Q->B` edge, append its `P->B` replacement,
@@ -18,9 +19,10 @@ resolution, caps, debug selection, or evaluation.
 
 ## 1. Frozen design base
 
-This contract was authored against the clean main-repository commit
-`541a659a67e1b136e930f24a2e63f4e2a73a06bf`.  The reviewed files and SHA-256
-digests are:
+The internal R2 design was hardened against the clean main-repository commit
+`b1997fd777faece2c8db226ea323dfe49093ce57`.  The R1c implementation itself is
+the separately pinned `f6f4ad7` commit in section 13.  The reviewed files and
+SHA-256 digests are:
 
 ```text
 AGENTS.md
@@ -33,7 +35,7 @@ analysis/steal_twin_st_r1_contract.md
 54caa99ba0f5637b69366dccf6260e49728bb8380b506a9beafbf1374b08a274
 
 analysis/steal_twin_st_r1c_sol_task.md
-5829460647068995a884f02b653e2c0bff8ab2eaa831029241e3ca8d31191093
+cce2b1445e6c3be22bb8862831cc3d9e9884e20a74db4f3727c7df14c2ce3c62
 
 analysis/steal_twin_st_r3_eval_contract.md
 18cfa78464b70cc419ed4f6614c39192d0727d85ab3531beb1092b32bb10a169
@@ -42,10 +44,10 @@ src/biohub/public_postproc/divisions.py
 3009d182b71dd786f1249e17734b2e6dea70e2260b752f6227e810643efb59f4
 
 src/biohub/public_postproc/pipeline.py
-3f0dad3fa502af98cf421c0c81834020da41c8aa223bbd9193712365cf32f43b
+96b218494b665b3e41f1a32ae33f7f16a80b71bf9b9c18d93e6168f9ca96786a
 
 tests/test_public_postproc.py
-13f435a03f8aa8f134f27b7bbf583337e3333bdf20fd44a3f499e655dd5d8e68
+e49fb62138fb97bc758ac1363d95219799c8112941aa597997fd76d9306c7e4c
 ```
 
 The adopted R1b planner is on `develop` at `cb206e8`.  Its current
@@ -81,9 +83,11 @@ R2 may implement only:
 R2 must not implement or change:
 
 - R1b eligibility, nearest-neighbor logic, score callback, threshold, sort key,
-  conflict resolution, frame/video caps, frozen metadata codec, or counters;
-- R1c collector allocation, JSON-safe codec, global capacity, atomic publish,
-  path alias guards, cache ownership, duplicate-loader policy, or debug schema;
+  conflict resolution, frame/video caps, frozen metadata schema/type semantics,
+  or counters, apart from the exact common depth boundary in section 2;
+- R1c collector allocation, JSON-safe encoding/output, global capacity, atomic
+  publish, path alias guards, cache ownership, duplicate-loader policy, or debug
+  schema, apart from the exact pre-encoding depth guard in section 2;
 - config names, defaults, locks, profile values, DeepCenter loading/model code,
   checkpoint/manifest format (apart from the expected mutated graph and new
   stats values), or the `twin_only_v1` mode spelling;
@@ -96,6 +100,58 @@ R2 must not implement or change:
 
 No ground truth, metric result, prior arm result, promotion result, or callback
 capable of reading them may enter the R2 mutator or adapter.
+
+There is one narrow validation-only exception to the R1b/R1c codec exclusions.
+Add `_TWIN_METADATA_MAX_DEPTH = 64` in `divisions.py` and use that exact
+constant in the adopted R1b freezer, R2 frozen validator/tokenizer, and the R1c
+retained-record plain-value codec.  Each complete raw or frozen metadata value
+starts at logical depth zero.  The complete edge row is one such mapping root;
+its represented keys and values therefore start at depth one.
+
+Depth is semantic rather than an implementation-container count:
+
+- descending from a raw/frozen tuple or frozenset into an element increments
+  depth by one;
+- descending from a raw mapping or `TwinFrozenMapping` into each represented
+  key or value increments depth by one;
+- for a raw `np.dtype` or `TwinFrozenDType`, `descriptor` and non-`None`
+  `metadata` are recursive children at depth plus one;
+- for a raw structured scalar or `TwinFrozenStructuredScalar`, each represented
+  field value is a recursive child at depth plus one;
+- for a raw NumPy scalar or `TwinFrozenNumpyScalar`, `dtype` is a recursive
+  child at depth plus one;
+- for a raw ndarray or `TwinFrozenArray`, `dtype` and each object-content
+  element are recursive children at depth plus one; and
+- bytearray/memoryview and `TwinFrozenBuffer` have no recursive semantic child.
+
+Representation scaffolding does not add depth.  This includes
+`items_snapshot`, mapping item-pair tuples, structured-scalar `fields` and its
+name/value pair tuples, object-array `content` storage tuples, and the fixed
+`shape`, `strides`, and `names` tuples and their primitive elements.  All other
+scalar/bytes fields of a `TwinFrozen*` value are leaves.  The represented
+children enumerated above still add exactly one level even though such
+scaffolding stores them.
+
+A visit at depth greater than 64 is rejected before that value is traversed.
+The R1b freezer and R1c retained-record plain codec raise `TypeError`; R2 maps
+the same boundary to `plan_candidate` for a frozen plan or
+`current_graph_invalid` for a raw current row.  An active-path cycle is rejected
+at the same owning boundary.  Shared acyclic subtrees remain legal and are
+visited once per semantic occurrence.
+
+Threading this depth/active-path state through the existing private helper
+families must preserve exact accepted types, protocol-call count, mapping/set
+semantics, frozen dataclass types/fields, bytes, ordering, and output values for
+every input at or below the cap.  It may not add a metadata type, coercion,
+schema, serializer, or fallback.  R1c JSONL bytes for every accepted retained
+record remain identical; the cap is checked before recursive descent so the
+plain codec and `json.dumps` retain ample stack headroom.  Dropped R1c records
+continue to skip nested metadata traversal under the R1c contract.  Existing
+R1/R1c tests plus exact depth-64/depth-65/cycle tests must prove this narrow
+parity.  This is a common resource/safety bound on the single adopted codec,
+not a second codec.  Schema and type semantics are unchanged, but R2 explicitly
+approves narrowing legacy R1b/R1c behavior for logical inputs deeper than 64 so
+every retained value has one deterministic resource boundary.
 
 ## 3. Exact production API
 
@@ -145,13 +201,14 @@ def _twin_frozen_token(value: object) -> tuple[object, ...]:
     ...
 ```
 
-It returns a recursively hashable, type-tagged semantic token.  Exact built-in
-types have distinct tags; Python floats use their IEEE-754 binary64 bytes
-(therefore preserving NaN payload/sign and signed zero); complex values use
-the two component binary64 byte strings; bytes are unchanged; tuples are
-ordered token tuples; mapping items remain ordered key/value token pairs; and
-every `TwinFrozen*` dataclass is tagged and includes all fields recursively.
-Array byte content is exact and object-array tuple content is recursive.
+It returns a recursively hashable, type-tagged semantic token within the exact
+common depth bound above.  Exact built-in types have distinct tags; Python
+floats use their IEEE-754 binary64 bytes (therefore preserving NaN payload/sign
+and signed zero); complex values use the two component binary64 byte strings;
+bytes are unchanged; tuples are ordered token tuples; mapping items remain
+ordered key/value token pairs; and every `TwinFrozen*` dataclass is tagged and
+includes all fields recursively.  Array byte content is exact and object-array
+tuple content is recursive.
 
 A frozenset token is an order-independent frozenset of exact
 `(element_token, multiplicity)` pairs, not merely a frozenset of element
@@ -345,12 +402,15 @@ order is semantic and must be preserved; frozenset order is not.
 Before traversing a `TwinFrozenMapping`, require `items_snapshot` to be an
 exact tuple of exact length-two tuples.  Apply the same exact-container-first
 rule to every tuple-valued frozen dataclass field.  The validator/tokenizer
-must track the active recursive object IDs (or use an equivalent bounded
-iterative traversal): a forged cycle is `plan_candidate`, shared acyclic
-subtrees remain legal, and excessive nesting or any internal traversal/
-packing/length exception is caught and mapped to `plan_candidate`.  Validation
-must never call `TwinFrozenMapping.__getitem__`, ordinary dataclass equality,
-or a method on an unsupported embedded object before rejecting its exact type.
+tracks active-path object IDs and the exact semantic depth from section 2.  A
+forged cycle or a visit at depth 65 is `plan_candidate`; shared acyclic subtrees
+remain legal and every valid tree through depth 64 is accepted.  Any internal
+traversal/packing/length exception is caught and mapped to `plan_candidate`.
+The bound must be checked before descent, so no incidental `RecursionError` may
+escape or substitute for the deterministic depth classification.  Validation
+must never call
+`TwinFrozenMapping.__getitem__`, ordinary dataclass equality, or a method on an
+unsupported embedded object before rejecting its exact type.
 
 The required internal checks are bounded and concrete: shape entries are exact
 nonnegative ints; stride entries are exact signed ints; array shape/stride
@@ -488,18 +548,29 @@ dataclass/dict/NumPy equality or the debug JSON codec.
 
 ### 6.1 Node mapping
 
-Require `type(nodes_by_id) is dict`; otherwise `node_mapping`.  Its current node
-key set must equal the plan node-ID set exactly.  Every key must have exact type
-`int`, and every row must have exact built-in `dict` type whose `node_id` has
-exact type `int` equal to its key.  Reading `t,z,y,x,gap_synthetic` through the
-same R1b normalization must produce the corresponding plan node with exact
-integer/bool values and bit-exact finite coordinate floats under
-`_twin_frozen_token`.  Failure is `node_mapping`.
+Require `type(nodes_by_id) is dict`; otherwise `node_mapping`.  Before any
+key-set comparison or value lookup, iterate that exact dict once and require
+every outer key to have exact type `int`, every row to have exact built-in
+`dict` type, and each row to contain the five required fields `node_id,t,z,y,x`
+under exact built-in string keys.  Locate those required keys and the optional
+exact-string `gap_synthetic` key by iterating the exact row and checking only
+exact-string keys; do not probe arbitrary extra keys with equality or hash
+protocols.  Arbitrary extra keys are not read or compared.  Only after this
+complete structural pass may the now-safe exact-int key set be compared with
+the plan node-ID set.
 
-Check exact mapping/required-field structure before invoking any accepted
-numeric protocol.  Catch missing fields and every normalization/conversion/
-finite/token exception as `node_mapping`, and never retry a caller protocol;
-the section 4 side-effect boundary still applies.
+Each required `node_id` must have exact type `int` equal to its outer key.
+Reading `t,z,y,x` and normalizing an optional `gap_synthetic` through the same
+R1b rule must produce the corresponding plan node with exact integer/bool
+values and bit-exact finite coordinate floats under `_twin_frozen_token`.
+Specifically, an absent `gap_synthetic` normalizes to exact `False`; when the
+exact key is present, normalize it exactly as
+`bool(row_value == 1)`, once, with any protocol exception mapped to
+`node_mapping`.  Never insert the absent key or otherwise change row identity,
+contents, or order.  Failure is `node_mapping`.  Catch missing required fields
+and every normalization/conversion/finite/token exception as `node_mapping`,
+and never retry a caller protocol; the section 4 side-effect boundary still
+applies.
 
 R1b intentionally snapshots only those six core node fields.  Arbitrary extra
 node-row keys are therefore outside plan/current comparison: R2 must neither
@@ -528,11 +599,13 @@ non-boolean `Integral` endpoints to built-in `int`; do not demand built-in ints
 in an edge row that R1b accepted.
 
 Check row/dict/required-field structure before endpoint conversion or metadata
-freezing.  Catch endpoint conversion, recursive freezer/tokenizer, cycle,
-excessive-nesting, buffer, and other normalization exceptions as
-`current_graph_invalid`; do not leak `RecursionError`, `TypeError`, `KeyError`,
-unpacking errors, or a NumPy truth-value exception, and never retry a caller
-protocol.
+freezing.  The single adopted freezer and tokenizer enforce the exact section-2
+logical depth: valid values through depth 64 are accepted; an active-path cycle
+or visit at depth 65 is `current_graph_invalid`.  Catch endpoint conversion,
+buffer, and other malformed normalization exceptions under the same reason; do
+not leak `TypeError`, `KeyError`, unpacking errors, a NumPy truth-value exception,
+or an incidental `RecursionError`, and never retry a caller protocol.  Check the
+cap before descent rather than relying on the interpreter recursion limit.
 
 Defer only the indegree/outdegree cap check until after the exact partial-state
 classification in section 8.  An addition-only interrupted candidate can
@@ -617,14 +690,17 @@ Endpoint equality alone is never enough to select the removed row.  The
 complete immutable metadata must agree with the plan.  There is no mutation of
 the old list followed by append, and no partially returned list.
 
-Let `M` be the total number of recursively frozen/raw metadata elements plus
-their byte-content length traversed while validating and tokenizing the plan
-and current edge rows.  Complexity must be bounded by the actual input:
+Let `M` be the total number of frozen/raw metadata elements plus their
+byte-content length traversed while validating and tokenizing the plan and
+current edge rows.  Complexity must be bounded by the actual input:
 `O(|nodes| + |edges| + k + M)` expected time and
-`O(|nodes| + |edges| + k + M)` auxiliary memory.  The already materialized
-plan object itself is excluded, but private validation/token structures are
-not.  No quadratic scan per accepted candidate or repeated full metadata
-freeze/token pass per candidate is allowed.
+`O(|nodes| + |edges| + k + M)` auxiliary memory.  Frozenset token multiplicity
+uses expected constant-time token counting and the order-independent
+`frozenset` token from section 3; it does not sort members.  The already
+materialized plan object itself is excluded, but private traversal, active-path,
+validation, and token structures are not.  No quadratic scan per accepted
+candidate or repeated full metadata freeze/token pass per candidate is
+allowed.
 
 ## 8. Direct second application and partial states
 
@@ -719,15 +795,16 @@ Any failure is `post_invariant`, and the caller inputs remain unchanged.
 
 Require:
 
-- node mapping object, node key set, node-row identities, complete row contents,
-  nested identities, and insertion orders are unchanged;
+- node mapping object, ordered node-key identities, node-row identities, each
+  row's ordered key identities, and every top-level key-to-value binding are
+  unchanged;
 - edge count is exactly E;
 - exactly k original complete frozen rows were removed;
 - exactly k exact replacement rows were added;
 - endpoint sets before and after each have size E;
 - endpoint-set symmetric difference has size exactly `2*k`;
-- surviving original rows retain their identity, nested identities, original
-  relative order, and complete metadata;
+- surviving original rows retain their identity, original relative order, and
+  complete already-normalized metadata;
 - replacement rows are the final k rows in acceptance order and have only the
   four exact keys/values in section 6.4;
 - no duplicate or dangling endpoint pair exists;
@@ -736,11 +813,13 @@ Require:
 - each accepted Q has degree zero; and
 - no nonaccepted endpoint pair changed.
 
-For arbitrary extra node metadata, “contents unchanged” is established by the
-write-free implementation and exact mapping/row/nested object identities; do
-not traverse, compare, serialize, or execute unsupported caller objects merely
-to prove this fact.  Core fields and all supported edge metadata still receive
-the explicit bit-exact checks above.
+For arbitrary extra node metadata, unchanged nested state is a write-free
+implementation guarantee, not a recursive runtime observation.  The pure
+mutator may record shallow mapping/row/key/value identities but must not
+traverse, compare, serialize, or execute an unsupported caller object merely to
+prove this fact.  Caller-protocol side effects remain outside section 4.  Core
+fields and all supported edge metadata still receive the explicit bit-exact
+checks above.
 
 The symmetric difference is over endpoint pairs, because complete row objects
 are metadata-bearing and unhashable.  It is a pure-boundary assertion only.
@@ -749,11 +828,11 @@ filtering, linefit, CSV serialization, or arm comparison.
 
 ## 11. Pipeline routing and ordering
 
-### 11.1 R1c dependency placeholders
+### 11.1 Pinned R1c semantic labels
 
-At this base, the following semantic R1c operations exist only in the reviewed
-task document.  They are intentionally named placeholders here, not invented
-production symbols:
+The following angle-bracketed names are semantic labels for the exact landed
+symbol or inline locations pinned in section 13; they are notation in this
+contract, not production identifiers:
 
 ```text
 <R1C_NON_DRY_GUARD>
@@ -764,9 +843,9 @@ production symbols:
 <R1C_RUN_COLLECTOR_FACTORY>
 ```
 
-R2 must not implement guessed functions with those names.  Section 13 must
-replace each placeholder with the one exact landed symbol or inline code
-location and freeze its signature/order before source work begins.
+R2 must not implement functions with those label names.  Use only each exact
+landed symbol or inline location resolved in section 13, with its pinned
+signature and order.
 
 ### 11.2 Exact pre-linefit order
 
@@ -782,6 +861,7 @@ single-frame gap close
 strict gap2
 safe divisions
 <R1C_PLAN_HOOK> using shared frame/heatmap caches
+R2 exact plan/failure-envelope guard
 <R1C_COUNTER_MERGE_HOOK>
 <R1C_DEBUG_ALLOCATION_HOOK>
 if planner validation failed: no mutation
@@ -800,9 +880,12 @@ artifacts.  R2 does not move or duplicate those R1c actions.  A collector
 encoding/allocation failure occurs before mutation and therefore cannot leave a
 mutated graph with missing debug state.
 
-The mutation receives the same current node mapping and edge list that were
-passed to the planner.  No intervening pass may alter them.  The existing
-centroid-refined node coordinates are already part of the immutable plan.
+The mutation receives the same current node mapping and edge list from which
+the planner snapshots were materialized.  The planner itself receives
+`tuple(nodes_by_id.values())` and `tuple(edges)`, not those container objects;
+no intervening pass may alter the source mapping, list, rows, or contents.  The
+existing centroid-refined node coordinates are already part of the immutable
+plan.
 
 ### 11.3 Off, dry, candidate, and validation failure
 
@@ -825,7 +908,7 @@ before downstream output.
 
 ### 11.4 Removing the R1c non-dry guard
 
-After section 13 is pinned, remove only `<R1C_NON_DRY_GUARD>` that currently
+With section 13 pinned, remove only `<R1C_NON_DRY_GUARD>` that currently
 raises because ST-R2 is unavailable.  Preserve every other entry guard,
 config/profile lock, loader check, debug path alias check, collector atomicity
 rule, and failure order.
@@ -921,25 +1004,38 @@ For candidate non-dry with a valid plan, ownership is:
   its two fields;
 - after short-track, the pre-linefit adapter assigns final nodes, edges, and
   fork sources; and
-- the direct full-filter or relinefit wrapper snapshots each `(z,y,x)` as
+- the direct full-filter or relinefit wrapper first requires every pre-linefit
+  `(z,y,x)` binding to be an exact built-in finite `float`, then snapshots it as
   three binary64 byte tokens immediately before linefit and assigns the number
   of node IDs for which at least one token differs immediately after linefit.
-  Ordinary tuple equality is forbidden because it collapses `-0.0` and
-  `+0.0`.  Every post-linefit coordinate must be an exact built-in finite
-  `float` before its token is formed.
+  A bad pre-coordinate hard-fails before linefit is called.  Ordinary tuple
+  equality is forbidden because it collapses `-0.0` and `+0.0`.  Every
+  post-linefit coordinate must also be an exact built-in finite `float` before
+  its token is formed.
 
 These `*_observed` values are whole-pass observations in the candidate graph,
 not causal attribution to a particular accepted twin and not candidate-minus-
 baseline deltas.  Geometry/prune/short must each be topology-nonincreasing.
-Across linefit, preserve the exact node-key set and order, node-row identities,
-node mapping identity, every non-coordinate node key/value and nested
-identity, and the complete edge-list identity, row sequence, row identities,
-contents, and nested identities.  Only the three coordinate values may change,
-and their post-values must satisfy the exact finite-float rule above.  Snapshot
-and validate these invariants around the call before assigning the linefit
-counter or writing output.  A negative removal delta, invalid coordinate, or
-linefit identity/topology/metadata change raises rather than being clamped or
-serialized.
+The linefit wrapper uses only shallow, non-recursive identity snapshots.  Across
+the call require: the node mapping identity; its ordered outer-key identities;
+the corresponding node-row identities; each row's ordered key identities; and
+every non-coordinate top-level key-to-value binding identity.  Require the edge
+list identity, ordered edge-row identities, each edge row's ordered key
+identities, and every top-level edge key-to-value binding identity.  Only the
+three coordinate binding values may change, and their post-values must satisfy
+the exact finite-float rule above.  Identify coordinate bindings only through
+exact built-in string keys and compare all preserved keys/values pairwise with
+`is`; do not use container equality.
+
+Do not recursively traverse, freeze, serialize, compare, or call a protocol on
+an arbitrary extra-node value or nested edge value for this linefit guard.
+Nested custom in-place state is not runtime-observable at this boundary.  The
+existing linefit implementation and the R2 wrapper themselves remain write-free
+for such objects; caller-protocol side effects remain excluded by section 4.
+Validate the shallow snapshots before assigning the linefit counter or writing
+output.  A negative removal delta, invalid pre/post coordinate, or observable
+shallow linefit identity/topology/binding change raises rather than being
+clamped or serialized.
 
 For a valid non-dry `k=0` call, actual/pure-symmetric/mutation counts are zero,
 but pure/final graph size and fork fields and downstream observations are
@@ -981,41 +1077,230 @@ pure_edge_symmetric_difference == 2*k
 For `k=0`, all terms are zero.  Do not infer actual effects from planner
 counters without the successful mutator summary.
 
-## 13. Required R1c re-pin appendix
+## 13. Pinned R1c implementation appendix
 
-This appendix is intentionally unresolved and is the only known external
-design HOLD.
-
-Before implementation, a reviewer must record:
+An independent SOL audit returned SHIP for the following immutable dependency:
 
 ```text
-R1c implementation commit: <HOLD>
-R1c implementation tree status: <HOLD: must be clean>
-divisions.py SHA-256: <HOLD>
-pipeline.py SHA-256: <HOLD>
-tests/test_public_postproc.py SHA-256: <HOLD>
-<R1C_NON_DRY_GUARD>: <HOLD exact file/line/condition>
-<R1C_PLAN_HOOK>: <HOLD exact symbol/signature>
-<R1C_COUNTER_MERGE_HOOK>: <HOLD exact symbol/signature>
-<R1C_DEBUG_ALLOCATION_HOOK>: <HOLD exact symbol/signature>
-<R1C_DEBUG_COLLECTOR_TYPE>: <HOLD exact symbol/signature>
-<R1C_RUN_COLLECTOR_FACTORY>: <HOLD exact symbol/signature>
-shared frame-cache object and owner: <HOLD>
-shared heatmap-cache object and owner: <HOLD>
-exact plan/merge/allocate call order: <HOLD>
-run_postproc finalization order: <HOLD>
-save_prelinefit_checkpoint finalization order: <HOLD>
+R1c implementation commit:
+f6f4ad75b0a584dc348b75ca038b2e50bc7d2f7b
+
+R1c implementation Git tree:
+36354ee5c262300e61ff43ab712b5b82243e82af
+
+R1c binding task commit:
+7f08e00b2dbb5c2a5cb212b60ea7fbcd3557da9b
+
+R1c binding task SHA-256:
+cce2b1445e6c3be22bb8862831cc3d9e9884e20a74db4f3727c7df14c2ce3c62
+
+divisions.py SHA-256:
+3009d182b71dd786f1249e17734b2e6dea70e2260b752f6227e810643efb59f4
+
+pipeline.py SHA-256:
+96b218494b665b3e41f1a32ae33f7f16a80b71bf9b9c18d93e6168f9ca96786a
+
+tests/test_public_postproc.py SHA-256:
+e49fb62138fb97bc758ac1363d95219799c8112941aa597997fd76d9306c7e4c
 ```
 
-The audit must verify R1c against task commit `541a659`, including strict
-callback closure, shared cache identity, counter merge, duplicate GEFF node
-hard fail, direct-call path/collector combinations, non-dry entry guards,
-run-level capacity, deterministic lossless encoding, alias guards, and atomic
-collector publication.  If it differs, revise this contract before R2 code.
+The authoritative `f6f4ad7` commit tree is immutable.  At re-pin,
+`develop@b1997fd` was clean and the current `divisions.py`, `pipeline.py`,
+`tests/test_public_postproc.py`, and amended R1c task were byte-identical to
+their pinned commit versions.  A later difference in any pinned path or hash
+invalidates this appendix and returns R2 to HOLD.
 
-It is forbidden to resolve a placeholder through reflection, `hasattr`
-fallbacks, signature guessing, multiple alternative call paths, or a test-only
-production shim.
+### 13.1 Non-dry guard and entry boundaries
+
+`<R1C_NON_DRY_GUARD>` is
+`pipeline.py@f6f4ad7:146-151`:
+
+```python
+def _require_steal_twin_r1_dry_run(cfg: PostprocConfig) -> None:
+    if cfg.OUTPUT_STEAL_TWIN_REWIRE and not cfg.STEAL_TWIN_DRY_RUN:
+        raise RuntimeError(...)
+```
+
+It runs in `filter_output_graph_pre_linefit` at line 641 before `new_stats` or
+graph work; `filter_output_graph` lines 808-815 delegates first to that guarded
+function and has no duplicate guard.  It also runs in `run_postproc` at line
+906 before detector loading/output creation and in
+`save_prelinefit_checkpoint` at line 992 before detector loading/checkpoint
+creation.  R2 replaces only this unavailable-ST-R2 rejection with the exact
+master/mode/profile routing in section 11.4; it does not move or duplicate the
+four effective entry checks.
+
+### 13.2 Plan, merge, allocation, and collector pins
+
+`<R1C_PLAN_HOOK>` is `pipeline.py@f6f4ad7:505-515`:
+
+```python
+def _run_steal_twin_r1_dry_run(
+    cfg: PostprocConfig,
+    dataset: str | None,
+    nodes_by_id: dict[int, dict[str, object]],
+    edges: list[dict[str, object]],
+    stats: dict[str, int],
+    deepcenter_bundle: dict[str, object] | None,
+    repair_frame_cache: dict[int, np.ndarray],
+    deepcenter_heatmap_cache: dict[tuple[str, int], np.ndarray],
+    twin_debug_collector: _TwinDebugCollector | None,
+) -> None:
+    ...
+```
+
+The exact planner invocation is lines 527-533.  The current adapter has no
+explicit return and therefore returns `None`; its local `plan` is not exposed
+to its caller.
+
+`<R1C_COUNTER_MERGE_HOOK>` has no separate production symbol.  It is inline in
+that adapter: lines 534-549 snapshot and validate the planner counter schema,
+values, and preseeded destination; lines 551-552 assign the complete mapping
+into `stats` with `zip(..., strict=True)`.
+
+`<R1C_DEBUG_ALLOCATION_HOOK>` also has no separate symbol.  At lines 553-558,
+a nonempty debug path requires the run-level collector, calls
+`twin_debug_collector.allocate(plan.debug_records)`, and overwrites that
+dataset's written/dropped counters with the returned values.
+
+`<R1C_DEBUG_COLLECTOR_TYPE>` is
+`pipeline.py@f6f4ad7:416-502`, class `_TwinDebugCollector`, with:
+
+```python
+__init__(self, max_records: int) -> None
+allocate(self, records: Sequence[TwinDebugRecord]) -> tuple[int, int]
+finalize(self, output_path: Path) -> None
+records_written: int
+records_dropped: int
+```
+
+`<R1C_RUN_COLLECTOR_FACTORY>` is also inline, not a shared function.
+`run_postproc` lines 908-918 and `save_prelinefit_checkpoint` lines 993-1007
+each construct exactly one
+`_TwinDebugCollector(cfg.STEAL_TWIN_DEBUG_MAX_RECORDS)` after their complete
+alias validation only when the master and debug path are both truthy.  The
+collector is created outside the sorted dataset loop and passed unchanged to
+every dataset; an empty path creates none.
+
+### 13.3 Cache identity and exact current order
+
+`filter_output_graph_pre_linefit` owns one per-dataset
+`repair_frame_cache: dict[int, np.ndarray] = {}` at line 651.  The same object
+is passed to centroid refinement, single-frame gap close, safe divisions, the
+R1c adapter, and through its strict callback to `score_twin_deepcenter` at
+lines 656, 724, 735, 747, and 523.
+
+The same function owns one per-dataset
+`deepcenter_heatmap_cache: dict[tuple[str, int], np.ndarray] = {}` at line 716.
+The same object is passed to single-frame gap close, safe divisions, the R1c
+adapter, and through its strict callback to `score_twin_deepcenter` at lines
+725, 736, 748, and 524.
+
+The exact current adapter order is:
+
+1. `plan_twin_only_v1` returns local `plan` at lines 527-533.
+2. Its complete counter mapping and destination preseed are snapshotted and
+   validated at lines 534-549.
+3. The complete mapping is assigned to `stats` at lines 551-552.
+4. If configured, `plan.debug_records` is allocated at lines 553-556.
+5. Returned per-dataset written/dropped values are stored at lines 557-558.
+6. The function returns `None` implicitly; R1c never mutates the graph.
+
+### 13.4 Ordinary artifact finalization order
+
+`run_postproc` completes every sorted dataset, closes the output CSV at the
+line-952 context boundary, completes `_finish_run`/`write_run_stats` at lines
+953-961, finalizes the collector at lines 962-963, and only then returns at
+lines 965-971.
+
+`save_prelinefit_checkpoint` completes and closes every dataset pickle at
+lines 1012-1036, writes `manifest.json` at lines 1038-1039, finalizes the
+collector at lines 1040-1041, and only then returns at line 1042.
+
+### 13.5 Exact R2 adapter amendment
+
+R2 must not assume the landed adapter already returns a plan or replacement
+edge list.  It may make exactly these interface changes, in addition to the
+new pure mutator and telemetry already frozen elsewhere in this contract:
+
+1. import the pinned `TwinPlan` type in `pipeline.py`;
+2. change only the return annotation of `_run_steal_twin_r1_dry_run` from
+   `None` to `TwinPlan` and add `return plan` after the existing merge and
+   optional debug allocation/counter assignment;
+3. at the existing line-740 call site, bind that exact return as
+   `plan = _run_steal_twin_r1_dry_run(...)` without another planner call;
+4. immediately after the planner returns, and before destination-counter merge
+   or collector allocation, validate the exact planner return and its failure
+   envelope as specified below;
+5. preserve the exact order plan -> failure-envelope validation -> whole
+   counter merge -> optional debug allocation -> returned debug counts; then,
+   only when `plan.validation_reason is None` and `STEAL_TWIN_DRY_RUN is False`,
+   call `apply_twin_only_v1_plan(nodes_by_id, edges, plan)` exactly once and bind
+   its returned edge list and summary;
+6. a canonical validation-failed plan or dry-run never calls the mutator; a
+   collector failure prevents the adapter return and therefore precedes
+   mutation; and
+7. assign R1 actual-effect and R2 telemetry only after the mutator returns and
+   the pipeline rejects an unexpected `already_applied` status, as required by
+   sections 11-12.
+
+Define one private exact tuple beside `_TWIN_COUNTER_KEYS` in `divisions.py` and
+import it into `pipeline.py`:
+
+```python
+_TWIN_VALIDATION_REASONS = (
+    "missing_node_field",
+    "invalid_node_id",
+    "duplicate_node_id",
+    "invalid_node_time",
+    "nonfinite_node_coordinate",
+    "invalid_edge_endpoint",
+    "dangling_edge",
+    "duplicate_edge",
+    "nonconsecutive_edge",
+    "indegree",
+    "outdegree",
+    "nonfinite_edge_distance",
+)
+```
+
+The pre-merge guard first requires `type(plan) is TwinPlan`.  A
+`validation_reason` of `None` is the valid-plan route.  Any non-`None` value
+must have exact type `str` and be one of the twelve strings above; empty,
+unknown, subclass, integer, or other values are malformed.  For such a reason,
+`nodes`, `edges`, `candidates`, `accepted_candidates`, `decisions`, and
+`debug_records` must each be the exact empty tuple.  `counters` must be exact
+`TwinFrozenMapping` with an exact tuple of exact length-two tuple entries in
+`_TWIN_COUNTER_KEYS` order, exact built-in string keys, and exact built-in int
+values.  Exactly `steal_twin_validation_failed` and
+`steal_twin_validation_<reason>` are one; every other value is zero.
+
+Any failure of this guard raises `RuntimeError` before the R1 planner-counter
+merge, collector allocation, twin/R2 mutation, downstream
+geometry/prune/short pass, or publication of the current dataset's CSV rows,
+stats row, or checkpoint payload.  The planner hook runs after the ordinary
+centroid/edge-distance/gap/division preprocessing pinned in section 11.2, and
+run/checkpoint entrypoints may already have created an output artifact, header,
+or directory and may have published earlier completed datasets.  The guard does
+not roll back those existing upstream mutations or ordinary earlier artifacts.
+Only a canonical failure envelope takes the existing route: merge its counters,
+optionally allocate its empty debug tuple, return the same plan, and skip the
+mutator.  The pure mutator retains section 5.1's direct-call classification;
+the stricter adapter guard exists because a non-`None` reason controls routing.
+
+The mutator receives the identical node mapping and edge-list objects from
+which the planner's row tuples were materialized; the planner does not receive
+the containers themselves.  No pass occurs between snapshot construction and
+mutation, so their rows and contents are unchanged.  Do not rename the adapter,
+change its parameters, expose the plan through global state, return multiple
+alternate shapes, use reflection/`hasattr` fallbacks, guess a signature, or add
+a test-only production shim.
+
+The audit also confirmed strict callback closure, duplicate GEFF-node hard
+failure, direct-call collector combinations, run-level capacity,
+deterministic lossless encoding, exact-bool record validation, bidirectional
+alias guards, independent cleanup-fault coverage, and atomic collector
+publication against the amended R1c task.  No R1c parity difference remains.
 
 ## 14. Required tests
 
@@ -1061,10 +1346,17 @@ dataset, or threshold forgery; candidate/decision identity or order forgery;
 role/time/distance/sort forgery; removed metadata mismatch; and planned
 probability not `None`.
 
-Forge a cyclic frozen plan tree and an excessively deep tree and require
-`plan_candidate`; forge cyclic/deep raw current metadata and require
-`current_graph_invalid`.  No recursion or incidental implementation exception
-may escape.
+Forge cyclic frozen-plan and raw-current metadata and require
+`plan_candidate`/`current_graph_invalid`, respectively.  Construct exact
+semantic-boundary fixtures for every recursive child family listed in section
+2: depth 64 succeeds with identical tokens, while depth 65 is
+`plan_candidate` for frozen plan metadata and `current_graph_invalid` for raw
+current metadata.  The adopted R1b freezer raises `TypeError` at raw depth 65,
+and the R1c retained-record plain codec raises `TypeError` at frozen depth 65;
+neither leaks `RecursionError`.  The corresponding depth-64 retained record has
+deterministic bytes identical across repeated encoding.  Dropped R1c records
+still do not traverse or reject their nested metadata.  Shared acyclic subtrees
+are accepted and counted once per semantic occurrence.
 
 Use forged candidate/debug fields carrying equality, ordering, numeric, or
 mapping protocols that would raise if invoked.  Exact structural checks must
@@ -1088,6 +1380,12 @@ reorder.  Exact extra node metadata is ignored for matching but its identity is
 preserved.  A second direct call with edge-post-state and caller-modified extra
 node metadata follows the documented support boundary and is still
 `already_applied`; bit-level core coordinate drift fails `node_mapping`.
+Use ordinary loader-shaped node rows with no `gap_synthetic` key for successful
+apply, zero-acceptance no-op, and second-application cases, and assert the key is
+not inserted.  Also cover one mapping containing both missing and present
+optional keys: absent and explicitly false nodes normalize identically, while
+an explicitly true node matches its true plan snapshot without changing any
+row identity or key order.
 Wrong top-level node-mapping/current-edge container types and dict subclasses
 for node/edge rows exercise the exact built-in API boundary and map to
 `node_mapping`/`current_graph_invalid` without invoking subclass methods.
@@ -1121,7 +1419,7 @@ failure and prove the inputs remain unchanged.
 
 ### 14.5 Pipeline routing and order
 
-After the R1c re-pin, spy on the exact landed hooks and require:
+Using the section-13 R1c pins, spy on the exact landed hooks and require:
 
 - master off never plans, allocates, mutates, or populates R2 even when the
   otherwise inert mode value is not `twin_only_v1`;
@@ -1130,7 +1428,16 @@ After the R1c re-pin, spy on the exact landed hooks and require:
 - dry-run plans/merges/allocates but never mutates and preserves graph/CSV;
 - candidate non-dry valid plan calls plan, merge, allocate, mutate exactly once
   at the frozen order and then geometry/prune/short;
-- validation-failed plans never mutate in dry or non-dry;
+- canonical validation-failed plans merge and optionally empty-allocate but
+  never mutate in dry or non-dry;
+- a wrong planner return type; empty, integer, string-subclass, or unknown
+  validation reason; nonempty failure snapshot/debug tuple; malformed failure
+  counter structure; or reason/counter forgery raises `RuntimeError` before
+  R1 counter merge, collector allocation, twin mutation, downstream
+  geometry/prune/short, or publication of the current dataset's CSV rows,
+  stats row, or checkpoint payload; assert that already-run upstream graph
+  preprocessing and already-created ordinary artifacts are not promised a
+  rollback;
 - the old non-dry-unavailable exception is gone only for the exact valid mode;
 - collector or allocation failure occurs before mutation;
 - mutator failure prevents downstream passes and dataset publication;
@@ -1154,9 +1461,13 @@ replacement caches.
   `-0.0`/`+0.0` change; checkpoint stores zero; relinefit computes on its stats
   copy without touching disk.  A non-built-in or nonfinite post-coordinate
   hard-fails.
-- A topology-increasing downstream pass, negative delta, or linefit change to
-  node keys/order/row identity/non-coordinate data or edge list/order/row
-  identity/content hard-fails before counter assignment or output.
+- A topology-increasing downstream pass or negative delta hard-fails.  Around
+  linefit, fault-inject node/edge container replacement, row replacement or
+  reorder, key replacement or reorder, and top-level preserved-binding
+  replacement; each hard-fails before counter assignment or output.  Arbitrary
+  nested in-place mutation is deliberately outside this non-recursive runtime
+  guard.  Invalid pre-coordinate fixtures fail before linefit is called, and
+  invalid post-coordinates fail before counter assignment or output.
 
 ### 14.7 Profile and regression identity
 
@@ -1173,7 +1484,8 @@ replacement caches.
 
 ## 15. Allowed implementation files and commands
 
-After the HOLD is cleared, an implementation task may edit only:
+The section-13 dependency HOLD is cleared.  An implementation task may edit
+only:
 
 ```text
 src/biohub/public_postproc/divisions.py
@@ -1192,9 +1504,10 @@ inference, network, Kaggle, and ST-R3 arm evaluation are forbidden in R2.
 
 ## 16. Implementation handoff sequence
 
-1. Land and independently review R1c implementation.
-2. Complete section 13 against its clean exact commit and hashes.
-3. Re-read this entire contract and the resulting exact diff.
+1. **Completed:** land and independently review R1c implementation.
+2. **Completed:** pin section 13 against its clean exact commit and hashes.
+3. Before editing source, re-read this entire contract, verify every pinned
+   hash, and stop on any drift.
 4. Implement the pure API and pure tests first.
 5. Implement counter preseed/ownership and pipeline routing using only the
    pinned R1c symbols.
@@ -1211,8 +1524,8 @@ commit.  The dependency boundary must remain auditable.
 
 R2 is SHIP only when all of the following are true:
 
-- section 13 contains no placeholder and an independent reviewer confirms the
-  landed R1c implementation matches its task;
+- section 13 contains no unresolved semantic label and an independent reviewer
+  confirms the landed R1c implementation matches its task;
 - the exact pure API, reason set, summaries, first/second-application behavior,
   identity rules, and pure `2k` invariants are implemented and tested;
 - every mutator failure is fail-closed and satisfies the R2-owned write
@@ -1227,6 +1540,9 @@ R2 is SHIP only when all of the following are true:
 - no source outside the allowed list and no R3/metric/GT/network behavior was
   changed.
 
-At this document base, section 13 is unresolved.  Therefore the binding final
-disposition is **HOLD_R1C_IMPLEMENTATION_DEPENDENCY**, with no other known
-design blocker.
+At this document base, section 13 is resolved and independently audited.  An
+independent SOL reviewer cleared the amended binding content at SHA-256
+`1d0643d20b53bc37274f5174df8c3377ebc30f2e506680ba68c10e3141a3fa13`.
+The design disposition is **READY_FOR_IMPLEMENTATION**, with no known contract
+blocker.  This is not a claim that R2 itself is SHIP: the implementation and
+every remaining exit criterion above are still outstanding.
