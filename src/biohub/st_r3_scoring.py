@@ -9,16 +9,20 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
+import errno
 import hashlib
+import inspect
 import io
 import json
 import math
 import os
 import re
-import shutil
+import resource
 import stat
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -230,6 +234,28 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _strict_json_loads(data: bytes, label: str) -> Any:
+    """Parse JSON while rejecting duplicate keys and non-standard constants."""
+
+    def object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ScoringFailure("DUPLICATE_JSON_KEY", f"{label}: duplicate key {key!r}")
+            result[key] = value
+        return result
+
+    def bad_constant(value: str) -> Any:
+        raise ScoringFailure("NONFINITE_JSON", f"{label}: forbidden JSON constant {value}")
+
+    try:
+        return json.loads(data, object_pairs_hook=object_pairs, parse_constant=bad_constant)
+    except ScoringFailure:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ScoringFailure("MALFORMED_JSON", f"{label}: {exc}") from exc
+
+
 def canonical_digest(value: Any) -> str:
     return sha256_bytes(canonical_json_bytes(value))
 
@@ -269,7 +295,12 @@ def _safe_rel(value: Any, label: str) -> PurePosixPath:
     if not isinstance(value, str) or not value or "\\" in value:
         raise ScoringFailure("UNSAFE_PATH", f"{label} is not a portable relative path")
     path = PurePosixPath(value)
-    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+    if (
+        path.is_absolute()
+        or path.as_posix() != value
+        or any(part in ("", ".", "..") for part in path.parts)
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
         raise ScoringFailure("UNSAFE_PATH", f"{label} is absolute or contains traversal")
     return path
 
@@ -302,27 +333,95 @@ def _validate_ref(run_dir: Path, value: Any, label: str) -> tuple[dict[str, Any]
     if type(ref["bytes"]) is not int or ref["bytes"] < 0:
         raise ScoringFailure("SCHEMA_MISMATCH", f"{label}.bytes must be a nonnegative integer")
     expected = _require_sha(ref["sha256"], f"{label}.sha256")
-    if path.stat().st_size != ref["bytes"] or sha256_file(path) != expected:
+    actual_size, actual_sha = _secure_file_identity(path, label)
+    if actual_size != ref["bytes"] or actual_sha != expected:
         raise ScoringFailure("HASH_DRIFT", f"{label} bytes/hash drift: {ref['path']}")
     return ref, path
+
+
+def _secure_file_identity(path: Path, label: str) -> tuple[int, str]:
+    """Hash one stable, single-link regular-file inode through O_NOFOLLOW."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ScoringFailure("HARDLINK_REFUSED", f"{label} must be a single-link regular file")
+            digest = hashlib.sha256()
+            while chunk := os.read(fd, 1024 * 1024):
+                digest.update(chunk)
+            after = os.fstat(fd)
+            path_after = path.lstat()
+        finally:
+            os.close(fd)
+    except ScoringFailure:
+        raise
+    except OSError as exc:
+        raise ScoringFailure("ARTIFACT_READ_ERROR", f"{label}: {exc}") from exc
+    stable = (
+        before.st_dev == after.st_dev
+        and before.st_ino == after.st_ino
+        and before.st_size == after.st_size
+        and before.st_mtime_ns == after.st_mtime_ns
+        and after.st_nlink == 1
+        and path_after.st_dev == after.st_dev
+        and path_after.st_ino == after.st_ino
+        and path_after.st_nlink == 1
+    )
+    if not stable:
+        raise ScoringFailure("HASH_DRIFT", f"{label} inode/stat changed while hashing")
+    return before.st_size, digest.hexdigest()
 
 
 def artifact_ref(run_dir: Path, path: Path) -> dict[str, Any]:
     rel = path.relative_to(run_dir).as_posix()
     _safe_rel(rel, "artifact path")
-    return {"path": rel, "bytes": path.stat().st_size, "sha256": sha256_file(path)}
+    size, digest = _secure_file_identity(path, f"artifact {rel}")
+    return {"path": rel, "bytes": size, "sha256": digest}
 
 
 def _read_json(path: Path, label: str) -> dict[str, Any]:
     try:
         data = path.read_bytes()
-        value = json.loads(data)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = _strict_json_loads(data, label)
+    except ScoringFailure:
+        raise
+    except OSError as exc:
         raise ScoringFailure("MALFORMED_JSON", f"{label}: {exc}") from exc
     value = _require_dict(value, label)
     if canonical_json_bytes(value) != data:
         raise ScoringFailure("NON_CANONICAL_JSON", f"{label} is not canonical JSON")
     return value
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise ScoringFailure("FSYNC_FAILED", f"cannot fsync directory {path}: {exc}") from exc
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    """Atomically rename without replacing an existing destination."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_b = os.fsencode(source)
+    destination_b = os.fsencode(destination)
+    if sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
+        result = libc.renameatx_np(-2, source_b, -2, destination_b, 0x00000004)  # RENAME_EXCL
+    elif sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        result = libc.renameat2(-100, source_b, -100, destination_b, 1)  # RENAME_NOREPLACE
+    else:
+        raise ScoringFailure("HOLD_ATOMIC_NOREPLACE", "OS has no supported atomic no-replace rename")
+    if result != 0:
+        error = ctypes.get_errno()
+        if error in (errno.EEXIST, errno.ENOTEMPTY):
+            raise ScoringFailure("NO_CLOBBER", f"refusing to overwrite {destination}")
+        raise ScoringFailure("ATOMIC_RENAME_FAILED", f"rename failed: {os.strerror(error)}")
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -338,17 +437,8 @@ def _atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        if path.exists() or path.is_symlink():
-            raise ScoringFailure("NO_CLOBBER", f"refusing to overwrite {path}")
-        os.rename(temporary, path)
-        try:
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except OSError:
-            pass
+        _rename_noreplace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         if temporary.exists():
             temporary.unlink()
@@ -539,7 +629,9 @@ def _validate_artifact_list(run_dir: Path, value: Any) -> set[str]:
         raise ScoringFailure("SCHEMA_MISMATCH", "artifacts must be an array")
     refs: list[dict[str, Any]] = []
     for index, item in enumerate(value):
-        ref, _ = _validate_ref(run_dir, item, f"artifacts[{index}]")
+        ref, path = _validate_ref(run_dir, item, f"artifacts[{index}]")
+        if path.suffix == ".json":
+            _reject_public_four(_read_json(path, f"artifacts[{index}] JSON"), f"artifacts[{index}]")
         refs.append(ref)
     paths = [ref["path"] for ref in refs]
     _check_case_collisions(paths, "artifacts")
@@ -560,6 +652,16 @@ def _reject_gt_exposure(value: Any, label: str) -> None:
     elif isinstance(value, list):
         for child in value:
             _reject_gt_exposure(child, label)
+    elif isinstance(value, str):
+        lowered = value.casefold().replace("\\", "/")
+        path_tokens = set(re.split(r"[^a-z0-9]+", lowered))
+        if (
+            "gt" in path_tokens
+            or "groundtruth" in path_tokens
+            or ("ground" in path_tokens and "truth" in path_tokens)
+            or lowered.endswith(".geff")
+        ):
+            raise ScoringFailure("GT_EXPOSED_TO_ARM", f"{label}: forbidden GT path/capability value")
 
 
 def _reject_public_four(value: Any, label: str) -> None:
@@ -650,6 +752,41 @@ def _validate_current_source(run_dir: Path, manifest: Mapping[str, Any]) -> None
             raise ScoringFailure("OFFICIAL_HASH_DRIFT", f"official source hash drift: {rel}")
 
 
+def _validate_official_runtime_binding(sealed: SealedInputs) -> None:
+    """Bind the functions about to be called to the reviewed official files."""
+    import tracking_cellmot.division_metrics as division_module
+    import tracking_cellmot.metrics as metrics_module
+
+    import biohub.evaluate as evaluate_module
+
+    repo = Path(__file__).resolve().parents[2]
+    expected_files = {
+        metrics_module: repo / "official/src/tracking_cellmot/metrics.py",
+        division_module: repo / "official/src/tracking_cellmot/division_metrics.py",
+        evaluate_module: repo / "src/biohub/evaluate.py",
+    }
+    expected_hashes = {
+        metrics_module: sealed.manifest["official"]["source_hashes"]["tracking_cellmot/metrics.py"],
+        division_module: sealed.manifest["official"]["source_hashes"]["tracking_cellmot/division_metrics.py"],
+        evaluate_module: sealed.manifest["source_bindings"]["evaluate_py_sha256"],
+    }
+    for module, expected_path in expected_files.items():
+        actual_path = Path(inspect.getsourcefile(module) or "").resolve()
+        _, actual_sha = _secure_file_identity(actual_path, f"runtime module {module.__name__}")
+        if actual_path != expected_path.resolve() or actual_sha != expected_hashes[module]:
+            raise ScoringFailure("OFFICIAL_IMPORT_DRIFT", f"runtime module origin/hash drift: {module.__name__}")
+    for function in (
+        evaluate_module.score_submission,
+        evaluate_module.summarise,
+        metrics_module.evaluate,
+        metrics_module.per_sample_metrics,
+        metrics_module.summarise,
+    ):
+        module = sys.modules.get(function.__module__)
+        if module is None or Path(inspect.getsourcefile(function) or "").resolve() != Path(module.__file__).resolve():
+            raise ScoringFailure("OFFICIAL_IMPORT_DRIFT", f"runtime function origin drift: {function.__name__}")
+
+
 def _load_gt_inventory(run_dir: Path, ref_value: Any, expected_gt_dir: PurePosixPath) -> dict[str, Any]:
     _, path = _validate_ref(run_dir, ref_value, "scoring_inputs.gt_inventory")
     inventory = _read_json(path, "GT inventory")
@@ -693,13 +830,23 @@ def _read_shape(zarr_root: Path, stem: str) -> tuple[int, int, int, int]:
 
 def _read_json_relaxed(path: Path, label: str) -> dict[str, Any]:
     try:
-        return _require_dict(json.loads(path.read_bytes()), label)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return _require_dict(_strict_json_loads(path.read_bytes(), label), label)
+    except ScoringFailure:
+        raise
+    except OSError as exc:
         raise ScoringFailure("MALFORMED_JSON", f"{label}: {exc}") from exc
 
 
 def validate_feasibility_manifest(run_dir: Path | str, expected_sha256: str) -> SealedInputs:
-    """Validate the exact upstream handoff and the canonical full-36 CSVs."""
+    """Production boundary: the upstream interface is not reviewed yet."""
+    raise ScoringFailure(
+        "HOLD_INTERFACE_INCOMPLETE",
+        "reviewed generation/feasibility receipt schemas are not implemented; GT remains locked",
+    )
+
+
+def _validate_fixture_feasibility_manifest(run_dir: Path | str, expected_sha256: str) -> SealedInputs:
+    """Exercise the draft handoff in synthetic tests; never called by production."""
     supplied_run_dir = Path(run_dir)
     if supplied_run_dir.is_symlink() or not supplied_run_dir.is_dir():
         raise ScoringFailure("INVALID_RUN_DIR", "run directory must be a real directory")
@@ -730,11 +877,13 @@ def validate_feasibility_manifest(run_dir: Path | str, expected_sha256: str) -> 
     ):
         raise ScoringFailure("MANIFEST_CHAIN_BROKEN", "generation does not chain to preregistration")
     generation_value = _read_json(generation_path, "generation manifest")
+    _reject_public_four(generation_value, "generation manifest")
     if generation_value.get("state") != "GENERATION_SEALED":
         raise ScoringFailure("STATE_MISMATCH", "preceding generation manifest is not GENERATION_SEALED")
     if generation_value.get("preregistration_sha256") != prereg["sha256"]:
         raise ScoringFailure("MANIFEST_CHAIN_BROKEN", "generation file does not bind preregistration")
     prereg_value = _read_json(prereg_path, "preregistration")
+    _reject_public_four(prereg_value, "preregistration")
     if prereg_value.get("run_id") != manifest["run_id"]:
         raise ScoringFailure("MANIFEST_CHAIN_BROKEN", "run_id differs from preregistration")
 
@@ -756,6 +905,11 @@ def validate_feasibility_manifest(run_dir: Path | str, expected_sha256: str) -> 
 
     executions = _require_dict(manifest["executions"], "executions")
     _exact_keys(executions, EXECUTION_KEYS, "executions")
+    execution_paths = [
+        executions[key].get("path") if isinstance(executions[key], dict) else None for key in EXECUTION_KEYS
+    ]
+    if len(set(execution_paths)) != len(EXECUTION_KEYS):
+        raise ScoringFailure("FIVE_ARM_INCOMPLETE", "the five execution receipts must have distinct paths")
     for key in EXECUTION_KEYS:
         _, receipt_path = _validate_ref(run_dir, executions[key], f"executions.{key}")
         _reject_gt_exposure(_read_json(receipt_path, f"executions.{key}"), f"executions.{key}")
@@ -900,7 +1054,8 @@ def _verify_unlocked_gt(sealed: SealedInputs, stems: Sequence[str]) -> dict[str,
         for path in actual_files:
             rel = path.relative_to(sealed.run_dir).as_posix()
             record = records[rel]
-            if path.stat().st_size != record["bytes"] or sha256_file(path) != record["sha256"]:
+            actual_size, actual_sha = _secure_file_identity(path, f"{stem} GT {rel}")
+            if actual_size != record["bytes"] or actual_sha != record["sha256"]:
                 raise ScoringFailure("GT_HASH_DRIFT", f"{stem}: hash drift at {rel}")
         receipt[stem] = _validate_metadata_binding(sealed, stem)
     return receipt
@@ -933,14 +1088,19 @@ def _parse_explicit_scale(zarr_root: Path, stem: str) -> tuple[tuple[float, floa
         raise ScoringFailure("MALFORMED_SCALE", f"{stem}: scale must have three spatial values plus optional time")
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_scale):
         raise ScoringFailure("MALFORMED_SCALE", f"{stem}: scale values must be numeric")
+    axes = multiscale.get("axes")
+    expected_axis_names = ("t", "z", "y", "x") if len(raw_scale) == 4 else ("z", "y", "x")
+    if not isinstance(axes, list) or len(axes) != len(expected_axis_names):
+        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: explicit axes must match scale")
+    axis_names = tuple(axis.get("name") if isinstance(axis, dict) else None for axis in axes)
+    if axis_names != expected_axis_names:
+        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: axes are not exact TZYX/ZYX")
+    spatial_axes = axes[-3:]
+    if any(not isinstance(axis, dict) or axis.get("unit") != "micrometer" for axis in spatial_axes):
+        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: spatial axes must declare micrometer units")
     if len(raw_scale) == 4:
-        axes = multiscale.get("axes")
-        if axes is not None:
-            if not isinstance(axes, list) or len(axes) != 4:
-                raise ScoringFailure("MALFORMED_SCALE", f"{stem}: axes do not match scale")
-            axis_names = [axis.get("name") if isinstance(axis, dict) else axis for axis in axes]
-            if axis_names[0] not in ("t", "time") or tuple(axis_names[-3:]) != ("z", "y", "x"):
-                raise ScoringFailure("MALFORMED_SCALE", f"{stem}: axes are not TZYX")
+        if not isinstance(axes[0], dict) or axes[0].get("type") != "time":
+            raise ScoringFailure("MALFORMED_SCALE", f"{stem}: first axis must explicitly be time")
         spatial_raw = raw_scale[-3:]
     else:
         spatial_raw = raw_scale
@@ -1012,6 +1172,7 @@ def _normalise_summary(summary: Mapping[str, Any], label: str) -> dict[str, Any]
             if not math.isfinite(number):
                 if (
                     key == "division_jaccard"
+                    and math.isnan(number)
                     and summary["division_tp"] + summary["division_fp"] + summary["division_fn"] == 0
                 ):
                     result[key] = None
@@ -1053,6 +1214,8 @@ def _raw_for_summary(row: Mapping[str, Any]) -> dict[str, Any]:
 
 def _score_one(csv_path: Path, sealed: SealedInputs, stem: str, arm: str) -> dict[str, Any]:
     from biohub.evaluate import score_submission
+
+    _validate_official_runtime_binding(sealed)
 
     try:
         wrapper_summary, returned = score_submission(
@@ -1228,7 +1391,7 @@ def evaluate_feasibility_thresholds(values: Mapping[str, Any]) -> dict[str, Any]
     )
     if frozenset(values) != expected:
         raise ScoringFailure("SCHEMA_MISMATCH", "feasibility threshold inputs differ")
-    numeric: dict[str, float] = {}
+    numeric: dict[str, int | float] = {}
     for key, value in values.items():
         if (
             isinstance(value, bool)
@@ -1237,16 +1400,23 @@ def evaluate_feasibility_thresholds(values: Mapping[str, Any]) -> dict[str, Any]
             or value <= 0
         ):
             raise ScoringFailure("NONFINITE_GATE_INPUT", f"{key} must be finite and positive")
-        numeric[key] = float(value)
+        numeric[key] = value
     hidden_200 = numeric["target_eval36_charged_seconds"] * 200 / 36
     gates = [
-        {"name": "local_runtime", "pass": numeric["candidate_wall_gate"] <= 1.25 * numeric["baseline_wall_gate"]},
+        {
+            "name": "local_runtime",
+            "pass": numeric["candidate_wall_gate"] * 4 <= 5 * numeric["baseline_wall_gate"],
+        },
         {"name": "local_rss", "pass": numeric["candidate_rss_gate"] <= numeric["baseline_rss_gate"] + 1_073_741_824},
         {
             "name": "target_memory",
-            "pass": numeric["target_candidate_aggregate_peak_gate"] <= 0.80 * numeric["target_declared_ram_bytes"],
+            "pass": numeric["target_candidate_aggregate_peak_gate"] * 5 <= 4 * numeric["target_declared_ram_bytes"],
         },
-        {"name": "hidden_200", "pass": hidden_200 <= 0.80 * numeric["target_declared_wall_seconds"]},
+        {
+            "name": "hidden_200",
+            "pass": numeric["target_eval36_charged_seconds"] * 200 * 5
+            <= numeric["target_declared_wall_seconds"] * 36 * 4,
+        },
     ]
     return {"gates": gates, "hidden_200_seconds": hidden_200, "pass": all(gate["pass"] for gate in gates)}
 
@@ -1270,6 +1440,7 @@ def _verify_stage_manifest(
     path = _resolve(
         run_dir, (directory / "ARTIFACT_MANIFEST.json").relative_to(run_dir).as_posix(), f"{stage} manifest"
     )
+    _secure_file_identity(path, f"{stage} manifest")
     manifest = _read_json(path, f"{stage} manifest")
     _exact_keys(manifest, STAGE_MANIFEST_KEYS, f"{stage} manifest")
     if (
@@ -1323,7 +1494,7 @@ def _verify_stage_manifest(
     return manifest, gate, path
 
 
-def _state_prerequisite(sealed: SealedInputs, stage: str) -> dict[str, Any]:
+def _state_prerequisite(sealed: SealedInputs, stage: str, prior_manifest_sha256: str | None = None) -> dict[str, Any]:
     final = sealed.run_dir / "final" / "VERDICT.json"
     if final.exists() or final.is_symlink():
         raise ScoringFailure("TERMINAL_RUN", "final verdict already exists; run is terminal")
@@ -1350,13 +1521,23 @@ def _state_prerequisite(sealed: SealedInputs, stage: str) -> dict[str, Any]:
             "sha256": sealed.manifest_sha256,
         }
     if stage == "eval24":
+        if prior_manifest_sha256 is None:
+            raise ScoringFailure("MISSING_PRIOR_ANCHOR", "eval24 requires the in-memory eval12 manifest SHA")
         if _score_dir(sealed.run_dir, "eval36").exists():
             raise ScoringFailure("STATE_ORDER", "eval36 already exists")
         _, _, path = _verify_stage_manifest(sealed.run_dir, "eval12", "EVAL12_PASS", sealed.manifest_sha256)
+        _, current_sha = _secure_file_identity(path, "eval12 authoritative manifest")
+        if current_sha != _require_sha(prior_manifest_sha256, "prior_manifest_sha256"):
+            raise ScoringFailure("PRIOR_STAGE_TAMPERED", "eval12 differs from the authoritative invocation anchor")
         return artifact_ref(sealed.run_dir, path)
     if stage == "eval36":
+        if prior_manifest_sha256 is None:
+            raise ScoringFailure("MISSING_PRIOR_ANCHOR", "eval36 requires the in-memory eval24 manifest SHA")
         _verify_stage_manifest(sealed.run_dir, "eval12", "EVAL12_PASS", sealed.manifest_sha256)
         _, _, path = _verify_stage_manifest(sealed.run_dir, "eval24", "EVAL24_PASS", sealed.manifest_sha256)
+        _, current_sha = _secure_file_identity(path, "eval24 authoritative manifest")
+        if current_sha != _require_sha(prior_manifest_sha256, "prior_manifest_sha256"):
+            raise ScoringFailure("PRIOR_STAGE_TAMPERED", "eval24 differs from the authoritative invocation anchor")
         return artifact_ref(sealed.run_dir, path)
     raise ScoringFailure("INVALID_STAGE", stage)
 
@@ -1451,6 +1632,11 @@ def _score_unlocked_stage(
             }
             item[arm] = scored
         rows.append(item)
+    post_metadata = _verify_unlocked_gt(sealed, stems)
+    if canonical_json_bytes(post_metadata) != canonical_json_bytes(metadata):
+        raise ScoringFailure(
+            "GT_DRIFT_DURING_SCORE", "unlocked GT metadata changed during scoring", gt_read_started=True
+        )
     return rows, {
         "schema_version": "biohub.st_r3.score_input_receipt.v1",
         "stage": stage,
@@ -1514,18 +1700,27 @@ def _publish_stage(
     _temp_write(temp / "ARTIFACT_MANIFEST.json", canonical_json_bytes(manifest))
     if target.exists() or target.is_symlink():
         raise ScoringFailure("NO_CLOBBER", f"refusing to overwrite {target}")
-    os.rename(temp, target)
+    _rename_noreplace(temp, target)
+    _fsync_directory(target.parent)
     return target / "ARTIFACT_MANIFEST.json", manifest
 
 
 def _terminal_verdict(
-    sealed: SealedInputs, stage: str, status: str, first_failure: str | None, stage_manifest: Path | None
+    sealed: SealedInputs,
+    stage: str,
+    status: str,
+    first_failure: str | None,
+    stage_manifest: Path | None,
+    execution_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    partial_dir = sealed.run_dir / "scores" / f"failed_{_stage_name(stage)}"
     partial_inventory = []
-    if partial_dir.exists() and partial_dir.is_dir() and not partial_dir.is_symlink():
-        for path in _walk_regular_tree(partial_dir, sealed.run_dir):
-            partial_inventory.append(artifact_ref(sealed.run_dir, path))
+    scores_dir = sealed.run_dir / "scores"
+    failed_prefix = f"failed_{_stage_name(stage)}"
+    if scores_dir.is_dir() and not scores_dir.is_symlink():
+        for partial_dir in sorted(path for path in scores_dir.iterdir() if path.name.startswith(failed_prefix)):
+            if partial_dir.is_dir() and not partial_dir.is_symlink():
+                for path in _walk_regular_tree(partial_dir, sealed.run_dir):
+                    partial_inventory.append(artifact_ref(sealed.run_dir, path))
     score_artifacts = None
     gates = None
     if stage_manifest is not None:
@@ -1535,6 +1730,7 @@ def _terminal_verdict(
             for name in ("PER_VIDEO.json", "AGGREGATES.json", "DELTAS.json", "GATE.json")
         }
         gates = _read_json(stage_dir / "GATE.json", f"{stage} terminal gate")["gates"]
+    execution = dict(execution_receipt or {})
     verdict = {
         "schema_version": "biohub.st_r3.terminal_verdict.v1",
         "run_id": sealed.manifest["run_id"],
@@ -1547,33 +1743,55 @@ def _terminal_verdict(
         "gates": gates,
         "feasibility_artifact": sealed.manifest["feasibility"]["ref"],
         "partial_score_inventory": partial_inventory,
-        "command": [
-            "scripts/st_r3_score_stage.py",
-            "--run-dir",
-            ".",
-            "--generation-manifest-sha256",
-            sealed.manifest_sha256,
-            "--stage",
-            stage,
-        ],
+        "scorer_execution": execution,
+        "feasibility_runtime_rss_receipt": sealed.manifest["feasibility"]["ref"],
+        "command": execution.get("argv", []),
         "allowed_next_action": "retain exact E23 fallback; do not continue or regenerate this run",
     }
     _atomic_write(sealed.run_dir / "final" / "VERDICT.json", canonical_json_bytes(verdict))
     return verdict
 
 
-def score_stage(run_dir: Path | str, generation_manifest_sha256: str, stage: str) -> dict[str, Any]:
+def _execution_receipt(started: float, argv: Sequence[str] | None = None) -> dict[str, Any]:
+    elapsed = time.perf_counter() - started
+    maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    maxrss_bytes = int(maxrss if sys.platform == "darwin" else maxrss * 1024)
+    environment = {
+        key: os.environ[key] for key in ("PYTHONHASHSEED", "PYTHONPATH", "TZ", "LC_ALL", "LANG") if key in os.environ
+    }
+    return {
+        "argv": list(argv if argv is not None else sys.argv),
+        "cwd": str(Path.cwd().resolve()),
+        "environment": environment,
+        "scorer_wall_seconds": elapsed,
+        "scorer_process_maxrss_bytes": maxrss_bytes,
+        "rss_scope": "SCORER_PROCESS_ONLY_NOT_TARGET_GATE",
+    }
+
+
+def score_stage(
+    run_dir: Path | str,
+    generation_manifest_sha256: str,
+    stage: str,
+    *,
+    prior_manifest_sha256: str | None = None,
+    invocation_argv: Sequence[str] | None = None,
+    _invocation_started: float | None = None,
+) -> dict[str, Any]:
     """Execute exactly one legal ST-R3 score transition."""
     stage = stage.lower()
     _stage_name(stage)
     sealed: SealedInputs | None = None
     temp: Path | None = None
+    gt_read_started = False
+    started = _invocation_started if _invocation_started is not None else time.perf_counter()
     try:
         sealed = validate_feasibility_manifest(run_dir, generation_manifest_sha256)
-        preceding = _state_prerequisite(sealed, stage)
+        preceding = _state_prerequisite(sealed, stage, prior_manifest_sha256)
         temp = _temp_stage_dir(sealed.run_dir, stage)
         if stage in ("eval12", "eval24"):
             stems = EVAL12 if stage == "eval12" else EVAL24
+            gt_read_started = True
             rows, input_receipt = _score_unlocked_stage(sealed, stage, stems, temp)
         else:
             stems = EVAL36
@@ -1609,7 +1827,14 @@ def score_stage(run_dir: Path | str, generation_manifest_sha256: str, stage: str
         manifest_path, _ = _publish_stage(sealed, stage, preceding, temp, gate["status"])
         temp = None
         if gate["first_failure"] is not None or stage == "eval36":
-            verdict = _terminal_verdict(sealed, stage, gate["status"], gate["first_failure"], manifest_path)
+            verdict = _terminal_verdict(
+                sealed,
+                stage,
+                gate["status"],
+                gate["first_failure"],
+                manifest_path,
+                _execution_receipt(started, invocation_argv),
+            )
             return verdict
         return {
             "schema_version": "biohub.st_r3.stage_result.v1",
@@ -1619,33 +1844,80 @@ def score_stage(run_dir: Path | str, generation_manifest_sha256: str, stage: str
             "first_failure": None,
             "stage_manifest": artifact_ref(sealed.run_dir, manifest_path),
         }
-    except ScoringFailure as exc:
+    except Exception as caught:
+        exc = (
+            caught
+            if isinstance(caught, ScoringFailure)
+            else ScoringFailure("UNEXPECTED_SCORER_ERROR", f"{type(caught).__name__}: {caught}")
+        )
         if sealed is not None and not (sealed.run_dir / "final" / "VERDICT.json").exists():
             if temp is not None and temp.exists():
                 failed = sealed.run_dir / "scores" / f"failed_{_stage_name(stage)}"
-                if not failed.exists() and not failed.is_symlink():
-                    os.rename(temp, failed)
-                    temp = None
-            status = "ERROR_AFTER_GT_READ" if exc.gt_read_started else "ERROR_BEFORE_GT_READ"
-            _terminal_verdict(sealed, stage, status, exc.code, None)
-        raise
-    finally:
-        if temp is not None and temp.exists():
-            shutil.rmtree(temp)
+                if failed.exists() or failed.is_symlink():
+                    failed = failed.with_name(f"{failed.name}-{uuid.uuid4().hex}")
+                _rename_noreplace(temp, failed)
+                _fsync_directory(failed.parent)
+                temp = None
+            status = "ERROR_AFTER_GT_READ" if gt_read_started or exc.gt_read_started else "ERROR_BEFORE_GT_READ"
+            _terminal_verdict(
+                sealed,
+                stage,
+                status,
+                exc.code,
+                None,
+                _execution_receipt(started, invocation_argv),
+            )
+        if exc is caught:
+            raise
+        raise exc from caught
+
+
+def score_all(
+    run_dir: Path | str, generation_manifest_sha256: str, *, invocation_argv: Sequence[str] | None = None
+) -> dict[str, Any]:
+    """Run the complete staged readout without returning control between stages."""
+    started = time.perf_counter()
+    eval12 = score_stage(
+        run_dir,
+        generation_manifest_sha256,
+        "eval12",
+        invocation_argv=invocation_argv,
+        _invocation_started=started,
+    )
+    if eval12["status"] != "EVAL12_PASS":
+        return eval12
+    eval24 = score_stage(
+        run_dir,
+        generation_manifest_sha256,
+        "eval24",
+        prior_manifest_sha256=eval12["stage_manifest"]["sha256"],
+        invocation_argv=invocation_argv,
+        _invocation_started=started,
+    )
+    if eval24["status"] != "EVAL24_PASS":
+        return eval24
+    return score_stage(
+        run_dir,
+        generation_manifest_sha256,
+        "eval36",
+        prior_manifest_sha256=eval24["stage_manifest"]["sha256"],
+        invocation_argv=invocation_argv,
+        _invocation_started=started,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Score one immutable ST-R3 stage")
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--generation-manifest-sha256", required=True)
-    parser.add_argument("--stage", required=True, choices=("eval12", "eval24", "eval36"))
+    parser.add_argument("--stage", required=True, choices=("all",))
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        result = score_stage(args.run_dir, args.generation_manifest_sha256, args.stage)
+        result = score_all(args.run_dir, args.generation_manifest_sha256, invocation_argv=sys.argv)
     except ScoringFailure as exc:
         result = {
             "schema_version": "biohub.st_r3.cli_result.v1",

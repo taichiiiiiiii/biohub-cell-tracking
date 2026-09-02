@@ -4,12 +4,28 @@ Updated: 2026-09-02 (Asia/Tokyo)
 
 ## Status
 
-The scoring implementation is complete for code audit and synthetic-fixture
-verification. Production execution remains **HOLD_INTERFACE_INCOMPLETE**. No
+The scorer remains deliberately **HOLD_INTERFACE_INCOMPLETE**. The former
+draft feasibility object is retained only as a synthetic-fixture boundary; it
+is not a production schema and no combination of its self-reported booleans
+can unlock GT. The production validator unconditionally returns the code-owned
+HOLD; the draft validator is private and referenced only by synthetic tests.
+Re-enablement therefore requires a reviewed source change after the generation
+supervisor publishes its complete schemas. No
 full five-arm generation/feasibility manifest exists yet, no GT-backed ST-R4
 score was read, and no Kaggle/network action was taken. The subsequent
 generation orchestrator must emit the exact handoff below; the scorer has no
 legacy, reflection, or best-effort compatibility path.
+
+Production re-enablement requires a new reviewed commit. That commit must
+replace the draft handoff with exact schemas for all five distinct fixed arm
+receipts and verify, rather than trust, arm identity/order, exact eval36 event
+coverage, stats/plans/configs, pre/post inventories, sandbox mounts and closed
+FDs, GT-negative canaries, DeepCenter identity, conservation, mirrored runtime
+and RSS values, target-class calibration/equivalence, target limits, and every
+derived feasibility gate. Each aggregate digest must be recomputed from its
+listed artifacts. Until those schemas exist, the only production result is the
+canonical `HOLD_INTERFACE_INCOMPLETE` CLI object, emitted before resolving the
+run directory, manifest, inventory, or any GT path.
 
 The CLI argument retains the contract spelling
 `--generation-manifest-sha256`, but its value is deliberately the SHA-256 of
@@ -18,7 +34,7 @@ The CLI argument retains the contract spelling
 the scoring entry point only `(immutable run directory, exact sealed handoff
 hash, stage)`.
 
-## Exact feasibility handoff schema
+## Draft feasibility handoff schema (test-only; cannot unlock production)
 
 `feasibility/FEASIBILITY_PASS.json` is canonical UTF-8 JSON (sorted keys,
 compact separators, one trailing newline, no NaN/Inf) with exactly these
@@ -155,10 +171,12 @@ digest is SHA-256 of canonical JSON with schema
 physical data-row bytes for that dataset, excluding the header. It is checked
 back against the full CSV before any stage subset is created.
 
-Each execution receipt must itself be canonical JSON. Any explicit `gt` or
-`ground_truth` field in an arm receipt is rejected. The generation supervisor
-must define and verify its complete receipt schema; the scoring boundary only
-accepts the five immutable refs and the sealed cross-arm hash aggregates above.
+Each future execution receipt must itself be canonical JSON at a distinct,
+arm-specific fixed path. Any GT capability/path value, argv/environment/mount
+entry, inherited FD, or public-four value is rejected unless an exact reviewed
+schema explicitly allows a non-sensitive field. The generation supervisor must
+define and verify its complete receipt schema. Merely supplying five keys,
+opaque hashes, or `true` booleans is not evidence and cannot unlock scoring.
 
 ## GT inventory and preflight
 
@@ -215,8 +233,12 @@ lineage partitions.
 
 ## State, artifacts, and commands
 
-Legal transitions are eval12 after the sealed feasibility handoff, eval24 only
-after `EVAL12_PASS`, and eval36 only after `EVAL24_PASS`. A skip, error, metric
+The production CLI uses one authoritative `--stage all` invocation. Once the
+future sealed feasibility handoff is accepted it runs eval12, its gate, eval24,
+its gate, and the eval36 stored-row roll-up without returning control to a
+human. Internal eval24/eval36 transitions additionally require the exact prior
+manifest SHA held in memory by that invocation; recomputing a self-consistent
+manifest after score-read modification cannot advance the state. A skip, error, metric
 reject, or completed eval36 creates the first no-clobber
 `final/VERDICT.json`; later continuation is refused. Partial score files are
 atomically retained under `scores/failed_<stage>/` and inventoried. Successful
@@ -244,13 +266,7 @@ Commands, after the future upstream handoff exists:
 PYTHONPATH="src:official/src" python scripts/st_r3_score_stage.py \
   --run-dir outputs/local/steal_twin/<immutable_run_id> \
   --generation-manifest-sha256 <FEASIBILITY_PASS.json SHA256> \
-  --stage eval12
-
-# Only after EVAL12_PASS:
-... --stage eval24
-
-# Only after EVAL24_PASS; stored-row roll-up, zero new evaluator calls:
-... --stage eval36
+  --stage all
 ```
 
 The CLI writes one canonical result object. ERROR/REJECT is nonzero;
@@ -272,3 +288,9 @@ label authorizes no Kaggle operation.
   demonstrate schema behavior only.
 - Synthetic official fixtures validate metric direction/counts but are not
   real eval12/eval24 results and must not be reported as candidate evidence.
+- Same-UID concurrent mutation cannot be excluded by a producer's check-return
+  sequence alone. The scorer is an independent consumer trust boundary: every
+  accepted ref and every unlocked GT file must be opened with no-follow
+  semantics, have one link, retain device/inode/stat identity while hashing,
+  and match its inventory both before and after scoring. This complements but
+  does not clear the supervisor's `HOLD_PROCESS_TREE_UNPROVEN`.

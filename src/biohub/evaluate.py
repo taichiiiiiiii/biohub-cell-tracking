@@ -7,6 +7,7 @@ only ``tracking_cellmot.metrics`` (polars + tracksdata).
 Validation is strict on purpose: a malformed CSV raises instead of being
 silently repaired, because Kaggle would reject or mis-score it.
 """
+
 from __future__ import annotations
 
 import sys
@@ -17,8 +18,14 @@ import polars as pl
 from biohub.io import SUBMISSION_COLUMNS, estimated_number_of_nodes, load_geff_graph, read_scale
 
 _OFFICIAL_SRC = Path(__file__).resolve().parents[2] / "official" / "src"
-if str(_OFFICIAL_SRC) not in sys.path:
-    sys.path.insert(0, str(_OFFICIAL_SRC))
+_official_resolved = _OFFICIAL_SRC.resolve()
+for _name, _module in tuple(sys.modules.items()):
+    if _name == "tracking_cellmot" or _name.startswith("tracking_cellmot."):
+        _origin = getattr(_module, "__file__", None)
+        if _origin is not None and _official_resolved not in Path(_origin).resolve().parents:
+            raise ImportError(f"refusing preloaded non-official module {_name}: {_origin}")
+sys.path[:] = [entry for entry in sys.path if Path(entry or ".").resolve() != _official_resolved]
+sys.path.insert(0, str(_official_resolved))
 
 from tracking_cellmot.metrics import evaluate as official_evaluate  # noqa: E402
 from tracking_cellmot.metrics import node_recall, per_sample_metrics, summarise  # noqa: E402

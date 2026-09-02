@@ -4,6 +4,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,14 @@ import pytest
 
 import biohub.st_r3_scoring as scoring
 from biohub.evaluate import graph_from_rows, score_submission
+
+PRODUCTION_VALIDATE_FEASIBILITY = scoring.validate_feasibility_manifest
+
+
+@pytest.fixture(autouse=True)
+def _reviewed_interface_test_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Synthetic tests exercise the scorer below the production interface HOLD."""
+    monkeypatch.setattr(scoring, "validate_feasibility_manifest", scoring._validate_fixture_feasibility_manifest)
 
 
 def _write(path: Path, data: bytes) -> dict[str, object]:
@@ -91,9 +100,15 @@ def _make_sealed_run(tmp_path: Path, name: str = "run") -> tuple[Path, str]:
             "ome": {
                 "multiscales": [
                     {
+                        "axes": [
+                            {"name": "t", "type": "time", "unit": "second"},
+                            {"name": "z", "type": "space", "unit": "micrometer"},
+                            {"name": "y", "type": "space", "unit": "micrometer"},
+                            {"name": "x", "type": "space", "unit": "micrometer"},
+                        ],
                         "datasets": [
                             {"path": "0", "coordinateTransformations": [{"type": "scale", "scale": [1, 1, 1, 1]}]}
-                        ]
+                        ],
                     }
                 ]
             }
@@ -290,7 +305,15 @@ def _write_metric_gt(data_dir: Path, name: str, nodes: list[tuple], edges: list[
     group = zarr.open_group(data_dir / f"{name}.zarr", mode="w", zarr_format=3)
     group.attrs["ome"] = {
         "multiscales": [
-            {"datasets": [{"path": "0", "coordinateTransformations": [{"type": "scale", "scale": [1, 1, 1, 1]}]}]}
+            {
+                "axes": [
+                    {"name": "t", "type": "time", "unit": "second"},
+                    {"name": "z", "type": "space", "unit": "micrometer"},
+                    {"name": "y", "type": "space", "unit": "micrometer"},
+                    {"name": "x", "type": "space", "unit": "micrometer"},
+                ],
+                "datasets": [{"path": "0", "coordinateTransformations": [{"type": "scale", "scale": [1, 1, 1, 1]}]}],
+            }
         ]
     }
 
@@ -369,11 +392,12 @@ def test_official_aggregate_is_not_mean_and_zero_division_null() -> None:
         scoring._normalise_summary({**summary, "new_key": 1}, "drift")
 
 
-def test_missing_gt_skip_is_hard_failure(tmp_path: Path) -> None:
+def test_missing_gt_skip_is_hard_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     csv_path = tmp_path / "one.csv"
     csv_path.write_bytes(_csv_bytes(("vid",)))
     sealed = SimpleNamespace(gt_dir=tmp_path / "empty")
     sealed.gt_dir.mkdir()
+    monkeypatch.setattr(scoring, "_validate_official_runtime_binding", lambda _sealed: None)
     with pytest.raises(scoring.ScoringFailure) as caught:
         scoring._score_one(csv_path, sealed, "vid", "baseline")
     assert caught.value.code == "MISSING_GT_SKIP"
@@ -394,7 +418,7 @@ def test_scale_must_be_explicit_three_vector_finite_positive(tmp_path: Path, sca
     path.write_text(json.dumps(value, allow_nan=True))
     with pytest.raises(scoring.ScoringFailure) as caught:
         scoring._parse_explicit_scale(zarr_root, "vid")
-    assert caught.value.code in {"MISSING_EXPLICIT_SCALE", "MALFORMED_SCALE"}
+    assert caught.value.code in {"MISSING_EXPLICIT_SCALE", "MALFORMED_SCALE", "NONFINITE_JSON"}
 
 
 def test_default_scale_fallback_is_rejected(tmp_path: Path) -> None:
@@ -536,16 +560,18 @@ def test_state_machine_rollup_no_new_eval_and_terminal_lock(tmp_path: Path, monk
     _patch_fake_scoring(monkeypatch)
     with pytest.raises(scoring.ScoringFailure) as skipped:
         scoring.score_stage(skipped_run, skipped_digest, "eval24")
-    assert skipped.value.code in {"MISSING_ARTIFACT", "STATE_ORDER"}
+    assert skipped.value.code in {"MISSING_ARTIFACT", "STATE_ORDER", "MISSING_PRIOR_ANCHOR"}
     assert json.loads((skipped_run / "final" / "VERDICT.json").read_text())["first_failure"] == skipped.value.code
     with pytest.raises(scoring.ScoringFailure, match="terminal"):
         scoring.score_stage(skipped_run, skipped_digest, "eval12")
 
     run, digest = _make_sealed_run(tmp_path, "ordered")
-    assert scoring.score_stage(run, digest, "eval12")["status"] == "EVAL12_PASS"
-    assert scoring.score_stage(run, digest, "eval24")["status"] == "EVAL24_PASS"
+    eval12 = scoring.score_stage(run, digest, "eval12")
+    assert eval12["status"] == "EVAL12_PASS"
+    eval24 = scoring.score_stage(run, digest, "eval24", prior_manifest_sha256=eval12["stage_manifest"]["sha256"])
+    assert eval24["status"] == "EVAL24_PASS"
     monkeypatch.setattr(scoring, "_score_one", lambda *_args: pytest.fail("eval36 must make no evaluation call"))
-    result = scoring.score_stage(run, digest, "eval36")
+    result = scoring.score_stage(run, digest, "eval36", prior_manifest_sha256=eval24["stage_manifest"]["sha256"])
     assert result["status"] == "EVAL36_ADOPTION_CANDIDATE"
     assert (
         json.loads((run / "scores" / "eval36_rollup" / "INPUT_RECEIPT.json").read_text())["official_evaluation_calls"]
@@ -609,14 +635,14 @@ def test_path_traversal_case_collision_and_atomic_interruption(tmp_path: Path, m
         scoring._check_case_collisions(["A/file", "a/file"], "test")
     assert collision.value.code == "CASE_COLLISION"
     target = tmp_path / "published.json"
-    real_rename = os.rename
+    real_rename = scoring._rename_noreplace
 
-    def interrupted(source: object, destination: object) -> None:
+    def interrupted(source: Path, destination: Path) -> None:
         if Path(destination) == target:
             raise OSError("simulated atomic publication interruption")
         real_rename(source, destination)
 
-    monkeypatch.setattr(os, "rename", interrupted)
+    monkeypatch.setattr(scoring, "_rename_noreplace", interrupted)
     with pytest.raises(OSError, match="interruption"):
         scoring._atomic_write(target, b"payload")
     assert not target.exists()
@@ -632,3 +658,287 @@ def test_canonical_json_and_paired_full_precision() -> None:
     assert stats["mean"] == math.fsum(values) / 4
     assert stats["median"] == math.fsum((0.2, 0.3)) / 2
     assert stats["worst"] == 0.1
+
+
+def test_production_interface_hold_precedes_any_gt_or_manifest_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(scoring, "validate_feasibility_manifest", PRODUCTION_VALIDATE_FEASIBILITY)
+    with pytest.raises(scoring.ScoringFailure) as caught:
+        scoring.score_stage(tmp_path / "missing-run", "not-even-a-sha", "eval12")
+    assert caught.value.code == "HOLD_INTERFACE_INCOMPLETE"
+    assert not (tmp_path / "missing-run").exists()
+
+
+def test_fake_feasibility_self_report_cannot_unlock_production(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run, digest = _make_sealed_run(tmp_path)
+    gate_path = run / "feasibility" / "GATES.json"
+    _canonical(gate_path, {"status": "REJECT_RUNTIME", "runtime": None, "rss": None})
+    monkeypatch.setattr(scoring, "validate_feasibility_manifest", PRODUCTION_VALIDATE_FEASIBILITY)
+    monkeypatch.setattr(scoring, "_read_json", lambda *_args: pytest.fail("production HOLD must read no JSON"))
+    with pytest.raises(scoring.ScoringFailure) as caught:
+        scoring.score_stage(run, digest, "eval12")
+    assert caught.value.code == "HOLD_INTERFACE_INCOMPLETE"
+
+
+def test_five_arm_alias_and_nested_public_four_are_rejected(tmp_path: Path) -> None:
+    run, _ = _make_sealed_run(tmp_path)
+    manifest_path = run / "feasibility" / "FEASIBILITY_PASS.json"
+    value = json.loads(manifest_path.read_text())
+    same = value["executions"]["safety_dry_run"]
+    value["executions"] = {key: same for key in scoring.EXECUTION_KEYS}
+    _canonical(manifest_path, value)
+    with pytest.raises(scoring.ScoringFailure) as alias:
+        scoring.validate_feasibility_manifest(run, scoring.sha256_file(manifest_path))
+    assert alias.value.code == "FIVE_ARM_INCOMPLETE"
+
+    run, _ = _make_sealed_run(tmp_path, "public")
+    manifest_path = run / "feasibility" / "FEASIBILITY_PASS.json"
+    value = json.loads(manifest_path.read_text())
+    generation_path = run / "generation" / "ARTIFACT_MANIFEST.json"
+    generation = json.loads(generation_path.read_text())
+    generation["diagnostic"] = next(iter(scoring.PUBLIC_FOUR))
+    _canonical(generation_path, generation)
+    replacement = _relative_ref(run, generation_path)
+    value["generation_manifest"]["ref"] = replacement
+    value["artifacts"] = [replacement if item["path"] == replacement["path"] else item for item in value["artifacts"]]
+    _canonical(manifest_path, value)
+    with pytest.raises(scoring.ScoringFailure) as public:
+        scoring.validate_feasibility_manifest(run, scoring.sha256_file(manifest_path))
+    assert public.value.code == "PUBLIC_FOUR_CONTAMINATION"
+
+
+def test_gt_path_value_hardlink_duplicate_json_and_path_aliases_fail(tmp_path: Path) -> None:
+    with pytest.raises(scoring.ScoringFailure) as leaked:
+        scoring._reject_gt_exposure({"input_path": "/private/gt/secret.geff"}, "arm")
+    assert leaked.value.code == "GT_EXPOSED_TO_ARM"
+
+    root = tmp_path / "refs"
+    root.mkdir()
+    first = root / "first"
+    first.write_bytes(b"sealed")
+    os.link(first, root / "alias")
+    ref = {"path": "first", "bytes": 6, "sha256": scoring.sha256_file(first)}
+    with pytest.raises(scoring.ScoringFailure) as linked:
+        scoring._validate_ref(root, ref, "hardlink")
+    assert linked.value.code == "HARDLINK_REFUSED"
+
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_bytes(b'{"shape":[1,1,1,1],"shape":[2,2,2,2]}')
+    with pytest.raises(scoring.ScoringFailure) as duplicated:
+        scoring._read_json_relaxed(duplicate, "duplicate")
+    assert duplicated.value.code == "DUPLICATE_JSON_KEY"
+    for alias in ("a/./b", "a//b", "a/b/"):
+        with pytest.raises(scoring.ScoringFailure) as unsafe:
+            scoring._safe_rel(alias, "alias")
+        assert unsafe.value.code == "UNSAFE_PATH"
+
+
+def test_scale_requires_explicit_axes_and_micrometer_units(tmp_path: Path) -> None:
+    root = tmp_path / "v.zarr"
+    metadata = {
+        "attributes": {
+            "ome": {
+                "multiscales": [
+                    {
+                        "datasets": [
+                            {
+                                "path": "0",
+                                "coordinateTransformations": [{"type": "scale", "scale": [9, 2, 3, 4]}],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+    _canonical(root / "zarr.json", metadata)
+    with pytest.raises(scoring.ScoringFailure) as missing_axes:
+        scoring._parse_explicit_scale(root, "v")
+    assert missing_axes.value.code == "MALFORMED_SCALE"
+    metadata["attributes"]["ome"]["multiscales"][0]["axes"] = [
+        {"name": "t", "type": "time", "unit": "second"},
+        {"name": "z", "type": "space", "unit": "millimeter"},
+        {"name": "y", "type": "space", "unit": "micrometer"},
+        {"name": "x", "type": "space", "unit": "micrometer"},
+    ]
+    _canonical(root / "zarr.json", metadata)
+    with pytest.raises(scoring.ScoringFailure) as wrong_unit:
+        scoring._parse_explicit_scale(root, "v")
+    assert wrong_unit.value.code == "MALFORMED_SCALE"
+
+
+def test_atomic_file_and_directory_publication_are_race_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "target.json"
+    real = scoring._rename_noreplace
+
+    def inject_file(source: Path, destination: Path) -> None:
+        destination.write_bytes(b"attacker")
+        real(source, destination)
+
+    monkeypatch.setattr(scoring, "_rename_noreplace", inject_file)
+    with pytest.raises(scoring.ScoringFailure) as raced_file:
+        scoring._atomic_write(target, b"trusted")
+    assert raced_file.value.code == "NO_CLOBBER"
+    assert target.read_bytes() == b"attacker"
+
+    monkeypatch.setattr(scoring, "_rename_noreplace", real)
+    run = tmp_path / "run"
+    temp = scoring._temp_stage_dir(run, "eval12")
+    scoring._temp_write(temp / "GATE.json", scoring.canonical_json_bytes({"status": "EVAL12_PASS"}))
+    stage_target = run / "scores" / "eval12"
+
+    def inject_directory(source: Path, destination: Path) -> None:
+        destination.mkdir()
+        real(source, destination)
+
+    monkeypatch.setattr(scoring, "_rename_noreplace", inject_directory)
+    sealed = SimpleNamespace(run_dir=run, manifest={"run_id": "x"}, manifest_sha256="0" * 64)
+    with pytest.raises(scoring.ScoringFailure) as raced_directory:
+        scoring._publish_stage(
+            sealed,
+            "eval12",
+            {"path": "x", "bytes": 0, "sha256": "0" * 64},
+            temp,
+            "EVAL12_PASS",
+        )
+    assert raced_directory.value.code == "NO_CLOBBER"
+    assert stage_target.is_dir() and not any(stage_target.iterdir())
+
+
+def test_prior_stage_tamper_is_rejected_by_in_memory_anchor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run, digest = _make_sealed_run(tmp_path)
+    _patch_fake_scoring(monkeypatch)
+    eval12 = scoring.score_stage(run, digest, "eval12")
+    original_anchor = eval12["stage_manifest"]["sha256"]
+    per_video = run / "scores" / "eval12" / "PER_VIDEO.json"
+    value = json.loads(per_video.read_text())
+    value["rows"][0]["candidate"]["source_hashes"] = {"tampered": True}
+    _canonical(per_video, value)
+    stage_manifest = run / "scores" / "eval12" / "ARTIFACT_MANIFEST.json"
+    manifest = json.loads(stage_manifest.read_text())
+    for item in manifest["artifacts"]:
+        if item["path"].endswith("/PER_VIDEO.json"):
+            item["bytes"] = per_video.stat().st_size
+            item["sha256"] = scoring.sha256_file(per_video)
+    _canonical(stage_manifest, manifest)
+    with pytest.raises(scoring.ScoringFailure) as tampered:
+        scoring.score_stage(run, digest, "eval24", prior_manifest_sha256=original_anchor)
+    assert tampered.value.code == "PRIOR_STAGE_TAMPERED"
+
+
+def test_authoritative_all_invocation_completes_stages_without_control_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, digest = _make_sealed_run(tmp_path)
+    _patch_fake_scoring(monkeypatch)
+    result = scoring.score_all(run, digest, invocation_argv=["scorer", "--stage", "all"])
+    assert result["status"] == "EVAL36_ADOPTION_CANDIDATE"
+    assert (run / "scores/eval12/ARTIFACT_MANIFEST.json").is_file()
+    assert (run / "scores/eval24/ARTIFACT_MANIFEST.json").is_file()
+    assert (run / "scores/eval36_rollup/ARTIFACT_MANIFEST.json").is_file()
+    assert result["scorer_execution"]["argv"] == ["scorer", "--stage", "all"]
+
+
+def test_unexpected_error_retains_partial_and_terminal_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, digest = _make_sealed_run(tmp_path)
+    monkeypatch.setattr(scoring, "_validate_current_source", lambda *_args: None)
+    monkeypatch.setattr(scoring, "_verify_unlocked_gt", lambda _sealed, stems: {stem: {} for stem in stems})
+
+    def fail(*_args: object) -> object:
+        raise OSError("disk I/O")
+
+    monkeypatch.setattr(scoring, "_score_one", fail)
+    with pytest.raises(scoring.ScoringFailure) as caught:
+        scoring.score_stage(run, digest, "eval12", invocation_argv=["scorer", "--stage", "all"])
+    assert caught.value.code == "UNEXPECTED_SCORER_ERROR"
+    assert (run / "scores" / "failed_eval12").is_dir()
+    verdict = json.loads((run / "final" / "VERDICT.json").read_text())
+    assert verdict["status"] == "ERROR_AFTER_GT_READ"
+    assert verdict["scorer_execution"]["argv"] == ["scorer", "--stage", "all"]
+    assert verdict["scorer_execution"]["scorer_wall_seconds"] >= 0
+
+
+def test_resource_integer_precision_and_non_nan_division_nonfinite_rejection() -> None:
+    baseline = 2**54
+    values = {
+        "candidate_wall_gate": 1,
+        "baseline_wall_gate": 1,
+        "candidate_rss_gate": baseline + 1_073_741_824 + 1,
+        "baseline_rss_gate": baseline,
+        "target_candidate_aggregate_peak_gate": 8,
+        "target_declared_ram_bytes": 10,
+        "target_eval36_charged_seconds": 1,
+        "target_declared_wall_seconds": 10,
+    }
+    gates = scoring.evaluate_feasibility_thresholds(values)
+    assert not next(gate for gate in gates["gates"] if gate["name"] == "local_rss")["pass"]
+    summary = {
+        "n": 1,
+        "edge_jaccard": 1.0,
+        "division_jaccard": math.inf,
+        "division_tp": 0,
+        "division_fp": 0,
+        "division_fn": 0,
+        "node_recall": 1.0,
+        "adj_edge_jaccard": 1.0,
+        "n_adj": 1,
+        "score": 1.0,
+    }
+    with pytest.raises(scoring.ScoringFailure) as nonfinite:
+        scoring._normalise_summary(summary, "inf")
+    assert nonfinite.value.code == "NONFINITE_OFFICIAL_METRIC"
+
+
+def test_evaluate_prefers_official_module_over_rogue_pythonpath(tmp_path: Path) -> None:
+    rogue = tmp_path / "rogue" / "tracking_cellmot"
+    rogue.mkdir(parents=True)
+    (rogue / "__init__.py").write_text("")
+    (rogue / "metrics.py").write_text(
+        "def evaluate(*a,**k): return None\n"
+        "def node_recall(*a,**k): return 0.0\n"
+        "def per_sample_metrics(*a,**k): return {}\n"
+        "def summarise(*a,**k): return {'rogue':True}\n"
+    )
+    repo = Path(scoring.__file__).resolve().parents[2]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join((str(tmp_path / "rogue"), str(repo / "src"), str(repo / "official/src")))
+    result = subprocess.run(
+        [sys.executable, "-c", "import biohub.evaluate as e; print(e.summarise.__code__.co_filename)"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert Path(result.stdout.strip()).resolve() == (repo / "official/src/tracking_cellmot/metrics.py").resolve()
+    (tmp_path / "rogue" / "sitecustomize.py").write_text("import tracking_cellmot.metrics\n")
+    preloaded = subprocess.run(
+        [sys.executable, "-c", "import biohub.evaluate"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert preloaded.returncode != 0
+    assert "refusing preloaded non-official module" in preloaded.stderr
+
+
+def test_runtime_official_function_origins_and_hashes_are_bound() -> None:
+    repo = Path(scoring.__file__).resolve().parents[2]
+    sealed = SimpleNamespace(
+        manifest={
+            "official": {
+                "source_hashes": {
+                    rel: scoring.sha256_file(repo / "official/src" / rel) for rel in scoring.OFFICIAL_SOURCE_KEYS
+                }
+            },
+            "source_bindings": {"evaluate_py_sha256": scoring.sha256_file(repo / "src/biohub/evaluate.py")},
+        }
+    )
+    scoring._validate_official_runtime_binding(sealed)
+    sealed.manifest["official"]["source_hashes"]["tracking_cellmot/metrics.py"] = "0" * 64
+    with pytest.raises(scoring.ScoringFailure) as drifted:
+        scoring._validate_official_runtime_binding(sealed)
+    assert drifted.value.code == "OFFICIAL_IMPORT_DRIFT"
