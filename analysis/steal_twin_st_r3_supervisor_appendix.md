@@ -97,7 +97,10 @@ outside literal EVAL36. The held-FD publication seal scans the final bytes
 again. Unsafe child text is never published. Failed text artifacts are replaced
 by a fixed safe marker, unsafe inventory names are digest-redacted, and failure
 receipt messages are policy-checked and capped at 512 UTF-8 bytes rather than
-copying untrusted text.
+copying untrusted text. Stdout and stderr are independently capped at exactly
+1,048,576 bytes; overflow closes the drain, causes the parent to kill a
+still-running child, fails the run, and replaces both logs with the fixed safe
+marker.
 
 The frozen-value decoder independently enforces the producer's bit-exact
 special-float labels, complex components, collection uniqueness, dtype and
@@ -116,9 +119,13 @@ are reverified before and after promotion. After exact event bytes and the
 canonical `arm_receipt.json` are fsynced, the supervisor holds an FD for every
 file, hashes the complete tree, removes all write bits (`0400` files, `0500`
 directories), and rechecks membership, identities, link counts, bytes, child
-digests, and receipt inventory inside the real no-replace publication call.
-Mutation or an external inode alias therefore fails before publication. The
-successful names are:
+digests, and receipt inventory immediately before the real no-replace rename.
+After rename, it changes the seal's path to the final name and repeats the
+held-FD and final-path tree verification before returning success. A failed
+postcondition is rolled back with the same no-replace primitive to a fresh
+unpredictable `.failed.<uuid>` staging name. If rollback itself fails, the run
+still returns failure and truthfully records that the final name remains; it
+never claims successful publication. The successful names are:
 
 ```text
 submission.csv
@@ -139,10 +146,14 @@ The whole directory is published only with Linux
 unsupported no-replace primitive is an explicit publication HOLD/failure; the
 implementation does not fall back to an overwriting rename. A child error,
 signal, timeout, pipe/event error, validation failure, collision, or publication
-failure leaves no final directory. The unique staging directory is retained
-with canonical `failure_receipt.json` and a hash/byte partial inventory marked
+failure normally leaves no final directory. A post-rename verification failure
+is moved to a fresh failure-staging name; if that no-replace rollback fails,
+the receipt explicitly records `final_present=true` and
+`rollback_succeeded=false`. The retained tree contains canonical
+`failure_receipt.json` and a hash/byte partial inventory marked
 `FAILED_NOT_GENERATION_INPUT`; unsafe text is replaced only for secret-safe
-failure evidence. No successful output is deleted, overwritten, resumed, or
+failure evidence, and the invalid pre-publication `arm_receipt.json` is removed
+so a failed tree exposes no success receipt. No successful output is deleted, overwritten, resumed, or
 reused by this layer.
 
 The supervisor receipt schemas are `biohub.st_r3.arm_receipt.v1` and
@@ -179,7 +190,7 @@ child's local interface artifacts can be independently validated and sealed.
 It does not authorize ST-R4, GT access, feasibility PASS, hidden-200 claims,
 candidate adoption, Kaggle execution, or submission.
 
-The final local regression evidence for this hardening pass is 206 supervisor
+The final local regression evidence for this hardening pass is 213 supervisor
 tests, 65 child-interface tests, and the remaining 585 repository tests all
 passing (650 non-supervisor tests total), plus Ruff format/check and Python
 byte-compilation of the supervisor core and CLI. The official gitlink remains

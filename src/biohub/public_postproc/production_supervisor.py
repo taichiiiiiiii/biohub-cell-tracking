@@ -341,6 +341,7 @@ _TEXT_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])(?:/[A-Za-z0-9_.~+@%=-][^
 _TEXT_WINDOWS_PATH_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])(?:[A-Z]:\\|\\\\)[^\s\"'<>]+")
 _SAFE_REDACTED_LOG = b"[child text rejected by supervisor policy]\n"
 _SAFE_FAILURE_REDACTION = "diagnostic redacted by supervisor policy"
+_MAX_SUPERVISOR_LOG_BYTES = 1_048_576
 
 
 @dataclass(frozen=True)
@@ -1985,12 +1986,18 @@ def _promote_partial_files(
     return dict(_PARTIAL_PROMOTIONS)
 
 
-def _publish_directory_no_replace(parent_fd: int, source_name: str, destination_name: str) -> str:
-    parent_info = os.fstat(parent_fd)
-    pending_key = (parent_info.st_dev, parent_info.st_ino, source_name)
-    pending_seal = _PENDING_PUBLICATION_SEALS.get(pending_key)
-    if pending_seal is not None:
-        _verify_tree_seal(pending_seal)
+class _PublicationPostconditionError(SupervisorError):
+    def __init__(self, rollback_name: str | None, final_present: bool, rollback_failed: bool):
+        super().__init__(
+            "publication postcondition failed; rollback "
+            + ("failed and final remains present" if rollback_failed else "completed to retained failure staging")
+        )
+        self.rollback_name = rollback_name
+        self.final_present = final_present
+        self.rollback_failed = rollback_failed
+
+
+def _rename_directory_no_replace(parent_fd: int, source_name: str, destination_name: str) -> str:
     libc = ctypes.CDLL(None, use_errno=True)
     encoded_source, encoded_destination = os.fsencode(source_name), os.fsencode(destination_name)
     if sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
@@ -2009,6 +2016,32 @@ def _publish_directory_no_replace(parent_fd: int, source_name: str, destination_
             raise SupervisorError("HOLD_PUBLICATION_NOREPLACE_UNSUPPORTED")
         raise OSError(error, os.strerror(error), destination_name)
     os.fsync(parent_fd)
+    return primitive
+
+
+def _publish_directory_no_replace(parent_fd: int, source_name: str, destination_name: str) -> str:
+    parent_info = os.fstat(parent_fd)
+    pending_key = (parent_info.st_dev, parent_info.st_ino, source_name)
+    pending_seal = _PENDING_PUBLICATION_SEALS.get(pending_key)
+    if pending_seal is not None:
+        _verify_tree_seal(pending_seal)
+    primitive = _rename_directory_no_replace(parent_fd, source_name, destination_name)
+    if pending_seal is None:
+        return primitive
+    pending_seal.staging = pending_seal.staging.parent / destination_name
+    try:
+        _verify_tree_seal(pending_seal)
+    except BaseException as postcondition_error:
+        rollback_name = f".{destination_name}.failed.{uuid.uuid4().hex}"
+        try:
+            _rename_directory_no_replace(parent_fd, destination_name, rollback_name)
+        except BaseException as rollback_error:
+            raise _PublicationPostconditionError(None, True, True) from ExceptionGroup(
+                "publication verification and rollback both failed",
+                [postcondition_error, rollback_error],
+            )
+        pending_seal.staging = pending_seal.staging.parent / rollback_name
+        raise _PublicationPostconditionError(rollback_name, False, False) from postcondition_error
     return primitive
 
 
@@ -2065,10 +2098,12 @@ def _drain_pipe(
     sink: bytearray,
     done: threading.Event,
     errors: list[BaseException],
+    byte_limit: int | None = None,
 ) -> None:
     os.set_blocking(fd, False)
     try:
         quiet_after_done = 0
+        captured_bytes = 0
         while True:
             ready, _, _ = select.select([fd], [], [], 0.05)
             if ready:
@@ -2077,6 +2112,9 @@ def _drain_pipe(
                     break
                 quiet_after_done = 0
                 if output_fd is not None:
+                    captured_bytes += len(chunk)
+                    if byte_limit is not None and captured_bytes > byte_limit:
+                        raise SupervisorError("supervisor log exceeded its exact byte limit")
                     view = memoryview(chunk)
                     while view:
                         written = os.write(output_fd, view)
@@ -2512,6 +2550,8 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
     logs_policy_rejected = False
     tree_seal: _TreeSeal | None = None
     publication_seal_key: tuple[int, int, str] | None = None
+    publication_rollback_attempted = False
+    publication_rollback_succeeded: bool | None = None
     status: int | None = None
     try:
         if _entry_exists(parent_fd, final_dir.name):
@@ -2590,17 +2630,17 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         threads = [
             threading.Thread(
                 target=_drain_pipe,
-                args=(event_read, None, event_bytes, done, thread_errors),
+                args=(event_read, None, event_bytes, done, thread_errors, None),
                 daemon=True,
             ),
             threading.Thread(
                 target=_drain_pipe,
-                args=(stdout_read, log_fds[0], bytearray(), done, thread_errors),
+                args=(stdout_read, log_fds[0], bytearray(), done, thread_errors, _MAX_SUPERVISOR_LOG_BYTES),
                 daemon=True,
             ),
             threading.Thread(
                 target=_drain_pipe,
-                args=(stderr_read, log_fds[1], bytearray(), done, thread_errors),
+                args=(stderr_read, log_fds[1], bytearray(), done, thread_errors, _MAX_SUPERVISOR_LOG_BYTES),
                 daemon=True,
             ),
         ]
@@ -2615,6 +2655,11 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         while True:
             waited_pid, status, wait_usage = os.wait4(child_pid, os.WNOHANG)
             if waited_pid == child_pid:
+                child_reaped = True
+                break
+            if thread_errors:
+                os.kill(child_pid, signal.SIGKILL)
+                _, status, wait_usage = os.wait4(child_pid, 0)
                 child_reaped = True
                 break
             if time.monotonic_ns() >= deadline:
@@ -2632,16 +2677,6 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
             thread.join(timeout=1.0)
         if any(thread.is_alive() for thread in threads):
             raise SupervisorError("pipe drain did not reach EOF; possible detached descendant")
-        if thread_errors:
-            raise SupervisorError(
-                f"concurrent pipe drain failed: {type(thread_errors[0]).__name__}: {thread_errors[0]}"
-            )
-        try:
-            _validate_temporary_logs(parent_fd, temporary_logs)
-            logs_policy_safe = True
-        except SupervisorError:
-            logs_policy_rejected = True
-            raise SupervisorError("child text output violates the safe-text policy") from None
         if status is None:
             raise SupervisorError("wait4 returned no child status")
         if os.WIFEXITED(status):
@@ -2651,6 +2686,16 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         if wait_usage is None:
             raise SupervisorError("wait4 returned no resource usage")
         raw_rss, raw_unit, rss_bytes = _normalized_rss(wait_usage)
+        if thread_errors:
+            if any(isinstance(error, SupervisorError) and "log exceeded" in str(error) for error in thread_errors):
+                logs_policy_rejected = True
+            raise SupervisorError("concurrent pipe drain failed")
+        try:
+            _validate_temporary_logs(parent_fd, temporary_logs)
+            logs_policy_safe = True
+        except SupervisorError:
+            logs_policy_rejected = True
+            raise SupervisorError("child text output violates the safe-text policy") from None
         if timed_out:
             raise TimeoutError("authoritative child exceeded supervisor timeout")
         if exit_code != 0 or term_signal is not None:
@@ -2763,6 +2808,8 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         _publish_directory_no_replace(parent_fd, staging_name, final_dir.name)
         _PENDING_PUBLICATION_SEALS.pop(publication_seal_key, None)
         publication_seal_key = None
+        staging_name = final_dir.name
+        staging = final_dir
         _release_tree_seal(tree_seal, writable=False)
         tree_seal = None
         os.close(staging_fd)
@@ -2783,6 +2830,13 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
             _LOCAL_HOLDS,
         )
     except BaseException as exc:
+        if isinstance(exc, _PublicationPostconditionError):
+            publication_rollback_attempted = True
+            publication_rollback_succeeded = not exc.rollback_failed
+            staging_name = exc.rollback_name if exc.rollback_name is not None else final_dir.name
+            staging = parent / staging_name
+            if tree_seal is not None:
+                tree_seal.staging = staging
         failure = exc
     if publication_seal_key is not None:
         _PENDING_PUBLICATION_SEALS.pop(publication_seal_key, None)
@@ -2854,6 +2908,10 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
                     pass
                 if failure is None:
                     failure = log_exc
+    try:
+        (staging / "arm_receipt.json").unlink(missing_ok=True)
+    except OSError:
+        pass
     _sanitize_failed_text_artifacts(staging)
     failure_payload = {
         "schema_version": FAILURE_RECEIPT_SCHEMA,
@@ -2868,6 +2926,11 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         "ru_maxrss_raw_unit": raw_unit,
         "ru_maxrss_normalized_bytes": rss_bytes,
         "final_absent": not _entry_exists(parent_fd, final_dir.name),
+        "publication_recovery": {
+            "rollback_attempted": publication_rollback_attempted,
+            "rollback_succeeded": publication_rollback_succeeded,
+            "final_present": _entry_exists(parent_fd, final_dir.name),
+        },
         "partial_inventory": _partial_inventory(staging, {"failure_receipt.json"}, strict=False),
         "holds": list(_LOCAL_HOLDS),
     }

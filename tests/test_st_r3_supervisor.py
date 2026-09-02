@@ -1537,6 +1537,89 @@ def test_true_directory_rename_no_replace_and_collision(tmp_path: Path):
         os.close(parent_fd)
 
 
+def test_post_rename_hardlink_race_is_rolled_back_to_unpredictable_failure_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "payload").write_bytes(b"sealed")
+    staging_fd = os.open(staging, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    parent_fd = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    seal = supervisor._seal_tree_readonly(staging, staging_fd)
+    parent_info = os.fstat(parent_fd)
+    key = (parent_info.st_dev, parent_info.st_ino, "staging")
+    supervisor._PENDING_PUBLICATION_SEALS[key] = seal
+    external_alias = tmp_path / "external-alias"
+    real_verify = supervisor._verify_tree_seal
+    verify_calls = 0
+
+    def verify_then_inject_alias(tree_seal: supervisor._TreeSeal) -> None:
+        nonlocal verify_calls
+        real_verify(tree_seal)
+        verify_calls += 1
+        if verify_calls == 1:
+            os.link(staging / "payload", external_alias)
+
+    monkeypatch.setattr(supervisor, "_verify_tree_seal", verify_then_inject_alias)
+    try:
+        with pytest.raises(supervisor._PublicationPostconditionError) as caught:
+            supervisor._publish_directory_no_replace(parent_fd, "staging", "final")
+        error = caught.value
+        assert not error.final_present and not error.rollback_failed and error.rollback_name is not None
+        assert error.rollback_name.startswith(".final.failed.")
+        assert not (tmp_path / "final").exists()
+        assert (tmp_path / error.rollback_name / "payload").read_bytes() == b"sealed"
+        assert external_alias.stat().st_nlink == 2
+    finally:
+        supervisor._PENDING_PUBLICATION_SEALS.pop(key, None)
+        supervisor._release_tree_seal(seal, writable=True)
+        os.close(staging_fd)
+        os.close(parent_fd)
+        external_alias.unlink(missing_ok=True)
+
+
+def test_postcondition_rollback_failure_is_never_reported_as_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "payload").write_bytes(b"sealed")
+    staging_fd = os.open(staging, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    parent_fd = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    seal = supervisor._seal_tree_readonly(staging, staging_fd)
+    parent_info = os.fstat(parent_fd)
+    key = (parent_info.st_dev, parent_info.st_ino, "staging")
+    supervisor._PENDING_PUBLICATION_SEALS[key] = seal
+    external_alias = tmp_path / "external-alias"
+    real_verify = supervisor._verify_tree_seal
+    real_rename = supervisor._rename_directory_no_replace
+    verify_calls = 0
+
+    def verify_then_inject_alias(tree_seal: supervisor._TreeSeal) -> None:
+        nonlocal verify_calls
+        real_verify(tree_seal)
+        verify_calls += 1
+        if verify_calls == 1:
+            os.link(staging / "payload", external_alias)
+
+    def refuse_rollback(parent: int, source: str, destination: str) -> str:
+        if source == "final":
+            raise OSError(errno.EIO, "rollback denied")
+        return real_rename(parent, source, destination)
+
+    monkeypatch.setattr(supervisor, "_verify_tree_seal", verify_then_inject_alias)
+    monkeypatch.setattr(supervisor, "_rename_directory_no_replace", refuse_rollback)
+    try:
+        with pytest.raises(supervisor._PublicationPostconditionError) as caught:
+            supervisor._publish_directory_no_replace(parent_fd, "staging", "final")
+        assert caught.value.final_present and caught.value.rollback_failed
+        assert (tmp_path / "final" / "payload").exists()
+    finally:
+        supervisor._PENDING_PUBLICATION_SEALS.pop(key, None)
+        supervisor._release_tree_seal(seal, writable=True)
+        os.close(staging_fd)
+        os.close(parent_fd)
+        external_alias.unlink(missing_ok=True)
+
+
 def test_publish_time_collision_retains_staging_and_never_clobbers_racer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1614,6 +1697,88 @@ def test_mutation_at_publication_boundary_is_rejected_by_held_fd_tree_seal(
     result = supervisor.supervise_arm(_supervisor_spec(run_root, final, digest, test_dir=images))
     assert not result.success and not final.exists() and result.receipt_path is not None
     assert "changed after sealing" in json.loads(result.receipt_path.read_bytes())["failure"]["message"]
+
+
+def test_supervisor_post_rename_race_rolls_back_and_records_honest_failure_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    template_root = tmp_path / "template-root"
+    template_root.mkdir()
+    template, _images, digest = _build_valid_staging(template_root)
+    _install_fake_child(tmp_path, monkeypatch, _copying_child_source(template))
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    images = _image_root(run_root / "images")
+    final = run_root / "final"
+    external_alias = run_root / "external-alias"
+    real_verify = supervisor._verify_tree_seal
+    verify_calls = 0
+
+    def verify_then_race(tree_seal: supervisor._TreeSeal) -> None:
+        nonlocal verify_calls
+        real_verify(tree_seal)
+        verify_calls += 1
+        # Caller precheck is first; the pending-seal precheck immediately
+        # inside publication is second.  Insert the alias in that exact gap.
+        if verify_calls == 2:
+            os.link(tree_seal.staging / "submission.csv", external_alias)
+
+    monkeypatch.setattr(supervisor, "_verify_tree_seal", verify_then_race)
+    result = supervisor.supervise_arm(_supervisor_spec(run_root, final, digest, test_dir=images))
+    assert not result.success and not final.exists() and result.staging_dir is not None
+    assert result.staging_dir.name.startswith(".final.failed.")
+    assert result.receipt_path is not None and result.receipt_path.parent == result.staging_dir
+    assert not (result.staging_dir / "arm_receipt.json").exists()
+    receipt = json.loads(result.receipt_path.read_bytes())
+    assert receipt["final_absent"] is True
+    assert receipt["publication_recovery"] == {
+        "rollback_attempted": True,
+        "rollback_succeeded": True,
+        "final_present": False,
+    }
+    external_alias.unlink()
+
+
+def test_supervisor_records_rollback_failure_and_never_returns_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    template_root = tmp_path / "template-root"
+    template_root.mkdir()
+    template, _images, digest = _build_valid_staging(template_root)
+    _install_fake_child(tmp_path, monkeypatch, _copying_child_source(template))
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    images = _image_root(run_root / "images")
+    final = run_root / "final"
+    external_alias = run_root / "external-alias"
+    real_verify = supervisor._verify_tree_seal
+    real_rename = supervisor._rename_directory_no_replace
+    verify_calls = 0
+
+    def verify_then_race(tree_seal: supervisor._TreeSeal) -> None:
+        nonlocal verify_calls
+        real_verify(tree_seal)
+        verify_calls += 1
+        if verify_calls == 2:
+            os.link(tree_seal.staging / "submission.csv", external_alias)
+
+    def refuse_rollback(parent_fd: int, source_name: str, destination_name: str) -> str:
+        if source_name == "final":
+            raise OSError(errno.EIO, "rollback denied")
+        return real_rename(parent_fd, source_name, destination_name)
+
+    monkeypatch.setattr(supervisor, "_verify_tree_seal", verify_then_race)
+    monkeypatch.setattr(supervisor, "_rename_directory_no_replace", refuse_rollback)
+    result = supervisor.supervise_arm(_supervisor_spec(run_root, final, digest, test_dir=images))
+    assert not result.success and final.exists() and result.staging_dir == final
+    assert result.receipt_path == final / "failure_receipt.json"
+    assert not (final / "arm_receipt.json").exists()
+    receipt = json.loads(result.receipt_path.read_bytes())
+    assert receipt["final_absent"] is False
+    assert receipt["publication_recovery"] == {
+        "rollback_attempted": True,
+        "rollback_succeeded": False,
+        "final_present": True,
+    }
+    external_alias.unlink()
 
 
 def test_publish_and_rss_refuse_unsupported_platform(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -1731,6 +1896,60 @@ def test_drain_reports_output_write_and_fsync_errors(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(supervisor.os, "fsync", failed_fsync)
     supervisor._drain_pipe(read_fd, output_fd, bytearray(), threading.Event(), errors)
     assert len(errors) == 1 and isinstance(errors[0], OSError)
+
+
+@pytest.mark.parametrize(("payload_size", "fails"), [(1024, False), (1025, True)])
+def test_log_drain_enforces_exact_byte_limit(tmp_path: Path, payload_size: int, fails: bool):
+    read_fd, write_fd = os.pipe()
+    output = tmp_path / "captured.log"
+    output_fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    errors: list[BaseException] = []
+
+    def write_payload() -> None:
+        try:
+            os.write(write_fd, b"x" * payload_size)
+        finally:
+            os.close(write_fd)
+
+    writer = threading.Thread(target=write_payload)
+    writer.start()
+    supervisor._drain_pipe(
+        read_fd,
+        output_fd,
+        bytearray(),
+        threading.Event(),
+        errors,
+        1024,
+    )
+    writer.join(timeout=1)
+    assert not writer.is_alive()
+    assert bool(errors) is fails
+    if fails:
+        assert isinstance(errors[0], supervisor.SupervisorError)
+        assert output.stat().st_size == 0
+    else:
+        assert output.read_bytes() == b"x" * 1024
+
+
+def test_supervisor_kills_child_and_redacts_logs_on_log_byte_overflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    body = """
+import os,time
+payload=b'x'*65536
+while True:
+    try: os.write(1,payload)
+    except BrokenPipeError: time.sleep(10)
+"""
+    _install_fake_child(tmp_path, monkeypatch, body)
+    final = tmp_path / "run" / "final"
+    final.parent.mkdir()
+    result = supervisor.supervise_arm(_supervisor_spec(tmp_path, final, "0" * 64, timeout_seconds=5.0))
+    assert not result.success and not final.exists() and result.staging_dir is not None
+    assert result.term_signal == signal.SIGKILL
+    assert result.receipt_path is not None
+    receipt = json.loads(result.receipt_path.read_bytes())
+    assert receipt["failure"]["message"] == "concurrent pipe drain failed"
+    for name in supervisor._SUPERVISOR_LOGS:
+        assert (result.staging_dir / name).read_bytes() == supervisor._SAFE_REDACTED_LOG
 
 
 @pytest.mark.parametrize(
