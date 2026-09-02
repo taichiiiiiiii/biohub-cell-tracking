@@ -9,7 +9,14 @@ requested (it is not a project dependency).
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import stat
+from collections.abc import Callable
 from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
+from typing import BinaryIO
 
 import numpy as np
 
@@ -21,6 +28,279 @@ try:
     import torch
 except Exception:  # pragma: no cover - torch is not a project dependency
     torch = None
+
+
+STRICT_DEEPCENTER_CHECKPOINT_SHA256 = "8040999a92f6b7bbd98fa8cf458141e045c0f9ad7c936bdb3b18e1f7edafe2a0"
+STRICT_DEEPCENTER_MANIFEST_SHA256 = "1eedc1af72b10c464c6995013075310510b6f6e634450ff2bc170c67b89ce911"
+STRICT_DEEPCENTER_EPOCH = 2
+STRICT_DEEPCENTER_MANIFEST_MODEL_CONFIG = MappingProxyType(
+    {
+        "base_channels": 24,
+        "batch_size": 8,
+        "bg_quantile": 0.4,
+        "brightness_jitter": 0.0,
+        "epochs": 1000,
+        "frames_per_movie": 0,
+        "gauss_sigma": 1.0,
+        "grad_clip_norm": None,
+        "learning_rate": 0.001,
+        "movie_limit": None,
+        "norm_clip_hi": 6.0,
+        "norm_clip_lo": -0.5,
+        "norm_hi_pct": 99.5,
+        "norm_lo_pct": 50.0,
+        "num_workers": 4,
+        "pool_factor": 4,
+        "pos_thresh": 0.05,
+        "random_flip": True,
+        "seed": 2026,
+        "val_fraction": 0.1,
+        "w_bg": 1.0,
+        "w_ignore": 0.05,
+        "w_pos": 12.0,
+        "weight_decay": 0.0,
+    }
+)
+STRICT_DEEPCENTER_CHECKPOINT_MODEL_CONFIG = MappingProxyType(
+    {
+        **STRICT_DEEPCENTER_MANIFEST_MODEL_CONFIG,
+        "epochs": 50,
+    }
+)
+STRICT_DEEPCENTER_CONFIG_DISCREPANCY = MappingProxyType(
+    {
+        "field": "epochs",
+        "manifest": 1000,
+        "checkpoint": 50,
+    }
+)
+
+
+def _strict_stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _strict_stat_plain(value: os.stat_result) -> dict[str, int]:
+    return {
+        "device": value.st_dev,
+        "inode": value.st_ino,
+        "mode": value.st_mode,
+        "size": value.st_size,
+        "mtime_ns": value.st_mtime_ns,
+        "ctime_ns": value.st_ctime_ns,
+    }
+
+
+def _strict_config_matches(actual: object, expected: dict[str, object]) -> bool:
+    if type(actual) is not dict or set(actual) != set(expected):
+        return False
+    for key, expected_value in expected.items():
+        actual_value = actual[key]
+        if type(actual_value) is not type(expected_value):
+            return False
+        if type(expected_value) is float:
+            if not np.isfinite(actual_value) or actual_value.hex() != expected_value.hex():
+                return False
+        elif actual_value != expected_value:
+            return False
+    return True
+
+
+def _strict_read_one_file[T](
+    path: Path,
+    expected_sha256: str,
+    reader: Callable[[BinaryIO], T],
+) -> tuple[T, dict[str, object]]:
+    """Hash and parse one regular, nonsymlink file through one retained FD."""
+    if type(path) is not type(Path()):
+        raise TypeError("strict DeepCenter paths must be exact pathlib.Path instances")
+    if type(expected_sha256) is not str or len(expected_sha256) != 64:
+        raise ValueError("expected SHA-256 must be 64 lowercase hexadecimal characters")
+    try:
+        bytes.fromhex(expected_sha256)
+    except ValueError as exc:
+        raise ValueError("expected SHA-256 must be hexadecimal") from exc
+    if expected_sha256 != expected_sha256.lower():
+        raise ValueError("expected SHA-256 must be lowercase")
+
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("strict DeepCenter loading requires O_NOFOLLOW support")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"strict DeepCenter input is not a regular file: {path.name}")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            digest = hashlib.sha256()
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            after_hash = os.fstat(fd)
+            if _strict_stat_identity(after_hash) != _strict_stat_identity(before):
+                raise RuntimeError(f"strict DeepCenter input changed while hashing: {path.name}")
+            actual_sha256 = digest.hexdigest()
+            if actual_sha256 != expected_sha256:
+                raise ValueError(
+                    f"strict DeepCenter SHA-256 mismatch for {path.name}: "
+                    f"expected {expected_sha256}, got {actual_sha256}"
+                )
+            handle.seek(0)
+            value = reader(handle)
+            after_read = os.fstat(fd)
+            if _strict_stat_identity(after_read) != _strict_stat_identity(before):
+                raise RuntimeError(f"strict DeepCenter input changed while reading: {path.name}")
+        return value, {
+            "sha256": actual_sha256,
+            "pre": _strict_stat_plain(before),
+            "post_hash": _strict_stat_plain(after_hash),
+            "post_read": _strict_stat_plain(after_read),
+            "open_count": 1,
+        }
+    finally:
+        os.close(fd)
+
+
+def _load_deepcenter_veto_detector_strict_verified(
+    cfg: PostprocConfig,
+    checkpoint_path: Path,
+    manifest_path: Path,
+    *,
+    expected_checkpoint_sha256: str,
+    expected_manifest_sha256: str,
+    expected_epoch: int,
+    expected_manifest_model_config: object,
+    expected_checkpoint_model_config: object,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Private injected-pin seam; production uses the non-overridable wrapper."""
+    if not cfg.USE_DEEPCENTER_VETO or not cfg.REQUIRE_DEEPCENTER_VETO:
+        raise ValueError("strict DeepCenter requires USE_DEEPCENTER_VETO and REQUIRE_DEEPCENTER_VETO")
+    if torch is None:
+        raise ImportError("torch is required for strict DeepCenter loading")
+    if type(expected_epoch) is not int or expected_epoch != 2:
+        raise ValueError("strict DeepCenter expected epoch must be exact built-in int 2")
+    if not isinstance(expected_manifest_model_config, (dict, MappingProxyType)):
+        raise TypeError("expected DeepCenter manifest model config must be a mapping")
+    if not isinstance(expected_checkpoint_model_config, (dict, MappingProxyType)):
+        raise TypeError("expected DeepCenter checkpoint model config must be a mapping")
+    frozen_manifest_config = dict(expected_manifest_model_config)
+    frozen_checkpoint_config = dict(expected_checkpoint_model_config)
+
+    def read_manifest(handle: BinaryIO) -> object:
+        return json.load(handle)
+
+    manifest, manifest_file = _strict_read_one_file(
+        manifest_path,
+        expected_manifest_sha256,
+        read_manifest,
+    )
+    if type(manifest) is not dict:
+        raise ValueError("strict DeepCenter manifest must be a JSON object")
+    try:
+        manifest_model = manifest["model"]
+        manifest_checkpoint = manifest_model["best_checkpoint"]
+        manifest_summary = manifest_model["best_checkpoint_summary"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("strict DeepCenter manifest has no registered best checkpoint") from exc
+    if (
+        type(manifest_model) is not dict
+        or type(manifest_checkpoint) is not dict
+        or type(manifest_summary) is not dict
+        or manifest_checkpoint.get("sha256") != expected_checkpoint_sha256
+        or type(manifest_summary.get("epoch")) is not int
+        or manifest_summary.get("epoch") != expected_epoch
+        or not _strict_config_matches(manifest_model.get("config"), frozen_manifest_config)
+    ):
+        raise ValueError("strict DeepCenter manifest identity/config mismatch")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def read_checkpoint(handle: BinaryIO) -> object:
+        return torch.load(handle, map_location=device, weights_only=False)
+
+    checkpoint, checkpoint_file = _strict_read_one_file(
+        checkpoint_path,
+        expected_checkpoint_sha256,
+        read_checkpoint,
+    )
+    if type(checkpoint) is not dict or "model_state" not in checkpoint:
+        raise ValueError("strict DeepCenter checkpoint has no model_state")
+    if type(checkpoint.get("epoch")) is not int or checkpoint["epoch"] != expected_epoch:
+        raise ValueError("strict DeepCenter checkpoint epoch mismatch")
+    if not _strict_config_matches(checkpoint.get("config"), frozen_checkpoint_config):
+        raise ValueError("strict DeepCenter checkpoint config mismatch")
+    model_cfg = SimpleNamespace(**checkpoint["config"])
+    model = _DCDeepCenterUNet3D(base_channels=model_cfg.base_channels)
+    model.load_state_dict(checkpoint["model_state"])
+    model.to(device)
+    model.eval()
+    bundle = {
+        "model": model,
+        "cfg": model_cfg,
+        "device": device,
+        "path": checkpoint_path,
+        "torch": torch,
+        "checkpoint_epoch": expected_epoch,
+    }
+    receipt = {
+        "schema_version": "biohub.st_r3.deepcenter_receipt.v1",
+        "registered": {
+            "checkpoint_name": checkpoint_path.name,
+            "manifest_name": manifest_path.name,
+        },
+        "checkpoint": checkpoint_file,
+        "manifest": manifest_file,
+        "chosen_artifact": checkpoint_path.name,
+        "verified_epoch": expected_epoch,
+        "verified_configs": {
+            "manifest": frozen_manifest_config,
+            "checkpoint": frozen_checkpoint_config,
+        },
+        "known_config_discrepancy": {
+            "field": "epochs",
+            "manifest": frozen_manifest_config.get("epochs"),
+            "checkpoint": frozen_checkpoint_config.get("epochs"),
+        },
+        "inference_relevant_config_equal": all(
+            type(frozen_manifest_config[key]) is type(frozen_checkpoint_config.get(key))
+            and frozen_manifest_config[key] == frozen_checkpoint_config[key]
+            for key in frozen_manifest_config
+            if key != "epochs"
+        )
+        and set(frozen_manifest_config) == set(frozen_checkpoint_config),
+        "device": str(device),
+        "dtype": "float32",
+        "open_count": 2,
+        "fallback_candidates": 0,
+    }
+    return bundle, receipt
+
+
+def load_deepcenter_veto_detector_strict(
+    cfg: PostprocConfig,
+    checkpoint_path: Path,
+    manifest_path: Path,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Load only the exact preregistered DeepCenter artifact, without fallback."""
+    return _load_deepcenter_veto_detector_strict_verified(
+        cfg,
+        checkpoint_path,
+        manifest_path,
+        expected_checkpoint_sha256=STRICT_DEEPCENTER_CHECKPOINT_SHA256,
+        expected_manifest_sha256=STRICT_DEEPCENTER_MANIFEST_SHA256,
+        expected_epoch=STRICT_DEEPCENTER_EPOCH,
+        expected_manifest_model_config=STRICT_DEEPCENTER_MANIFEST_MODEL_CONFIG,
+        expected_checkpoint_model_config=STRICT_DEEPCENTER_CHECKPOINT_MODEL_CONFIG,
+    )
 
 
 def _dc_pool_frame_xy(volume: np.ndarray, factor: int) -> np.ndarray:

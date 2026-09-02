@@ -18,8 +18,9 @@ import os
 import pickle
 import struct
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -60,6 +61,11 @@ from biohub.public_postproc.graph_ops import (
 )
 
 CHECKPOINT_MANIFEST_NAME = "manifest.json"
+
+TwinPlanHook = Callable[[str, TwinPlan | None], None]
+RawStatsHook = Callable[[Mapping[str, object]], None]
+DatasetHook = Callable[[int, str], None]
+DeepCenterLoader = Callable[[PostprocConfig], dict[str, object] | None]
 
 _TWIN_R2_COUNTER_KEYS = (
     "steal_twin_mutations_applied",
@@ -388,6 +394,84 @@ def _twin_debug_record_plain(record: TwinDebugRecord) -> dict[str, object]:
     }
 
 
+def _twin_candidate_plain(candidate: object) -> dict[str, object]:
+    return {
+        "frame": candidate.frame,
+        "p": candidate.p,
+        "q": candidate.q,
+        "a": candidate.a,
+        "b": candidate.b,
+        "a2": candidate.a2,
+        "b2": candidate.b2,
+        "d_pq": candidate.d_pq,
+        "d_pa": candidate.d_pa,
+        "d_pb": candidate.d_pb,
+        "d_ab": candidate.d_ab,
+        "d_a2b2": candidate.d_a2b2,
+        "divergence_growth": candidate.divergence_growth,
+        "raw_deepcenter_score": candidate.raw_deepcenter_score,
+        "deepcenter_decision": {
+            "accepted": candidate.deepcenter_decision.accepted,
+            "raw_score": candidate.deepcenter_decision.raw_score,
+            "reason": candidate.deepcenter_decision.reason,
+        },
+        "sort_key": list(candidate.sort_key),
+        "removed_edge": {
+            "source_id": candidate.removed_edge.source_id,
+            "target_id": candidate.removed_edge.target_id,
+            "metadata": _twin_frozen_value_plain(candidate.removed_edge.metadata),
+        },
+        "planned_edge": {
+            "source_id": candidate.planned_edge.source_id,
+            "target_id": candidate.planned_edge.target_id,
+            "distance_um": candidate.planned_edge.distance_um,
+            "edge_prob": candidate.planned_edge.edge_prob,
+        },
+    }
+
+
+def twin_plan_plain(plan: TwinPlan) -> dict[str, object]:
+    """Losslessly expose every validated plan field for the production hook."""
+    plan = _validate_twin_plan_failure_envelope(plan)
+    return {
+        "validation_reason": plan.validation_reason,
+        "nodes": [
+            {
+                "node_id": node.node_id,
+                "t": node.t,
+                "z": node.z,
+                "y": node.y,
+                "x": node.x,
+                "gap_synthetic": node.gap_synthetic,
+            }
+            for node in plan.nodes
+        ],
+        "edges": [
+            {
+                "source_id": edge.source_id,
+                "target_id": edge.target_id,
+                "input_position": edge.input_position,
+                "metadata": _twin_frozen_value_plain(edge.metadata),
+            }
+            for edge in plan.edges
+        ],
+        "candidates": [_twin_candidate_plain(candidate) for candidate in plan.candidates],
+        "accepted_candidates": [
+            _twin_candidate_plain(candidate) for candidate in plan.accepted_candidates
+        ],
+        "decisions": [
+            {
+                "candidate": _twin_candidate_plain(decision.candidate),
+                "accepted": decision.accepted,
+                "reason": decision.reason,
+            }
+            for decision in plan.decisions
+        ],
+        "counters": _twin_frozen_value_plain(plan.counters),
+        "debug_records": [_twin_debug_record_plain(record) for record in plan.debug_records],
+    }
+
+
 def _twin_record_type_error(index: int, field: str) -> TypeError:
     return TypeError(f"twin debug record {index}: invalid type for {field}")
 
@@ -653,7 +737,9 @@ def _run_steal_twin_r1_dry_run(
     deepcenter_bundle: dict[str, object] | None,
     repair_frame_cache: dict[int, np.ndarray],
     deepcenter_heatmap_cache: dict[tuple[str, int], np.ndarray],
-    twin_debug_collector: _TwinDebugCollector | None,
+    twin_debug_collector: _TwinDebugCollector | None = None,
+    *,
+    defer_debug_allocation: bool = False,
 ) -> TwinPlan:
     def score_callback(node: TwinSnapshotNode) -> TwinDeepCenterDecision:
         return score_twin_deepcenter(
@@ -693,7 +779,7 @@ def _run_steal_twin_r1_dry_run(
 
     for key, value in zip(counter_keys, counter_values, strict=True):
         stats[key] = value
-    if cfg.STEAL_TWIN_DEBUG_JSONL:
+    if cfg.STEAL_TWIN_DEBUG_JSONL and not defer_debug_allocation:
         if twin_debug_collector is None:
             raise RuntimeError("twin debug path requires a run-level collector")
         written, dropped = twin_debug_collector.allocate(plan.debug_records)
@@ -889,6 +975,7 @@ def filter_output_graph_pre_linefit(
     deepcenter_bundle: dict[str, object] | None = None,
     *,
     twin_debug_collector: _TwinDebugCollector | None = None,
+    twin_plan_hook: TwinPlanHook | None = None,
 ) -> tuple[dict[int, dict[str, object]], list[dict[str, object]], dict[str, int]]:
     """Everything ``filter_output_graph`` does *except* the final linefit-smoothing call.
 
@@ -996,17 +1083,40 @@ def filter_output_graph_pre_linefit(
 
     twin_candidate_active = False
     if cfg.OUTPUT_STEAL_TWIN_REWIRE:
-        plan = _run_steal_twin_r1_dry_run(
-            cfg,
-            dataset,
-            nodes_by_id,
-            edges,
-            stats,
-            deepcenter_bundle,
-            repair_frame_cache,
-            deepcenter_heatmap_cache,
-            twin_debug_collector,
-        )
+        if twin_plan_hook is None:
+            plan = _run_steal_twin_r1_dry_run(
+                cfg,
+                dataset,
+                nodes_by_id,
+                edges,
+                stats,
+                deepcenter_bundle,
+                repair_frame_cache,
+                deepcenter_heatmap_cache,
+                twin_debug_collector,
+            )
+        else:
+            if dataset is None:
+                raise RuntimeError("twin plan hook requires a dataset")
+            plan = _run_steal_twin_r1_dry_run(
+                cfg,
+                dataset,
+                nodes_by_id,
+                edges,
+                stats,
+                deepcenter_bundle,
+                repair_frame_cache,
+                deepcenter_heatmap_cache,
+                twin_debug_collector,
+                defer_debug_allocation=True,
+            )
+            twin_plan_hook(dataset, plan)
+            if cfg.STEAL_TWIN_DEBUG_JSONL:
+                if twin_debug_collector is None:
+                    raise RuntimeError("twin debug path requires a run-level collector")
+                written, dropped = twin_debug_collector.allocate(plan.debug_records)
+                stats["steal_twin_debug_records_written"] = written
+                stats["steal_twin_debug_records_dropped"] = dropped
         if plan.validation_reason is None and not cfg.STEAL_TWIN_DRY_RUN:
             edges, mutation = apply_twin_only_v1_plan(nodes_by_id, edges, plan)
             if mutation.status == "already_applied":
@@ -1033,6 +1143,10 @@ def filter_output_graph_pre_linefit(
             ):
                 raise RuntimeError("twin mutation counter conservation failed")
             twin_candidate_active = True
+    elif twin_plan_hook is not None:
+        if dataset is None:
+            raise RuntimeError("twin plan hook requires a dataset")
+        twin_plan_hook(dataset, None)
 
     geometry_edges_before = len(edges)
     if cfg.OUTPUT_DIVISION_GEOMETRY_FILTER and edges:
@@ -1115,6 +1229,7 @@ def filter_output_graph(
     deepcenter_bundle: dict[str, object] | None = None,
     *,
     twin_debug_collector: _TwinDebugCollector | None = None,
+    twin_plan_hook: TwinPlanHook | None = None,
 ) -> tuple[dict[int, dict[str, object]], list[dict[str, object]], dict[str, int]]:
     nodes_by_id, edges, stats = filter_output_graph_pre_linefit(
         cfg,
@@ -1123,6 +1238,7 @@ def filter_output_graph(
         dataset=dataset,
         deepcenter_bundle=deepcenter_bundle,
         twin_debug_collector=twin_debug_collector,
+        twin_plan_hook=twin_plan_hook,
     )
     twin_candidate_active = (
         stats["steal_twin_pure_nodes"] > 0 or stats["steal_twin_pure_edges"] > 0
@@ -1206,22 +1322,32 @@ def _finish_run(
     return write_run_stats(stats_rows_with_meta, run_stats_path)
 
 
-def run_postproc(
-    geff_dir: Path,
+def run_postproc_core(
+    geff_paths: Sequence[Path],
     out_csv: Path,
     cfg: PostprocConfig,
     run_stats_path: Path | None = None,
     predict_seconds: float = 0.0,
+    *,
+    deepcenter_loader: DeepCenterLoader | None = None,
+    dataset_start_hook: DatasetHook | None = None,
+    dataset_finish_hook: DatasetHook | None = None,
+    twin_plan_hook: TwinPlanHook | None = None,
+    raw_stats_hook: RawStatsHook | None = None,
+    write_run_stats_output: bool = True,
+    exclusive_output: bool = False,
 ) -> dict[str, object]:
-    """Run the full stack over every ``*.geff`` in ``geff_dir``; write ``out_csv`` + run_stats.
+    """Run the full stack over an explicit GEFF sequence without reordering it.
 
-    Mirrors the notebook's main loop: one geff -> one dataset's worth of
-    node/edge rows, appended to a single streaming CSV with one running
-    ``id`` counter, plus a per-dataset run_stats.csv row.
+    This is the sole full-run dataset loop.  The legacy entry point supplies a
+    sorted discovery result; the ST-R3 adapter supplies its frozen literal
+    order and production hooks.
     """
-    geffs = sorted(geff_dir.glob("*.geff"))
+    geffs = tuple(geff_paths)
     if not geffs:
-        raise RuntimeError(f"no *.geff files found in {geff_dir}")
+        raise RuntimeError("no GEFF paths supplied")
+    if any(type(path) is not type(Path()) for path in geffs):
+        raise TypeError("GEFF paths must be exact pathlib.Path instances")
 
     _require_steal_twin_r1_dry_run(cfg)
     effective_run_stats_path = run_stats_path or out_csv.parent / "run_stats.csv"
@@ -1230,25 +1356,28 @@ def run_postproc(
     if cfg.OUTPUT_STEAL_TWIN_REWIRE and cfg.STEAL_TWIN_DEBUG_JSONL:
         twin_debug_path = Path(cfg.STEAL_TWIN_DEBUG_JSONL)
         _reject_twin_debug_aliases(
-            geff_dir,
+            geffs[0].parent,
             geffs,
             twin_debug_path,
             (out_csv, effective_run_stats_path),
         )
         twin_debug_collector = _TwinDebugCollector(cfg.STEAL_TWIN_DEBUG_MAX_RECORDS)
 
-    deepcenter_detector = load_deepcenter_veto_detector(cfg)
+    effective_deepcenter_loader = deepcenter_loader or load_deepcenter_veto_detector
+    deepcenter_detector = effective_deepcenter_loader(cfg)
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     stats_rows: list[dict[str, object]] = []
     total_nodes = 0
     total_edges = 0
 
-    with out_csv.open("w", newline="") as handle:
+    with out_csv.open("x" if exclusive_output else "w", newline="") as handle:
         writer = SubmissionCsvWriter(handle)
 
-        for geff_path in geffs:
+        for sequence, geff_path in enumerate(geffs):
             dataset = geff_path.stem
+            if dataset_start_hook is not None:
+                dataset_start_hook(sequence, dataset)
             nodes_by_id, raw_edges = _load_geff_as_dicts(geff_path)
 
             raw_node_count = len(nodes_by_id)
@@ -1259,6 +1388,7 @@ def run_postproc(
                 dataset=dataset,
                 deepcenter_bundle=deepcenter_detector,
                 twin_debug_collector=twin_debug_collector,
+                twin_plan_hook=twin_plan_hook,
             )
             if not nodes_by_id:
                 raise AssertionError(f"{dataset}: post-processing removed every node")
@@ -1268,17 +1398,39 @@ def run_postproc(
 
             total_nodes += len(nodes_by_id)
             total_edges += len(edges)
-            stats_rows.append(_dataset_stats_row(dataset, nodes_by_id, edges, filter_stats, raw_node_count, division_sources))
+            stats_row = _dataset_stats_row(
+                dataset,
+                nodes_by_id,
+                edges,
+                filter_stats,
+                raw_node_count,
+                division_sources,
+            )
+            stats_rows.append(stats_row)
+            if raw_stats_hook is not None:
+                raw_stats_hook(MappingProxyType(stats_row.copy()))
+            handle.flush()
+            if dataset_finish_hook is not None:
+                os.fsync(handle.fileno())
+                dataset_finish_hook(sequence, dataset)
 
-    stats_frame = _finish_run(
-        writer,
-        stats_rows,
-        total_nodes,
-        total_edges,
-        cfg,
-        effective_run_stats_path,
-        predict_seconds,
-    )
+        handle.flush()
+        os.fsync(handle.fileno())
+
+    if write_run_stats_output:
+        stats_frame: pd.DataFrame | None = _finish_run(
+            writer,
+            stats_rows,
+            total_nodes,
+            total_edges,
+            cfg,
+            effective_run_stats_path,
+            predict_seconds,
+        )
+    else:
+        assert writer.row_id == total_nodes + total_edges, "Internal row counter mismatch"
+        assert total_nodes > 0, "No node rows produced"
+        stats_frame = None
     if twin_debug_collector is not None and twin_debug_path is not None:
         twin_debug_collector.finalize(twin_debug_path)
 
@@ -1289,6 +1441,26 @@ def run_postproc(
         "total_rows": writer.row_id,
         "run_stats": stats_frame,
     }
+
+
+def run_postproc(
+    geff_dir: Path,
+    out_csv: Path,
+    cfg: PostprocConfig,
+    run_stats_path: Path | None = None,
+    predict_seconds: float = 0.0,
+) -> dict[str, object]:
+    """Legacy sorted-discovery wrapper over :func:`run_postproc_core`."""
+    geffs = sorted(geff_dir.glob("*.geff"))
+    if not geffs:
+        raise RuntimeError(f"no *.geff files found in {geff_dir}")
+    return run_postproc_core(
+        geffs,
+        out_csv,
+        cfg,
+        run_stats_path=run_stats_path,
+        predict_seconds=predict_seconds,
+    )
 
 
 # ---------------------------------------------------------------------------

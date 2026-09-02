@@ -378,6 +378,12 @@ The parent contract binds that sole live checkpoint to epoch 2 and SHA-256
 `8040999a92f6b7bbd98fa8cf458141e045c0f9ad7c936bdb3b18e1f7edafe2a0`;
 the corresponding E23 `ARTIFACT_MANIFEST.json` is pinned to SHA-256
 `1eedc1af72b10c464c6995013075310510b6f6e634450ff2bc170c67b89ce911`.
+Direct verification with the pinned bytes found one immutable packaging
+discrepancy: `model.config.epochs` is exact integer `1000` in the manifest,
+while `checkpoint["config"]["epochs"]` is exact integer `50`.  The other 23
+config keys, exact runtime types, and values agree.  The strict loader binds
+and reports both complete configs separately; it MUST NOT project away or
+silently ignore this known difference.
 This appendix neither changes nor relaxes that identity.
 
 ## Pre-linefit checkpoint and relinefit are excluded
@@ -477,12 +483,15 @@ The following requirements are cumulative. `MUST`, `MUST NOT`, `SHOULD`, and
    `8040999a92f6b7bbd98fa8cf458141e045c0f9ad7c936bdb3b18e1f7edafe2a0`, the
    exact manifest SHA-256
    `1eedc1af72b10c464c6995013075310510b6f6e634450ff2bc170c67b89ce911`,
-   and frozen loader config. It MUST perform zero fallback
+   the complete frozen manifest config (`epochs=1000`), and the complete
+   frozen checkpoint config (`epochs=50`), with all other 23 exact typed
+   fields equal. It MUST perform zero fallback
    enumeration and zero alternate opens; missing, replaced, nonregular,
    mismatched, or incompatible input fails immediately. The staged
    `deepcenter_receipt.json` MUST use schema
    `biohub.st_r3.deepcenter_receipt.v1` and record registered identities,
-   hashes, pre/post file identity, chosen artifact, verified epoch/config,
+   hashes, pre/post file identity, chosen artifact, verified epoch, both
+   verified complete configs, the explicit known `epochs` discrepancy,
    device/dtype, open count, and `fallback_candidates=0`, without secret path
    leakage.
 
