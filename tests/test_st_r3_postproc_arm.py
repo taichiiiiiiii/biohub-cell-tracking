@@ -677,11 +677,13 @@ def _run_real_cli_fixture(
         sys.executable,
         "-c",
         (
-            "import runpy,sys;"
+            "import runpy,sys;from pathlib import Path;"
+            "script=sys.argv[1];"
+            "sys.path.insert(0,str(Path(script).resolve().parent.parent/'src'));"
             "import biohub.public_postproc.production_adapter as p;"
             "p.load_deepcenter_veto_detector_strict=lambda *a,**k:"
             "({}, {'schema_version':p.DEEPCENTER_RECEIPT_SCHEMA,'fixture_boundary':'torch'});"
-            "script=sys.argv.pop(1);runpy.run_path(script,run_name='__main__')"
+            "sys.argv.pop(1);runpy.run_path(script,run_name='__main__')"
         ),
         str(CLI),
         "--arm-name",
