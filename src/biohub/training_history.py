@@ -15,12 +15,17 @@ The public surface is intentionally small: :class:`HistoryWriter`,
 from __future__ import annotations
 
 import ast
+import base64
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
 import math
 import os
+import secrets
 import stat
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
@@ -29,6 +34,9 @@ from typing import Any
 SCHEMA_VERSION = 1
 CHECKPOINT_FORMAT = "biohub.safe_checkpoint.v1"
 HEX_SHA256_LENGTH = 64
+AT_FDCWD = -2
+RENAME_NOREPLACE = 1
+RENAME_EXCL = 4
 
 
 class TrainingHistoryError(ValueError):
@@ -133,9 +141,7 @@ def atomic_write_json(path: str | os.PathLike[str], value: Any) -> None:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        os.link(temporary, target, follow_symlinks=False)
-        os.unlink(temporary)
-        _fsync_directory(target.parent)
+        _publish_temp_noreplace(Path(temporary), target)
     except BaseException:
         try:
             os.unlink(temporary)
@@ -155,9 +161,7 @@ def atomic_publish_file(path: str | os.PathLike[str], data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.link(temporary, target, follow_symlinks=False)
-        os.unlink(temporary)
-        _fsync_directory(target.parent)
+        _publish_temp_noreplace(Path(temporary), target)
     except BaseException:
         try:
             os.unlink(temporary)
@@ -167,14 +171,68 @@ def atomic_publish_file(path: str | os.PathLike[str], data: bytes) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
+    descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _rename_noreplace(source: Path, target: Path) -> None:
+    """Use the platform's atomic no-replace rename primitive."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source)
+    target_bytes = os.fsencode(target)
+    if sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
+        result = libc.renameatx_np(
+            AT_FDCWD,
+            ctypes.c_char_p(source_bytes),
+            AT_FDCWD,
+            ctypes.c_char_p(target_bytes),
+            RENAME_EXCL,
+        )
+    elif hasattr(libc, "renameat2"):
+        result = libc.renameat2(
+            AT_FDCWD,
+            ctypes.c_char_p(source_bytes),
+            AT_FDCWD,
+            ctypes.c_char_p(target_bytes),
+            RENAME_NOREPLACE,
+        )
+    else:  # pragma: no cover - supported production platforms provide one primitive
+        raise TrainingHistoryError("atomic no-replace rename is unavailable on this platform")
+    if result != 0:
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise FileExistsError(error, os.strerror(error), target)
+        raise OSError(error, os.strerror(error), target)
+
+
+def _publish_temp_noreplace(temporary: Path, target: Path) -> None:
+    """Commit a complete temp file, or roll it back and report an honest failure."""
+    published = False
+    try:
+        _rename_noreplace(temporary, target)
+        published = True
+        _fsync_directory(target.parent)
+    except BaseException as original:
+        if published:
+            try:
+                target.unlink()
+                _fsync_directory(target.parent)
+            except BaseException as rollback:
+                quarantine = target.with_name(f".{target.name}.failed-{secrets.token_hex(16)}")
+                try:
+                    _rename_noreplace(target, quarantine)
+                    _fsync_directory(target.parent)
+                except BaseException as quarantine_error:
+                    raise TrainingHistoryError(
+                        f"publication failed after commit and rollback failed; target MUST NOT be trusted: {target}"
+                    ) from quarantine_error
+                raise TrainingHistoryError(
+                    f"publication failed after commit; target was quarantined as {quarantine.name}"
+                ) from rollback
+        raise original
 
 
 def _secure_publish_parent(target: Path) -> None:
@@ -214,17 +272,38 @@ class HistoryWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.parent.resolve(strict=True) != self.path.parent.absolute() or self.path.parent.is_symlink():
             raise TrainingHistoryError(f"history parent path contains a symlink: {self.path.parent}")
-        if self.path.is_symlink() or (self.path.exists() and not self.path.is_file()):
-            raise TrainingHistoryError(f"history must be a regular non-symlink file: {self.path}")
-        if self.path.exists() and self.path.stat().st_nlink != 1:
-            raise TrainingHistoryError(f"history must not be hard-linked: {self.path}")
-        if self.path.exists() and not resume and self.path.stat().st_size:
-            raise TrainingHistoryError(f"refusing to overwrite history: {self.path}")
-        if resume:
-            actual_prefix = sha256_file(self.path) if self.path.exists() else sha256_bytes(b"")
-            if not _is_sha256(expected_prefix_sha256) or expected_prefix_sha256 != actual_prefix:
+        existed = self.path.exists()
+        if resume and not existed:
+            raise TrainingHistoryError("resume history must already exist")
+        flags = os.O_RDWR | os.O_CREAT | os.O_APPEND
+        if not existed:
+            flags |= os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            self._descriptor = os.open(self.path, flags, 0o644)
+        except OSError as exc:
+            raise TrainingHistoryError(f"history must be a regular non-symlink file: {self.path}") from exc
+        try:
+            fcntl.flock(self._descriptor, fcntl.LOCK_EX)
+            current = os.fstat(self._descriptor)
+            if not _is_regular_mode(current.st_mode) or current.st_nlink != 1:
+                raise TrainingHistoryError("history must be a regular single-link file")
+            self._identity = (current.st_dev, current.st_ino)
+            self._verify_path_identity(current.st_size)
+            payload = _read_fd_bytes(self._descriptor, current.st_size)
+            actual_prefix = sha256_bytes(payload)
+            if existed and not resume and current.st_size:
+                raise TrainingHistoryError(f"refusing to overwrite history: {self.path}")
+            if resume and (not _is_sha256(expected_prefix_sha256) or expected_prefix_sha256 != actual_prefix):
                 raise TrainingHistoryError("resume history prefix SHA256 is missing or mismatched")
-        self._rows = strict_jsonl_load(self.path) if self.path.exists() and self.path.stat().st_size else []
+            self._rows = _strict_jsonl_load_bytes(payload, source=self.path) if payload else []
+        except BaseException:
+            fcntl.flock(self._descriptor, fcntl.LOCK_UN)
+            os.close(self._descriptor)
+            raise
+        else:
+            fcntl.flock(self._descriptor, fcntl.LOCK_UN)
         previous_step = 0
         for expected_epoch, row in enumerate(self._rows, 1):
             if row.get("epoch") != expected_epoch:
@@ -235,11 +314,39 @@ class HistoryWriter:
             previous_step = step
         self._last_epoch = self._rows[-1].get("epoch", 0) if self._rows else 0
         self._last_step = self._rows[-1].get("global_step", 0) if self._rows else 0
-        self._expected_size = self.path.stat().st_size if self.path.exists() else 0
+        self._expected_size = current.st_size
+        self._expected_prefix_sha256 = actual_prefix
 
     @property
     def prefix_sha256(self) -> str:
-        return sha256_file(self.path) if self.path.exists() else sha256_bytes(b"")
+        current = os.fstat(self._descriptor)
+        self._verify_path_identity(current.st_size)
+        return sha256_bytes(_read_fd_bytes(self._descriptor, current.st_size))
+
+    def close(self) -> None:
+        descriptor = getattr(self, "_descriptor", None)
+        if descriptor is not None:
+            os.close(descriptor)
+            self._descriptor = None
+
+    def __del__(self) -> None:  # pragma: no cover - deterministic callers use close
+        try:
+            self.close()
+        except OSError:
+            pass
+
+    def _verify_path_identity(self, expected_size: int) -> None:
+        try:
+            path_info = self.path.lstat()
+        except OSError as exc:
+            raise TrainingHistoryError("history path disappeared during use") from exc
+        if (
+            not _is_regular_mode(path_info.st_mode)
+            or path_info.st_nlink != 1
+            or (path_info.st_dev, path_info.st_ino) != self._identity
+            or path_info.st_size != expected_size
+        ):
+            raise TrainingHistoryError("history path identity changed after prefix validation")
 
     def append(self, record: Mapping[str, Any]) -> str:
         row = dict(record)
@@ -250,32 +357,76 @@ class HistoryWriter:
         if step <= self._last_step:
             raise TrainingHistoryError(f"global_step must increase beyond {self._last_step}, got {step}")
         payload = canonical_json_bytes(row)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(self.path, flags, 0o644)
+        descriptor = self._descriptor
+        wrote = False
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             current = os.fstat(descriptor)
-            if not _is_regular_mode(current.st_mode) or current.st_nlink != 1:
+            if (
+                not _is_regular_mode(current.st_mode)
+                or current.st_nlink != 1
+                or (current.st_dev, current.st_ino) != self._identity
+            ):
                 raise TrainingHistoryError("history changed into a nonregular or hard-linked file")
+            self._verify_path_identity(current.st_size)
             if current.st_size != self._expected_size:
                 raise TrainingHistoryError("concurrent history append detected; reopen and validate the prefix")
+            prefix_bytes = _read_fd_bytes(descriptor, current.st_size)
+            if sha256_bytes(prefix_bytes) != self._expected_prefix_sha256:
+                raise TrainingHistoryError("history prefix bytes changed after validation")
+            expected_after_hash = sha256_bytes(prefix_bytes + payload)
             written = os.write(descriptor, payload)
+            wrote = written > 0
             if written != len(payload):
                 raise OSError(f"short append: {written}/{len(payload)} bytes")
             os.fsync(descriptor)
+            after = os.fstat(descriptor)
+            if after.st_nlink != 1 or after.st_size != self._expected_size + len(payload):
+                raise TrainingHistoryError("history inode changed during append")
+            self._verify_path_identity(after.st_size)
+            if sha256_bytes(_read_fd_bytes(descriptor, after.st_size)) != expected_after_hash:
+                raise TrainingHistoryError("history bytes changed concurrently during append")
         except BaseException:
-            os.ftruncate(descriptor, self._expected_size)
-            os.fsync(descriptor)
+            if wrote:
+                os.ftruncate(descriptor, self._expected_size)
+                os.fsync(descriptor)
             raise
         finally:
-            os.close(descriptor)
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
         self._last_epoch = epoch
         self._last_step = step
         self._rows.append(row)
         self._expected_size += len(payload)
-        return self.prefix_sha256
+        self._expected_prefix_sha256 = expected_after_hash
+        return self._expected_prefix_sha256
+
+
+def _read_fd_bytes(descriptor: int, size: int) -> bytes:
+    chunks: list[bytes] = []
+    offset = 0
+    while offset < size:
+        chunk = os.pread(descriptor, min(1024 * 1024, size - offset), offset)
+        if not chunk:
+            raise TrainingHistoryError("history file shortened while reading")
+        chunks.append(chunk)
+        offset += len(chunk)
+    return b"".join(chunks)
+
+
+def _strict_jsonl_load_bytes(data: bytes, *, source: Path) -> list[dict[str, Any]]:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TrainingHistoryError(f"cannot read {source}: {exc}") from exc
+    rows: list[dict[str, Any]] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            raise TrainingHistoryError(f"blank JSONL record at {source}:{number}")
+        row = strict_json_loads(line, source=f"{source}:{number}")
+        if not isinstance(row, dict):
+            raise TrainingHistoryError(f"JSONL record is not an object at {source}:{number}")
+        rows.append(row)
+    return rows
 
 
 def select_best(
@@ -397,6 +548,12 @@ def validate_resume_metadata(
         if resume.get(field) != expected:
             errors.append(f"resume {field} mismatch")
     state = resume.get("state")
+    resume_schema_errors: list[str] = []
+    resume_expected_state = _state_entries(
+        manifest.get("model_state_schema"), resume_schema_errors, "resume manifest model"
+    )
+    errors.extend(resume_schema_errors)
+    _validate_model_tensor_state(resume, resume_expected_state, "resume", errors)
     if not isinstance(state, Mapping) or set(state) != required_state:
         errors.append(f"resume state must contain {sorted(required_state)}")
     else:
@@ -408,25 +565,19 @@ def validate_resume_metadata(
             "sampler": "sampler_state",
         }
         for name, expected_type in typed.items():
-            item = state.get(name)
-            if (
-                not isinstance(item, Mapping)
-                or set(item) != {"type", "payload"}
-                or item.get("type") != expected_type
-                or not _nonempty_payload(item.get("payload"))
-            ):
-                errors.append(f"resume {name} state must be a nonempty typed {expected_type} object")
+            _validate_hashed_state_payload(state.get(name), expected_type, f"resume {name}", errors)
         model_payload = state.get("model", {}).get("payload") if isinstance(state.get("model"), Mapping) else None
-        if not isinstance(model_payload, Mapping) or model_payload.get("state_keys") != resume.get("state_keys"):
-            errors.append("resume model state payload does not match loaded checkpoint state schema")
+        if not isinstance(model_payload, Mapping) or not _strict_equal(
+            model_payload.get("state_dict"), resume.get("model_state")
+        ):
+            errors.append("resume model state payload does not match loaded checkpoint tensors")
         rng = state.get("rng")
         rng_fields = {"python", "numpy", "torch_cpu", "torch_cuda"}
-        if (
-            not isinstance(rng, Mapping)
-            or set(rng) != rng_fields
-            or any(not _nonempty_payload(rng[k]) for k in rng_fields)
-        ):
-            errors.append("resume RNG state must contain nonempty Python/NumPy/Torch CPU/CUDA payloads")
+        if not isinstance(rng, Mapping) or set(rng) != rng_fields:
+            errors.append("resume RNG state must contain exact Python/NumPy/Torch CPU/CUDA payloads")
+        else:
+            for name in sorted(rng_fields):
+                _validate_rng_payload(rng[name], f"resume RNG {name}", errors)
     if not rows:
         errors.append("resume requires a nonempty history prefix")
     else:
@@ -508,6 +659,7 @@ def validate_warm_start(manifest: Mapping[str, Any], metadata: Mapping[str, Any]
     ):
         errors.append("warm-start expected_keys must be a unique sorted list")
     actual_by_name = _state_entries(actual_entries, errors, "warm-start")
+    _validate_model_tensor_state(metadata, actual_by_name, "warm-start", errors)
     if isinstance(expected_keys, list):
         expected_hash = sha256_bytes(canonical_json_bytes(expected_keys))
         if warm.get("expected_keys_sha256") != expected_hash:
@@ -668,6 +820,101 @@ def validate_training_run(
 validate_run = validate_training_run
 
 
+def execution_config_sha256(manifest: Mapping[str, Any]) -> str:
+    """Hash every manifest field that can change training or gate semantics."""
+    snapshot = manifest.get("validation_snapshot")
+    validation_runtime = None
+    if isinstance(snapshot, Mapping):
+        validation_runtime = {
+            field: snapshot.get(field)
+            for field in (
+                "preprocessing_config",
+                "seed",
+                "allowed_environment",
+                "device",
+                "dtype",
+                "framework_version",
+                "shuffle",
+                "augmentation",
+            )
+        }
+    fields = (
+        "purpose",
+        "run_kind",
+        "phase",
+        "cli",
+        "allowed_environment",
+        "model_config",
+        "model_state_schema",
+        "loss_config",
+        "optimizer_config",
+        "scheduler_config",
+        "seed",
+        "dependencies",
+        "hardware",
+        "selector",
+        "loss_component_profile",
+        "nullable_loss_components",
+        "total_loss",
+        "sampler",
+        "gradient",
+        "resume_validation_contract",
+        "acceptance_thresholds",
+        "task_type",
+        "warm_start",
+        "training_sources",
+        "cv",
+    )
+    payload = {field: manifest.get(field) for field in fields}
+    payload["validation_runtime"] = validation_runtime
+    return canonical_sha256(payload)
+
+
+def _training_semantics_sha256(manifest: Mapping[str, Any]) -> str:
+    """Hash the training semantics that must be identical across CV folds/root."""
+    snapshot = manifest.get("validation_snapshot")
+    validation_runtime = None
+    if isinstance(snapshot, Mapping):
+        validation_runtime = {
+            field: snapshot.get(field)
+            for field in (
+                "preprocessing_config",
+                "seed",
+                "allowed_environment",
+                "device",
+                "dtype",
+                "framework_version",
+                "shuffle",
+                "augmentation",
+            )
+        }
+    fields = (
+        "phase",
+        "cli",
+        "allowed_environment",
+        "model_config",
+        "model_state_schema",
+        "loss_config",
+        "optimizer_config",
+        "scheduler_config",
+        "seed",
+        "dependencies",
+        "hardware",
+        "loss_component_profile",
+        "nullable_loss_components",
+        "total_loss",
+        "sampler",
+        "gradient",
+        "resume_validation_contract",
+        "task_type",
+        "warm_start",
+        "training_sources",
+    )
+    payload = {field: manifest.get(field) for field in fields}
+    payload["validation_runtime"] = validation_runtime
+    return canonical_sha256(payload)
+
+
 def _validate_manifest(manifest: Mapping[str, Any], errors: list[str]) -> None:
     required = {
         "schema_version",
@@ -693,6 +940,7 @@ def _validate_manifest(manifest: Mapping[str, Any], errors: list[str]) -> None:
         "warm_start_checkpoint_sha256",
         "selector",
         "loss_component_profile",
+        "nullable_loss_components",
         "total_loss",
         "validation_snapshot",
         "acceptance_thresholds",
@@ -709,12 +957,36 @@ def _validate_manifest(manifest: Mapping[str, Any], errors: list[str]) -> None:
     missing = sorted(required - manifest.keys())
     if missing:
         errors.append(f"manifest missing fields: {missing}")
+    optional = {
+        "task_type",
+        "validation_tolerances",
+        "warm_start",
+        "training_sources",
+        "min_val_loss_selection",
+        "parent_cv",
+        "cv",
+        "history_prefix_sha256",
+    }
+    extra = sorted(set(manifest) - required - optional)
+    if extra:
+        errors.append(f"manifest contains unknown fields: {extra}")
     if not _is_schema_version(manifest.get("schema_version")):
         errors.append("unsupported manifest schema_version")
     if manifest.get("purpose") not in {"candidate", "diagnostic"}:
         errors.append("purpose must be candidate or diagnostic")
     if manifest.get("run_kind") not in {"single_split", "cv", "final_refit"}:
         errors.append("invalid run_kind")
+    elif manifest.get("run_kind") == "cv":
+        if "cv" not in manifest or "parent_cv" in manifest:
+            errors.append("CV root must contain cv and must not contain parent_cv")
+    elif manifest.get("run_kind") == "final_refit":
+        if "parent_cv" not in manifest or "cv" in manifest:
+            errors.append("final-refit must contain parent_cv and must not contain cv")
+    elif manifest.get("fold_id") is None:
+        if "parent_cv" in manifest or "cv" in manifest:
+            errors.append("standalone single_split must not contain CV parent/root fields")
+    elif "parent_cv" not in manifest or "cv" in manifest:
+        errors.append("CV fold must contain parent_cv and must not contain cv")
     if manifest.get("run_kind") == "final_refit" and set(manifest.get("loss_component_profile", {})) != {"train"}:
         errors.append("final-refit loss component profile must be train-only")
     for field in ("run_id", "phase", "git_sha", "cli"):
@@ -741,15 +1013,8 @@ def _validate_manifest(manifest: Mapping[str, Any], errors: list[str]) -> None:
     for field in ("code_tree_sha256", "config_sha256", "input_manifest_sha256", "split_sha256"):
         if not _is_sha256(manifest.get(field)):
             errors.append(f"manifest {field} must be SHA256")
-    configs = {
-        "model_config": manifest.get("model_config"),
-        "model_state_schema": manifest.get("model_state_schema"),
-        "loss_config": manifest.get("loss_config"),
-        "optimizer_config": manifest.get("optimizer_config"),
-        "scheduler_config": manifest.get("scheduler_config"),
-    }
-    if manifest.get("config_sha256") != canonical_sha256(configs):
-        errors.append("config_sha256 does not match pinned model/loss/optimizer/scheduler config")
+    if manifest.get("config_sha256") != execution_config_sha256(manifest):
+        errors.append("config_sha256 does not match complete execution/gate semantics")
     if isinstance(manifest.get("split"), Mapping) and manifest.get("split_sha256") != canonical_sha256(
         manifest["split"]
     ):
@@ -793,6 +1058,8 @@ def _validate_manifest(manifest: Mapping[str, Any], errors: list[str]) -> None:
                 errors.append(f"validation_snapshot {field} mismatch")
         if snapshot.get("allowed_environment") != manifest.get("allowed_environment"):
             errors.append("validation_snapshot allowed_environment mismatch")
+        if snapshot.get("seed") != manifest.get("seed"):
+            errors.append("validation_snapshot seed mismatch")
     sampler = manifest.get("sampler")
     if not isinstance(sampler, Mapping) or sampler.get("mode") not in {"serialized", "epoch_derived"}:
         errors.append("sampler must use serialized or epoch_derived deterministic state")
@@ -817,6 +1084,43 @@ def _validate_manifest(manifest: Mapping[str, Any], errors: list[str]) -> None:
             total_profile = profiles.get(side, {}).get(total_name) if isinstance(profiles.get(side), Mapping) else None
             if not isinstance(total_profile, Mapping) or total_profile.get("required") is not True:
                 errors.append(f"{side} total-loss component must be required")
+    total_contract = manifest.get("total_loss")
+    loss_config = manifest.get("loss_config")
+    if isinstance(total_contract, Mapping) and isinstance(loss_config, Mapping):
+        weights = total_contract.get("weights")
+        configured = loss_config.get("weights", loss_config)
+        if (
+            not isinstance(weights, Mapping)
+            or not isinstance(configured, Mapping)
+            or any(
+                name not in configured or not _strict_equal(configured.get(name), value)
+                for name, value in weights.items()
+            )
+        ):
+            errors.append("total-loss weights do not exactly match loss_config")
+    nullable = manifest.get("nullable_loss_components", {})
+    if not isinstance(nullable, Mapping) or set(nullable) - set(expected_sides):
+        errors.append("nullable_loss_components side schema invalid")
+    elif isinstance(profiles, Mapping):
+        for side, declarations in nullable.items():
+            if not isinstance(declarations, Mapping):
+                errors.append(f"nullable_loss_components.{side} must be an object")
+                continue
+            side_profile = profiles.get(side, {})
+            for component, declaration in declarations.items():
+                profile_entry = side_profile.get(component) if isinstance(side_profile, Mapping) else None
+                if not isinstance(profile_entry, Mapping) or profile_entry.get("required") is not False:
+                    errors.append(f"nullable declaration is not for an optional component: {side}.{component}")
+                if (
+                    not isinstance(declaration, Mapping)
+                    or set(declaration) != {"reason", "zero_count"}
+                    or not isinstance(declaration.get("reason"), str)
+                    or not declaration.get("reason")
+                    or not isinstance(declaration.get("zero_count"), int)
+                    or isinstance(declaration.get("zero_count"), bool)
+                    or declaration.get("zero_count") != 0
+                ):
+                    errors.append(f"nullable declaration malformed: {side}.{component}")
     _validate_split(manifest, errors)
 
 
@@ -1168,14 +1472,16 @@ def _validate_losses(manifest: Mapping[str, Any], row: Mapping[str, Any], epoch:
                 errors.append(f"loss profile {split_name}.{component} required/reduction invalid")
                 continue
             value = losses.get(component)
+            zero = manifest.get("nullable_loss_components", {}).get(split_name, {}).get(component)
             if value is None:
                 if is_required:
                     errors.append(f"epoch {epoch} required {split_name}.{component} is null")
                 else:
-                    zero = manifest.get("nullable_loss_components", {}).get(split_name, {}).get(component)
                     if not isinstance(zero, Mapping) or not zero.get("reason") or zero.get("zero_count") != 0:
                         errors.append(f"nullable {split_name}.{component} lacks reason and zero_count=0")
                 continue
+            if not is_required and zero is not None:
+                errors.append(f"epoch {epoch} {split_name}.{component} is present despite zero-population declaration")
             if not isinstance(value, Mapping) or set(value) != {"value", "numerator", "denominator", "reduction"}:
                 errors.append(f"epoch {epoch} {split_name}.{component} has invalid component schema")
                 continue
@@ -1250,6 +1556,8 @@ def _validate_total_formula(
         formula_names = _formula_names(formula)
         if formula_names != set(components) | set(weights):
             raise TrainingHistoryError("total-loss formula has unknown or unused component/weight names")
+        if _formula_has_numeric_constants(formula):
+            raise TrainingHistoryError("total-loss formula must name every numeric weight")
         expected = _safe_formula(formula, values | dict(weights))
         numerator_formula = aggregation.get("numerator_formula")
         if not isinstance(numerator_formula, str):
@@ -1257,6 +1565,8 @@ def _validate_total_formula(
         numerator_values = {f"{name}_numerator": item["numerator"] for name, item in component_items.items()}
         if _formula_names(numerator_formula) != set(numerator_values) | set(weights):
             raise TrainingHistoryError("total-loss numerator formula has unknown or unused names")
+        if _formula_has_numeric_constants(numerator_formula):
+            raise TrainingHistoryError("total-loss numerator formula must name every numeric weight")
         expected_numerator = _safe_formula(numerator_formula, numerator_values | dict(weights))
     except Exception as exc:
         errors.append(f"epoch {epoch} {split} cannot recompute total-loss formula: {exc}")
@@ -1312,6 +1622,11 @@ def _formula_names(expression: str) -> set[str]:
     if any(not isinstance(node, allowed_nodes) for node in ast.walk(tree)):
         raise TrainingHistoryError("formula uses forbidden syntax")
     return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+
+
+def _formula_has_numeric_constants(expression: str) -> bool:
+    tree = ast.parse(expression, mode="eval")
+    return any(isinstance(node, ast.Constant) for node in ast.walk(tree))
 
 
 def _safe_formula(expression: str, names: Mapping[str, Any]) -> float:
@@ -1845,6 +2160,7 @@ def _validate_checkpoints(
             expected_kind = "min_val_loss"
         if metadata.get("format") != CHECKPOINT_FORMAT or not _is_schema_version(metadata.get("schema_version")):
             errors.append(f"checkpoint envelope/schema invalid: {relative}")
+        _validate_checkpoint_envelope_schema(metadata, expected_kind, relative, errors)
         if metadata.get("checkpoint_sha256") != sha256_file(path) or metadata.get("path") != str(
             path.resolve(strict=True)
         ):
@@ -1858,6 +2174,7 @@ def _validate_checkpoints(
         errors.extend(state_errors)
         if actual_state != expected_state_by_name:
             errors.append(f"checkpoint strict key/shape/dtype mismatch: {relative}")
+        _validate_model_tensor_state(metadata, expected_state_by_name, relative, errors)
         expected_epoch = rows[-1].get("epoch")
         if relative.endswith("best.pt"):
             expected_epoch = manifest.get("final_selection", {}).get("epoch")
@@ -1917,12 +2234,31 @@ def _validate_checkpoints(
             try:
                 metadata = _load_checkpoint_metadata(_contained_regular_file(root, relative), loader)
                 metadata_epoch = metadata.get("epoch")
-                matched |= (
+                row_errors: list[str] = []
+                actual_state = _state_entries(metadata.get("state_keys"), row_errors, relative)
+                _validate_model_tensor_state(metadata, expected_state_by_name, relative, row_errors)
+                is_required = relative in required
+                expected_kind = Path(relative).stem if is_required else "epoch"
+                if relative.endswith("fixed_epoch.pt"):
+                    expected_kind = "fixed_epoch"
+                elif relative.endswith("min_val_loss.pt"):
+                    expected_kind = "min_val_loss"
+                _validate_checkpoint_envelope_schema(metadata, expected_kind, relative, row_errors)
+                valid = (
                     isinstance(metadata_epoch, int)
                     and not isinstance(metadata_epoch, bool)
                     and metadata_epoch == row.get("epoch")
                     and metadata.get("run_id") == manifest.get("run_id")
+                    and metadata.get("format") == CHECKPOINT_FORMAT
+                    and _is_schema_version(metadata.get("schema_version"))
+                    and metadata.get("kind") == expected_kind
+                    and metadata.get("global_step") == row.get("global_step")
+                    and actual_state == expected_state_by_name
+                    and not row_errors
                 )
+                matched |= valid
+                if not valid:
+                    load_errors.extend(row_errors or [f"strict checkpoint envelope mismatch: {relative}"])
             except TrainingHistoryError as exc:
                 load_errors.append(str(exc))
         if not matched:
@@ -1954,10 +2290,22 @@ def _load_checkpoint_metadata(path: Path, loader: CheckpointMetadataLoader | Non
     actual_hash = sha256_file(path)
     resolved = str(path.resolve(strict=True))
     if loader is not None:
-        metadata = _object(loader(path), f"metadata for {path}")
+        metadata = dict(_object(loader(path), f"metadata for {path}"))
         _require_json_tree(metadata, f"trusted checkpoint metadata for {path}")
         if metadata.get("path") != resolved or metadata.get("checkpoint_sha256") != actual_hash:
             raise TrainingHistoryError(f"trusted checkpoint loader path/hash binding mismatch: {path}")
+        evidence = metadata.pop("load_evidence", None)
+        expected_evidence = {
+            "trusted_safe_loader": True,
+            "strict": True,
+            "missing_keys": [],
+            "unexpected_keys": [],
+            "path": resolved,
+            "checkpoint_sha256": actual_hash,
+            "model_state_sha256": canonical_sha256(metadata.get("model_state")),
+        }
+        if not _strict_equal(evidence, expected_evidence):
+            raise TrainingHistoryError(f"trusted checkpoint loader success evidence invalid: {path}")
         return metadata
     try:
         metadata = dict(_object(strict_json_load(path), str(path)))
@@ -1970,6 +2318,92 @@ def _load_checkpoint_metadata(path: Path, loader: CheckpointMetadataLoader | Non
     metadata["checkpoint_sha256"] = actual_hash
     metadata["path"] = resolved
     return metadata
+
+
+def _validate_model_tensor_state(
+    metadata: Mapping[str, Any],
+    expected_schema: Mapping[str, Any],
+    label: str,
+    errors: list[str],
+) -> None:
+    state = metadata.get("model_state")
+    if not isinstance(state, list) or not state:
+        errors.append(f"checkpoint model tensor state missing: {label}")
+        return
+    names: list[str] = []
+    actual_schema: dict[str, Any] = {}
+    for tensor in state:
+        if not isinstance(tensor, Mapping) or set(tensor) != {"name", "shape", "dtype", "values"}:
+            errors.append(f"checkpoint tensor schema invalid: {label}")
+            continue
+        name = tensor.get("name")
+        shape = tensor.get("shape")
+        dtype = tensor.get("dtype")
+        values = tensor.get("values")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(shape, list)
+            or not all(isinstance(item, int) and not isinstance(item, bool) and item >= 0 for item in shape)
+            or not isinstance(dtype, str)
+            or not dtype
+            or not isinstance(values, list)
+        ):
+            errors.append(f"checkpoint tensor value/schema invalid: {label}")
+            continue
+        element_count = math.prod(shape) if shape else 1
+        if len(values) != element_count:
+            errors.append(f"checkpoint tensor element count mismatch: {label}:{name}")
+        dtype_lower = dtype.lower()
+        if "bool" in dtype_lower and any(not isinstance(item, bool) for item in values):
+            errors.append(f"checkpoint tensor values do not match bool dtype: {label}:{name}")
+        elif (
+            "int" in dtype_lower
+            and "float" not in dtype_lower
+            and any(not isinstance(item, int) or isinstance(item, bool) for item in values)
+        ):
+            errors.append(f"checkpoint tensor values do not match integer dtype: {label}:{name}")
+        elif "bool" not in dtype_lower and not all(_is_finite_number(item) for item in values):
+            errors.append(f"checkpoint tensor values must be finite numeric: {label}:{name}")
+        names.append(name)
+        actual_schema[name] = {"shape": shape, "dtype": dtype}
+    if names != sorted(names) or len(names) != len(set(names)):
+        errors.append(f"checkpoint tensor names must be sorted and unique: {label}")
+    if actual_schema != expected_schema:
+        errors.append(f"checkpoint tensor state differs from model schema: {label}")
+
+
+def _validate_checkpoint_envelope_schema(
+    metadata: Mapping[str, Any], expected_kind: str, label: str, errors: list[str]
+) -> None:
+    fields = {
+        "format",
+        "schema_version",
+        "kind",
+        "run_id",
+        "epoch",
+        "global_step",
+        "state_keys",
+        "model_state",
+        "checkpoint_sha256",
+        "path",
+    }
+    if expected_kind == "resume":
+        fields |= {
+            "config_sha256",
+            "input_manifest_sha256",
+            "split_sha256",
+            "code_tree_sha256",
+            "warm_start_checkpoint_sha256",
+            "history_prefix_sha256",
+            "next_epoch",
+            "next_global_step",
+            "validation_snapshot_sha256",
+            "validation_receipt",
+            "state",
+        }
+    if set(metadata) != fields:
+        errors.append(f"checkpoint envelope fields are not exact: {label}")
 
 
 def _validate_artifacts(root: Path, manifest: Mapping[str, Any], errors: list[str], *, is_cv: bool) -> None:
@@ -2099,6 +2533,7 @@ def _validate_cv_root(
     selection_keys = {"fold_id", "epoch", "selector_value", "checkpoint_sha256"}
     if (
         not isinstance(selections, list)
+        or len(selections) != len(fold_ids)
         or any(not isinstance(item, Mapping) or set(item) != selection_keys for item in selections)
         or any(
             not isinstance(item.get("epoch"), int)
@@ -2109,12 +2544,20 @@ def _validate_cv_root(
             if isinstance(item, Mapping)
         )
         or {item.get("fold_id") for item in selections if isinstance(item, Mapping)} != set(fold_ids)
+        or len({item.get("fold_id") for item in selections if isinstance(item, Mapping)}) != len(selections)
     ):
         errors.append("CV fold selections do not match fold IDs")
     child_reports = {}
     validation_ids: set[str] = set()
     validation_assignments: dict[str, str] = {}
     validation_stems: set[str] = set()
+    validation_lineages = {"44b6": 0, "6bba": 0}
+    child_run_ids: set[str] = set()
+    root_split = manifest.get("split", {})
+    root_train = root_split.get("train", {}) if isinstance(root_split, Mapping) else {}
+    root_validation = root_split.get("validation", {}) if isinstance(root_split, Mapping) else {}
+    root_all_ids = set(root_train.get("example_ids", [])) | set(root_validation.get("example_ids", []))
+    root_all_stems = set(root_train.get("stems", [])) | set(root_validation.get("stems", []))
     for fold_id in fold_ids:
         expected_path = f"fold/{fold_id}"
         if fold_paths.get(fold_id) != expected_path:
@@ -2130,6 +2573,11 @@ def _validate_cv_root(
             errors.append(f"CV fold {fold_id} failed: {report['errors']}")
             continue
         child_manifest = strict_json_load(_contained_regular_file(fold_root, "run_manifest.json"))
+        child_run_id = child_manifest.get("run_id")
+        if child_run_id == manifest.get("run_id") or child_run_id in child_run_ids:
+            errors.append(f"CV fold {fold_id} run_id is not independent/unique")
+        elif isinstance(child_run_id, str):
+            child_run_ids.add(child_run_id)
         pin = fold_pins.get(fold_id)
         pin_fields = {
             "run_id",
@@ -2145,14 +2593,11 @@ def _validate_cv_root(
             or any(pin.get(field) != child_manifest.get(field) for field in pin_fields)
         ):
             errors.append(f"CV fold {fold_id} parent pin mismatch")
-        for shared_field in (
-            "config_sha256",
-            "input_manifest_sha256",
-            "code_tree_sha256",
-            "warm_start_checkpoint_sha256",
-        ):
+        for shared_field in ("input_manifest_sha256", "code_tree_sha256", "warm_start_checkpoint_sha256"):
             if child_manifest.get(shared_field) != manifest.get(shared_field):
                 errors.append(f"CV fold {fold_id} {shared_field} drifts from root")
+        if _training_semantics_sha256(child_manifest) != _training_semantics_sha256(manifest):
+            errors.append(f"CV fold {fold_id} training semantics drift from root")
         parent = child_manifest.get("parent_cv")
         if (
             not isinstance(parent, Mapping)
@@ -2161,13 +2606,22 @@ def _validate_cv_root(
         ):
             errors.append(f"CV fold {fold_id} parent identity mismatch")
         child_val = child_manifest.get("split", {}).get("validation", {})
+        child_train = child_manifest.get("split", {}).get("train", {})
         child_ids = child_val.get("example_ids", []) if isinstance(child_val, Mapping) else []
         child_stems = child_val.get("stems", []) if isinstance(child_val, Mapping) else []
+        if isinstance(child_train, Mapping) and isinstance(child_val, Mapping):
+            child_all_ids = set(child_train.get("example_ids", [])) | set(child_ids)
+            child_all_stems = set(child_train.get("stems", [])) | set(child_stems)
+            if child_all_ids != root_all_ids or child_all_stems != root_all_stems:
+                errors.append(f"CV fold {fold_id} train/validation membership differs from root dataset")
         if validation_ids & set(child_ids) or validation_stems & set(child_stems):
             errors.append(f"CV fold {fold_id} validation IDs/stems overlap another fold")
         validation_ids.update(child_ids)
         validation_assignments.update({example_id: fold_id for example_id in child_ids})
         validation_stems.update(child_stems)
+        if isinstance(child_val, Mapping) and isinstance(child_val.get("lineages"), Mapping):
+            for lineage_id in validation_lineages:
+                validation_lineages[lineage_id] += child_val["lineages"].get(lineage_id, 0)
         selection = next(
             (item for item in selections if isinstance(item, Mapping) and item.get("fold_id") == fold_id), None
         )
@@ -2180,6 +2634,12 @@ def _validate_cv_root(
             )
         ):
             errors.append(f"CV fold {fold_id} selection pin mismatch")
+    if (
+        validation_ids != set(root_validation.get("example_ids", []))
+        or validation_stems != set(root_validation.get("stems", []))
+        or validation_lineages != root_validation.get("lineages")
+    ):
+        errors.append("CV root validation membership/counts differ from exact fold-validation union")
     oof = cv.get("oof")
     oof_keys = {
         "predictions_path",
@@ -2192,6 +2652,7 @@ def _validate_cv_root(
         "metrics_sha256",
         "selector_value",
     }
+    recomputed_selector: Any = None
     if not isinstance(oof, Mapping) or set(oof) != oof_keys:
         errors.append("CV OOF metadata missing")
     else:
@@ -2228,11 +2689,50 @@ def _validate_cv_root(
                 errors.append("CV degradation artifact hash mismatch")
             else:
                 degradation_payload = strict_json_load(degradation_path)
-                _collect_numeric_tree(degradation_payload, "CV degradation artifact", errors)
+                expected_degradation = None
+                fold_degradation = {}
+                for fold_id in fold_ids:
+                    report = child_reports.get(str(fold_id))
+                    report_details = report.get("details", {}) if isinstance(report, Mapping) else {}
+                    item = {
+                        key: report_details.get(key)
+                        for key in (
+                            "loss_degradation_ratio",
+                            "loss_degradation_absolute",
+                            "ZERO_BEST_LOSS",
+                            "selector_degradation",
+                        )
+                    }
+                    if report and report.get("verdict") == "PASS":
+                        fold_degradation[fold_id] = item
+                if len(fold_degradation) == len(fold_ids):
+                    ratios = [
+                        item["loss_degradation_ratio"]
+                        for item in fold_degradation.values()
+                        if item["loss_degradation_ratio"] is not None
+                    ]
+                    absolutes = [item["loss_degradation_absolute"] for item in fold_degradation.values()]
+                    selectors = [item["selector_degradation"] for item in fold_degradation.values()]
+                    expected_degradation = {
+                        "folds": fold_degradation,
+                        "aggregate": {
+                            "finite_loss_degradation_ratio_mean": (sum(ratios) / len(ratios) if ratios else None),
+                            "loss_degradation_absolute_mean": sum(absolutes) / len(absolutes),
+                            "selector_degradation_mean": sum(selectors) / len(selectors),
+                            "zero_best_loss_folds": [
+                                fold_id for fold_id in fold_ids if fold_degradation[fold_id]["ZERO_BEST_LOSS"] is True
+                            ],
+                        },
+                        "oof_selector_value": recomputed_selector,
+                    }
+                if expected_degradation is None or not _strict_equal(degradation_payload, expected_degradation):
+                    errors.append("CV degradation artifact is not exactly recomputed from folds/OOF")
+                if not _strict_equal(manifest.get("degradation"), degradation_payload):
+                    errors.append("CV manifest degradation differs from bound degradation artifact")
         except TrainingHistoryError as exc:
             errors.append(str(exc))
     ref = final.get("final_refit_ref")
-    if cv.get("require_final_refit") is True and ref is None and manifest.get("purpose") == "candidate":
+    if manifest.get("purpose") == "candidate" and (cv.get("require_final_refit") is not True or ref is None):
         errors.append("candidate CV deployment contract requires final_refit_ref")
     elif not isinstance(cv.get("require_final_refit"), bool):
         errors.append("CV require_final_refit must be boolean")
@@ -2510,6 +3010,44 @@ def _nonempty_payload(value: Any) -> bool:
     return value is not None and not isinstance(value, bool)
 
 
+def _validate_hashed_state_payload(value: Any, expected_type: str, label: str, errors: list[str]) -> None:
+    if not isinstance(value, Mapping) or set(value) != {"type", "payload"} or value.get("type") != expected_type:
+        errors.append(f"{label} state must be a typed {expected_type} object")
+        return
+    payload = value.get("payload")
+    if not isinstance(payload, Mapping) or set(payload) != {"state_dict", "sha256"}:
+        errors.append(f"{label} payload schema invalid")
+        return
+    state_dict = payload.get("state_dict")
+    if not _nonempty_payload(state_dict):
+        errors.append(f"{label} state_dict must be nonempty")
+        return
+    try:
+        expected_hash = canonical_sha256(state_dict)
+    except TrainingHistoryError as exc:
+        errors.append(f"{label} state_dict invalid: {exc}")
+        return
+    if payload.get("sha256") != expected_hash:
+        errors.append(f"{label} state_dict hash mismatch")
+
+
+def _validate_rng_payload(value: Any, label: str, errors: list[str]) -> None:
+    if not isinstance(value, Mapping) or set(value) != {"encoding", "value", "sha256"}:
+        errors.append(f"{label} payload schema invalid")
+        return
+    encoded = value.get("value")
+    if value.get("encoding") != "base64" or not isinstance(encoded, str) or not encoded:
+        errors.append(f"{label} must be nonempty base64")
+        return
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except (ValueError, base64.binascii.Error):
+        errors.append(f"{label} base64 is invalid")
+        return
+    if not decoded or value.get("sha256") != sha256_bytes(decoded):
+        errors.append(f"{label} bytes/hash mismatch")
+
+
 def _state_entries(value: Any, errors: list[str], label: str) -> dict[str, Any]:
     if not isinstance(value, list) or not value:
         errors.append(f"{label} state_keys must be a nonempty list")
@@ -2678,6 +3216,7 @@ __all__ = [
     "canonical_sha256",
     "canonical_json_bytes",
     "compute_degradation",
+    "execution_config_sha256",
     "expected_best_flags",
     "select_best",
     "sha256_bytes",

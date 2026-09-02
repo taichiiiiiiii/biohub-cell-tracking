@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import math
@@ -20,6 +21,7 @@ from biohub.training_history import (
     canonical_json_bytes,
     canonical_sha256,
     compute_degradation,
+    execution_config_sha256,
     select_best,
     sha256_bytes,
     sha256_file,
@@ -34,6 +36,7 @@ from biohub.training_history import (
 
 ZERO_SHA = "0" * 64
 STATE_KEYS = [{"name": "layer.weight", "shape": [2, 2], "dtype": "float32"}]
+MODEL_STATE = [{"name": "layer.weight", "shape": [2, 2], "dtype": "float32", "values": [0.1, 0.2, 0.3, 0.4]}]
 
 
 def _checkpoint(kind: str, run_id: str, epoch: int, step: int) -> dict:
@@ -44,7 +47,20 @@ def _checkpoint(kind: str, run_id: str, epoch: int, step: int) -> dict:
         "run_id": run_id,
         "epoch": epoch,
         "global_step": step,
-        "state_keys": STATE_KEYS,
+        "state_keys": copy.deepcopy(STATE_KEYS),
+        "model_state": copy.deepcopy(MODEL_STATE),
+    }
+
+
+def _state_payload(value: object) -> dict:
+    return {"state_dict": value, "sha256": canonical_sha256(value)}
+
+
+def _rng_payload(value: bytes) -> dict:
+    return {
+        "encoding": "base64",
+        "value": base64.b64encode(value).decode("ascii"),
+        "sha256": sha256_bytes(value),
     }
 
 
@@ -86,9 +102,8 @@ def _refresh_artifacts(root: Path, verdict: str = "PASS") -> None:
     )
 
 
-def _valid_run(root: Path, *, values: list[float] | None = None) -> tuple[dict, list[dict]]:
+def _valid_run(root: Path, *, values: list[float] | None = None, run_id: str = "run-001") -> tuple[dict, list[dict]]:
     values = values or [0.8, 0.6, 0.7]
-    run_id = "run-001"
     (root / "checkpoints").mkdir(parents=True)
     (root / "provenance").mkdir()
     atomic_publish_file(root / "provenance/code-tree.json", b'{"tree":"pinned"}\n')
@@ -124,7 +139,7 @@ def _valid_run(root: Path, *, values: list[float] | None = None) -> tuple[dict, 
     }
     configs = {
         "model_config": {"name": "tiny"},
-        "model_state_schema": STATE_KEYS,
+        "model_state_schema": copy.deepcopy(STATE_KEYS),
         "loss_config": {"w_edge": 1.0},
         "optimizer_config": {"name": "sgd"},
         "scheduler_config": {"name": "constant"},
@@ -139,7 +154,7 @@ def _valid_run(root: Path, *, values: list[float] | None = None) -> tuple[dict, 
         "fold_id": None,
         "git_sha": "abc123",
         "code_tree_sha256": sha256_file(root / "provenance/code-tree.json"),
-        "config_sha256": canonical_sha256(configs),
+        "config_sha256": ZERO_SHA,
         "cli": "python train.py",
         "allowed_environment": {"CUBLAS_WORKSPACE_CONFIG": ":4096:8"},
         **{key: value for key, value in configs.items() if key != "model_state_schema"},
@@ -287,6 +302,7 @@ def _valid_run(root: Path, *, values: list[float] | None = None) -> tuple[dict, 
         "checkpoint_refs": {},
     }
     manifest["degradation"]["flags"] = manifest["degradation"].pop("warnings")
+    manifest["config_sha256"] = execution_config_sha256(manifest)
     _replace_json(root / "run_manifest.json", manifest)
 
     rows = []
@@ -369,12 +385,29 @@ def _valid_run(root: Path, *, values: list[float] | None = None) -> tuple[dict, 
                 "sha256": sha256_file(root / "provenance/resume-validation.json"),
             },
             "state": {
-                "model": {"type": "model_state_dict", "payload": {"state_keys": STATE_KEYS}},
-                "optimizer": {"type": "optimizer_state_dict", "payload": {"param_groups": 1}},
-                "scheduler": {"type": "scheduler_state_dict", "payload": {"step": len(rows)}},
-                "scaler": {"type": "amp_scaler_state", "payload": {"scale": 1.0}},
-                "rng": {"python": "state", "numpy": "state", "torch_cpu": "state", "torch_cuda": "state"},
-                "sampler": {"type": "sampler_state", "payload": {"index": 0}},
+                "model": {"type": "model_state_dict", "payload": _state_payload(MODEL_STATE)},
+                "optimizer": {
+                    "type": "optimizer_state_dict",
+                    "payload": _state_payload({"param_groups": [{"lr": 0.01}], "state": {"0": {"momentum": 0.2}}}),
+                },
+                "scheduler": {
+                    "type": "scheduler_state_dict",
+                    "payload": _state_payload({"last_epoch": len(rows), "step_count": len(rows)}),
+                },
+                "scaler": {
+                    "type": "amp_scaler_state",
+                    "payload": _state_payload({"scale": 1.0, "growth_tracker": 3}),
+                },
+                "rng": {
+                    "python": _rng_payload(b"python-state"),
+                    "numpy": _rng_payload(b"numpy-state"),
+                    "torch_cpu": _rng_payload(b"torch-cpu-state"),
+                    "torch_cuda": _rng_payload(b"torch-cuda-state"),
+                },
+                "sampler": {
+                    "type": "sampler_state",
+                    "payload": _state_payload({"epoch": len(rows), "index": 0, "order": list(range(20))}),
+                },
                 "best_state": {
                     "epoch": best_epoch,
                     "selector_value": values[best_epoch - 1],
@@ -394,6 +427,7 @@ def _valid_run(root: Path, *, values: list[float] | None = None) -> tuple[dict, 
 
 
 def _rewrite(root: Path, manifest: dict, rows: list[dict], *, verdict: str = "PASS") -> None:
+    manifest["config_sha256"] = execution_config_sha256(manifest)
     _replace_json(root / "run_manifest.json", manifest)
     _write_rows(root / "history.jsonl", rows)
     resume_path = root / "checkpoints/resume.pt"
@@ -679,6 +713,10 @@ def _warm_manifest() -> tuple[dict, dict]:
         "kind": "best",
         "checkpoint_sha256": "a" * 64,
         "state_keys": [{"name": key, "shape": specs[key]["shape"], "dtype": specs[key]["dtype"]} for key in keys],
+        "model_state": [
+            {"name": key, "shape": specs[key]["shape"], "dtype": specs[key]["dtype"], "values": [0.1, 0.2]}
+            for key in keys
+        ],
     }
     return manifest, metadata
 
@@ -792,6 +830,7 @@ def _final_refit(root: Path) -> tuple[dict, list[dict]]:
     manifest["run_kind"] = "final_refit"
     manifest["selector"] = None
     manifest["loss_component_profile"] = {"train": manifest["loss_component_profile"]["train"]}
+    manifest["nullable_loss_components"] = {"train": manifest["nullable_loss_components"]["train"]}
     manifest["validation_snapshot"] = None
     manifest["resume_validation_contract"] = {
         "loss": "train.losses.total_loss.value",
@@ -846,7 +885,7 @@ def test_final_refit_is_train_only_all_null_and_not_standalone_promotable(tmp_pa
 
 
 def _as_cv_fold(root: Path, fold_id: str) -> dict:
-    manifest, rows = _valid_run(root)
+    manifest, rows = _valid_run(root, run_id=f"run-fold-{fold_id}")
     manifest["fold_id"] = fold_id
     manifest["parent_cv"] = {"run_id": "cv-root", "fold_id": fold_id}
     val = manifest["split"]["validation"]
@@ -867,9 +906,38 @@ def _as_cv_fold(root: Path, fold_id: str) -> dict:
     return verify_training_run(root)
 
 
-def _cv_root(root: Path) -> None:
-    report0 = _as_cv_fold(root / "fold/0", "0")
-    report1 = _as_cv_fold(root / "fold/1", "1")
+def _cv_root(root: Path, *, attach_refit: bool = True) -> None:
+    _as_cv_fold(root / "fold/0", "0")
+    _as_cv_fold(root / "fold/1", "1")
+    initial = {fold: strict_json_load(root / f"fold/{fold}/run_manifest.json") for fold in ("0", "1")}
+    for fold, other in (("0", "1"), ("1", "0")):
+        fold_root = root / f"fold/{fold}"
+        manifest = strict_json_load(fold_root / "run_manifest.json")
+        rows = strict_jsonl_load(fold_root / "history.jsonl")
+        base_train = manifest["split"]["train"]
+        other_val = initial[other]["split"]["validation"]
+        manifest["split"]["train"] = {
+            "stems": base_train["stems"] + other_val["stems"],
+            "videos": base_train["videos"] + other_val["videos"],
+            "examples": base_train["examples"] + other_val["examples"],
+            "batches": base_train["batches"] + other_val["batches"],
+            "lineages": {
+                lineage: base_train["lineages"][lineage] + other_val["lineages"][lineage]
+                for lineage in ("44b6", "6bba")
+            },
+            "example_ids": base_train["example_ids"] + other_val["example_ids"],
+        }
+        manifest["split_sha256"] = canonical_sha256(manifest["split"])
+        manifest["validation_snapshot"]["split_sha256"] = manifest["split_sha256"]
+        for row in rows:
+            row["train_examples"] = manifest["split"]["train"]["examples"]
+            row["train_batches"] = manifest["split"]["train"]["batches"]
+            for component in row["train"]["losses"].values():
+                if component is not None:
+                    component["denominator"] = row["train_examples"]
+                    component["numerator"] = component["value"] * row["train_examples"]
+        _rewrite(fold_root, manifest, rows)
+    reports = {fold: verify_training_run(root / f"fold/{fold}") for fold in ("0", "1")}
     (root / "oof").mkdir()
     oof_ids = [f"{fold}-val-{index}" for fold in ("0", "1") for index in range(10)]
     oof_assignments = [fold for fold in ("0", "1") for _ in range(10)]
@@ -880,12 +948,12 @@ def _cv_root(root: Path) -> None:
         root / "oof/metrics.json",
         {"loss": 0.6, "dice": 0.8, "lineage": {"44b6": 0.6, "6bba": 0.6}},
     )
-    atomic_write_json(root / "oof/degradation.json", {"loss": 0.1, "selector": 0.1})
     fold_manifest = strict_json_load(root / "fold/0/run_manifest.json")
     for source in ("code-tree.json", "input.json", "per-video.json"):
         atomic_publish_file(root / "provenance" / source, (root / "fold/0/provenance" / source).read_bytes())
     root_manifest = copy.deepcopy(fold_manifest)
     root_manifest.update(run_id="cv-root", run_kind="cv", fold_id=None)
+    root_manifest.pop("parent_cv")
     root_manifest["checkpoint_refs"] = {}
     root_manifest["code_tree_sha256"] = sha256_file(root / "provenance/code-tree.json")
     root_manifest["input_manifest_sha256"] = sha256_file(root / "provenance/input.json")
@@ -895,6 +963,7 @@ def _cv_root(root: Path) -> None:
         "direction": "min",
         "tie_rule": "earliest",
     }
+    root_manifest["split"]["train"] = copy.deepcopy(initial["0"]["split"]["train"])
     root_manifest["split"]["validation"] = {
         "stems": [f"{fold}-val-{suffix}" for fold in ("0", "1") for suffix in ("a", "b")],
         "videos": 4,
@@ -952,6 +1021,47 @@ def _cv_root(root: Path) -> None:
         },
     }
     fold_manifests = {fold: strict_json_load(root / f"fold/{fold}/run_manifest.json") for fold in ("0", "1")}
+    fold_selections = [
+        {
+            "fold_id": fold,
+            "epoch": reports[fold]["details"]["best_epoch"],
+            "selector_value": reports[fold]["details"]["best_selector_value"],
+            "checkpoint_sha256": reports[fold]["details"]["checkpoint_sha256"],
+        }
+        for fold in ("0", "1")
+    ]
+    fold_degradation = {
+        fold: {
+            key: reports[fold]["details"][key]
+            for key in (
+                "loss_degradation_ratio",
+                "loss_degradation_absolute",
+                "ZERO_BEST_LOSS",
+                "selector_degradation",
+            )
+        }
+        for fold in ("0", "1")
+    }
+    finite_ratios = [
+        item["loss_degradation_ratio"]
+        for item in fold_degradation.values()
+        if item["loss_degradation_ratio"] is not None
+    ]
+    degradation = {
+        "folds": fold_degradation,
+        "aggregate": {
+            "finite_loss_degradation_ratio_mean": sum(finite_ratios) / len(finite_ratios),
+            "loss_degradation_absolute_mean": sum(
+                item["loss_degradation_absolute"] for item in fold_degradation.values()
+            )
+            / len(fold_degradation),
+            "selector_degradation_mean": sum(item["selector_degradation"] for item in fold_degradation.values())
+            / len(fold_degradation),
+            "zero_best_loss_folds": [],
+        },
+        "oof_selector_value": 0.6,
+    }
+    atomic_write_json(root / "oof/degradation.json", degradation)
     root_manifest["cv"] = {
         "fold_ids": ["0", "1"],
         "fold_paths": {fold: f"fold/{fold}" for fold in ("0", "1")},
@@ -980,7 +1090,7 @@ def _cv_root(root: Path) -> None:
             "metrics_sha256": sha256_file(root / "oof/metrics.json"),
             "selector_value": 0.6,
         },
-        "require_final_refit": False,
+        "require_final_refit": True,
         "degradation_artifact": {
             "path": "oof/degradation.json",
             "sha256": sha256_file(root / "oof/degradation.json"),
@@ -988,53 +1098,20 @@ def _cv_root(root: Path) -> None:
     }
     root_manifest["final_selection"] = {
         "oof_selector_value": 0.6,
-        "fold_selections": [
-            {
-                "fold_id": "0",
-                "epoch": report0["details"]["best_epoch"],
-                "selector_value": report0["details"]["best_selector_value"],
-                "checkpoint_sha256": report0["details"]["checkpoint_sha256"],
-            },
-            {
-                "fold_id": "1",
-                "epoch": report1["details"]["best_epoch"],
-                "selector_value": report1["details"]["best_selector_value"],
-                "checkpoint_sha256": report1["details"]["checkpoint_sha256"],
-            },
-        ],
+        "fold_selections": fold_selections,
         "final_refit_ref": None,
     }
+    root_manifest["degradation"] = degradation
+    root_manifest["config_sha256"] = execution_config_sha256(root_manifest)
     _replace_json(root / "run_manifest.json", root_manifest)
     _refresh_artifacts(root)
+    if attach_refit:
+        _attach_final_refit(root)
 
 
-def test_cv_fold_and_oof_stream_integrity_and_mixing(tmp_path: Path) -> None:
-    _cv_root(tmp_path)
-    report = verify_training_run(tmp_path)
-    assert report["verdict"] == "PASS", report
-    fold_manifest = strict_json_load(tmp_path / "fold/1/run_manifest.json")
-    fold_rows = strict_jsonl_load(tmp_path / "fold/1/history.jsonl")
-    fold_rows[1]["fold_id"] = "0"
-    _rewrite(tmp_path / "fold/1", fold_manifest, fold_rows)
-    _refresh_artifacts(tmp_path)
-    mixed = verify_training_run(tmp_path)
-    assert mixed["verdict"] == "FAIL"
-    assert "fold_id does not match" in " ".join(mixed["errors"])
-
-
-def test_cv_oof_hash_drift_is_detected(tmp_path: Path) -> None:
-    _cv_root(tmp_path)
-    _replace_bytes(tmp_path / "oof/predictions.json", b"[0.2,0.8]\n")
-    _refresh_artifacts(tmp_path)
-    report = verify_training_run(tmp_path)
-    assert report["verdict"] == "FAIL"
-    assert "OOF hash mismatch" in " ".join(report["errors"])
-
-
-def test_cv_final_refit_parent_pins_are_binding(tmp_path: Path) -> None:
-    _cv_root(tmp_path)
-    child_manifest, child_rows = _final_refit(tmp_path / "final_refit")
-    root_manifest = strict_json_load(tmp_path / "run_manifest.json")
+def _attach_final_refit(root: Path) -> tuple[dict, list[dict]]:
+    child_manifest, child_rows = _final_refit(root / "final_refit")
+    root_manifest = strict_json_load(root / "run_manifest.json")
     root_train = root_manifest["split"]["train"]
     root_val = root_manifest["split"]["validation"]
     child_manifest["split"]["train"] = {
@@ -1065,19 +1142,50 @@ def test_cv_final_refit_parent_pins_are_binding(tmp_path: Path) -> None:
         degradation_path=root_manifest["cv"]["degradation_artifact"]["path"],
         degradation_sha256=root_manifest["cv"]["degradation_artifact"]["sha256"],
     )
-    _rewrite(tmp_path / "final_refit", child_manifest, child_rows, verdict="CV_DERIVED_REFIT_ONLY")
-    child_report = verify_training_run(tmp_path / "final_refit")
+    _rewrite(root / "final_refit", child_manifest, child_rows, verdict="CV_DERIVED_REFIT_ONLY")
+    child_report = verify_training_run(root / "final_refit")
     root_manifest["final_selection"]["final_refit_ref"] = {
         "run_id": child_report["run_id"],
         "fixed_epoch": child_report["details"]["best_epoch"],
         "checkpoint_sha256": child_report["details"]["checkpoint_sha256"],
-        "run_manifest_sha256": sha256_file(tmp_path / "final_refit/run_manifest.json"),
-        "artifact_manifest_sha256": sha256_file(tmp_path / "final_refit/ARTIFACT_MANIFEST.json"),
+        "run_manifest_sha256": sha256_file(root / "final_refit/run_manifest.json"),
+        "artifact_manifest_sha256": sha256_file(root / "final_refit/ARTIFACT_MANIFEST.json"),
         "split_sha256": child_manifest["split_sha256"],
     }
-    _replace_json(tmp_path / "run_manifest.json", root_manifest)
+    root_manifest["config_sha256"] = execution_config_sha256(root_manifest)
+    _replace_json(root / "run_manifest.json", root_manifest)
+    _refresh_artifacts(root)
+    return child_manifest, child_rows
+
+
+def test_cv_fold_and_oof_stream_integrity_and_mixing(tmp_path: Path) -> None:
+    _cv_root(tmp_path)
+    report = verify_training_run(tmp_path)
+    assert report["verdict"] == "PASS", report
+    fold_manifest = strict_json_load(tmp_path / "fold/1/run_manifest.json")
+    fold_rows = strict_jsonl_load(tmp_path / "fold/1/history.jsonl")
+    fold_rows[1]["fold_id"] = "0"
+    _rewrite(tmp_path / "fold/1", fold_manifest, fold_rows)
     _refresh_artifacts(tmp_path)
+    mixed = verify_training_run(tmp_path)
+    assert mixed["verdict"] == "FAIL"
+    assert "fold_id does not match" in " ".join(mixed["errors"])
+
+
+def test_cv_oof_hash_drift_is_detected(tmp_path: Path) -> None:
+    _cv_root(tmp_path)
+    _replace_bytes(tmp_path / "oof/predictions.json", b"[0.2,0.8]\n")
+    _refresh_artifacts(tmp_path)
+    report = verify_training_run(tmp_path)
+    assert report["verdict"] == "FAIL"
+    assert "OOF hash mismatch" in " ".join(report["errors"])
+
+
+def test_cv_final_refit_parent_pins_are_binding(tmp_path: Path) -> None:
+    _cv_root(tmp_path)
     assert verify_training_run(tmp_path)["verdict"] == "PASS"
+    child_manifest = strict_json_load(tmp_path / "final_refit/run_manifest.json")
+    child_rows = strict_jsonl_load(tmp_path / "final_refit/history.jsonl")
     child_manifest["parent_cv"]["code_tree_sha256"] = ZERO_SHA
     _rewrite(tmp_path / "final_refit", child_manifest, child_rows, verdict="CV_DERIVED_REFIT_ONLY")
     _refresh_artifacts(tmp_path)
@@ -1129,7 +1237,7 @@ def test_resume_empty_states_missing_receipt_and_negative_tolerance_fail(tmp_pat
     _replace_json(resume_path, resume)
     _refresh_artifacts(tmp_path)
     errors = " ".join(verify_training_run(tmp_path)["errors"])
-    assert "optimizer state must be a nonempty" in errors
+    assert "optimizer state must be a typed" in errors
     assert "validation receipt" in errors
 
     manifest, rows = _valid_run(tmp_path / "negative")
@@ -1336,10 +1444,11 @@ def test_cv_duplicate_fold_validation_ids_and_non_numeric_oof_fail(tmp_path: Pat
     metrics["dice"] = "0.8"
     _replace_json(tmp_path / "oof/metrics.json", metrics)
     root["cv"]["oof"]["metrics_sha256"] = sha256_file(tmp_path / "oof/metrics.json")
+    root["config_sha256"] = execution_config_sha256(root)
     _replace_json(tmp_path / "run_manifest.json", root)
     _refresh_artifacts(tmp_path)
     errors = " ".join(verify_training_run(tmp_path)["errors"])
-    assert "validation IDs/stems overlap" in errors
+    assert "overlap" in errors
     assert "finite numeric" in errors
 
 
@@ -1412,11 +1521,272 @@ def test_artifact_manifest_exact_schema_identity_and_version(tmp_path: Path, att
 def test_atomic_publication_failure_leaves_no_target_or_partial(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "never-published.json"
 
-    def fail_link(*args, **kwargs):
+    def fail_rename(*args, **kwargs):
         raise OSError("simulated interrupted publication")
 
-    monkeypatch.setattr("biohub.training_history.os.link", fail_link)
+    monkeypatch.setattr("biohub.training_history._rename_noreplace", fail_rename)
     with pytest.raises(OSError, match="interrupted"):
         atomic_write_json(target, {"complete": True})
     assert not target.exists()
     assert not list(tmp_path.glob(".never-published.json.*.tmp"))
+
+
+def test_metadata_only_checkpoint_and_placeholder_resume_state_fail(tmp_path: Path) -> None:
+    _valid_run(tmp_path)
+    best_path = tmp_path / "checkpoints/best.pt"
+    best = strict_json_load(best_path)
+    best.pop("model_state")
+    _replace_json(best_path, best)
+    resume_path = tmp_path / "checkpoints/resume.pt"
+    resume = strict_json_load(resume_path)
+    resume["state"]["optimizer"]["payload"] = {"param_groups": 1}
+    _replace_json(resume_path, resume)
+    _refresh_artifacts(tmp_path)
+    errors = " ".join(verify_training_run(tmp_path)["errors"])
+    assert "model tensor state missing" in errors
+    assert "optimizer payload schema invalid" in errors
+
+
+@pytest.mark.parametrize("attack", ["wrong_length", "dtype_drift", "duplicate_tensor", "extra_field"])
+def test_safe_json_checkpoint_tensor_state_is_strict(tmp_path: Path, attack: str) -> None:
+    _valid_run(tmp_path)
+    path = tmp_path / "checkpoints/best.pt"
+    checkpoint = strict_json_load(path)
+    if attack == "wrong_length":
+        checkpoint["model_state"][0]["values"] = [0.1]
+    elif attack == "dtype_drift":
+        checkpoint["model_state"][0]["dtype"] = "float64"
+    elif attack == "duplicate_tensor":
+        checkpoint["model_state"].append(copy.deepcopy(checkpoint["model_state"][0]))
+    else:
+        checkpoint["trusted"] = True
+    _replace_json(path, checkpoint)
+    _refresh_artifacts(tmp_path)
+    assert "checkpoint" in " ".join(verify_training_run(tmp_path)["errors"])
+
+
+def test_opaque_checkpoint_requires_exact_trusted_loader_success_evidence(tmp_path: Path) -> None:
+    manifest, rows = _valid_run(tmp_path)
+    best_path = tmp_path / "checkpoints/best.pt"
+    best_metadata = strict_json_load(best_path)
+    _replace_bytes(best_path, b"opaque-model-checkpoint")
+    best_sha = sha256_file(best_path)
+    manifest["final_selection"]["checkpoint_sha256"] = best_sha
+    rows[manifest["final_selection"]["epoch"] - 1]["checkpoint_sha256"] = best_sha
+    _rewrite(tmp_path, manifest, rows)
+
+    def loader(path: Path) -> dict:
+        metadata = copy.deepcopy(best_metadata) if path == best_path else strict_json_load(path)
+        digest = sha256_file(path)
+        resolved = str(path.resolve())
+        metadata.update(path=resolved, checkpoint_sha256=digest)
+        metadata["load_evidence"] = {
+            "trusted_safe_loader": True,
+            "strict": True,
+            "missing_keys": [],
+            "unexpected_keys": [],
+            "path": resolved,
+            "checkpoint_sha256": digest,
+            "model_state_sha256": canonical_sha256(metadata["model_state"]),
+        }
+        return metadata
+
+    assert verify_training_run(tmp_path, checkpoint_metadata_loader=loader)["verdict"] == "PASS"
+
+    def no_success_evidence(path: Path) -> dict:
+        metadata = loader(path)
+        metadata.pop("load_evidence")
+        return metadata
+
+    errors = " ".join(verify_training_run(tmp_path, checkpoint_metadata_loader=no_success_evidence)["errors"])
+    assert "success evidence invalid" in errors
+
+
+def test_complete_execution_digest_and_resume_reject_seed_gradient_drift(tmp_path: Path) -> None:
+    manifest, rows = _valid_run(tmp_path)
+    old_config_sha = manifest["config_sha256"]
+    manifest["seed"] = 8
+    manifest["validation_snapshot"]["seed"] = 8
+    manifest["gradient"]["clip_threshold"] = 4.0
+    for row in rows:
+        row["grad_norm_pre_clip"]["clip_threshold"] = 4.0
+    manifest["config_sha256"] = execution_config_sha256(manifest)
+    assert manifest["config_sha256"] != old_config_sha
+    _replace_json(tmp_path / "run_manifest.json", manifest)
+    _write_rows(tmp_path / "history.jsonl", rows)
+    resume_path = tmp_path / "checkpoints/resume.pt"
+    resume = strict_json_load(resume_path)
+    resume["history_prefix_sha256"] = sha256_file(tmp_path / "history.jsonl")
+    _replace_json(resume_path, resume)
+    manifest["checkpoint_refs"]["checkpoints/resume.pt"] = sha256_file(resume_path)
+    _replace_json(tmp_path / "run_manifest.json", manifest)
+    _refresh_artifacts(tmp_path)
+    errors = " ".join(verify_training_run(tmp_path)["errors"])
+    assert "resume config_sha256 mismatch" in errors
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda manifest: manifest["sampler"].update(mode="epoch_derived", seed_formula="H(run,epoch)"),
+        lambda manifest: manifest["selector"].update(tie_rule="latest"),
+        lambda manifest: manifest["loss_component_profile"]["val"]["edge_loss"].update(reduction="sum_over_pairs"),
+        lambda manifest: manifest["total_loss"]["aggregation"].update(reduction="sum_over_pairs"),
+        lambda manifest: manifest["acceptance_thresholds"]["primary"].update(margin=0.2),
+    ],
+)
+def test_execution_digest_covers_all_training_and_gate_semantics(tmp_path: Path, mutation) -> None:
+    manifest, _ = _valid_run(tmp_path)
+    before = execution_config_sha256(manifest)
+    mutation(manifest)
+    assert execution_config_sha256(manifest) != before
+
+
+def test_unknown_manifest_execution_field_is_rejected(tmp_path: Path) -> None:
+    _valid_run(tmp_path)
+    manifest = strict_json_load(tmp_path / "run_manifest.json")
+    manifest["gradient_accumulation"] = 8
+    _replace_json(tmp_path / "run_manifest.json", manifest)
+    _refresh_artifacts(tmp_path)
+    assert "unknown fields" in " ".join(verify_training_run(tmp_path)["errors"])
+
+
+def test_all_row_checkpoints_receive_strict_state_validation(tmp_path: Path) -> None:
+    manifest, rows = _valid_run(tmp_path)
+    bogus = _checkpoint("epoch", manifest["run_id"], 1, 2)
+    bogus["state_keys"] = [{"name": "wrong", "shape": [999], "dtype": "int8"}]
+    bogus["model_state"] = [{"name": "wrong", "shape": [1], "dtype": "int8", "values": [1]}]
+    path = tmp_path / "checkpoints/epoch-0001.pt"
+    atomic_write_json(path, bogus)
+    rows[0]["checkpoint_sha256"] = sha256_file(path)
+    _rewrite(tmp_path, manifest, rows)
+    errors = " ".join(verify_training_run(tmp_path)["errors"])
+    assert "epoch 1 checkpoint metadata mismatch" in errors
+
+
+def test_cv_exact_membership_unique_selections_and_final_refit_are_mandatory(tmp_path: Path) -> None:
+    duplicate = tmp_path / "duplicate"
+    _cv_root(duplicate)
+    manifest = strict_json_load(duplicate / "run_manifest.json")
+    manifest["final_selection"]["fold_selections"].append(
+        copy.deepcopy(manifest["final_selection"]["fold_selections"][0])
+    )
+    _replace_json(duplicate / "run_manifest.json", manifest)
+    _refresh_artifacts(duplicate)
+    assert "fold selections" in " ".join(verify_training_run(duplicate)["errors"])
+
+    alien = tmp_path / "alien"
+    _cv_root(alien)
+    manifest = strict_json_load(alien / "run_manifest.json")
+    validation = manifest["split"]["validation"]
+    validation["stems"] = [f"alien-{index}" for index in range(4)]
+    validation["example_ids"] = [f"alien-{index}" for index in range(20)]
+    manifest["split_sha256"] = canonical_sha256(manifest["split"])
+    manifest["validation_snapshot"]["example_ids"] = validation["example_ids"]
+    manifest["validation_snapshot"]["split_sha256"] = manifest["split_sha256"]
+    per_video = {"values": {stem: 0.6 for stem in validation["stems"]}, "uncertainty": {"upper": 0.1}}
+    _replace_json(alien / "provenance/per-video.json", per_video)
+    manifest["acceptance_thresholds"]["per_video"]["sha256"] = sha256_file(alien / "provenance/per-video.json")
+    manifest["config_sha256"] = execution_config_sha256(manifest)
+    _replace_json(alien / "run_manifest.json", manifest)
+    _refresh_artifacts(alien)
+    assert "exact fold-validation union" in " ".join(verify_training_run(alien)["errors"])
+
+    no_refit = tmp_path / "no-refit"
+    _cv_root(no_refit, attach_refit=False)
+    assert "requires final_refit_ref" in " ".join(verify_training_run(no_refit)["errors"])
+    with pytest.raises(GateValidationError):
+        validate_training_run(no_refit)
+
+
+def test_cv_degradation_must_be_exactly_recomputed(tmp_path: Path) -> None:
+    _cv_root(tmp_path)
+    manifest = strict_json_load(tmp_path / "run_manifest.json")
+    _replace_json(tmp_path / "oof/degradation.json", {"made_up": 0})
+    manifest["cv"]["degradation_artifact"]["sha256"] = sha256_file(tmp_path / "oof/degradation.json")
+    manifest["degradation"] = {"made_up": 0}
+    manifest["config_sha256"] = execution_config_sha256(manifest)
+    _replace_json(tmp_path / "run_manifest.json", manifest)
+    _refresh_artifacts(tmp_path)
+    assert "not exactly recomputed" in " ".join(verify_training_run(tmp_path)["errors"])
+
+
+def test_cv_fold_training_semantics_must_not_drift(tmp_path: Path) -> None:
+    _cv_root(tmp_path)
+    fold_root = tmp_path / "fold/1"
+    fold_manifest = strict_json_load(fold_root / "run_manifest.json")
+    fold_rows = strict_jsonl_load(fold_root / "history.jsonl")
+    fold_manifest["hardware"]["device"] = "different-device"
+    _rewrite(fold_root, fold_manifest, fold_rows)
+    root_manifest = strict_json_load(tmp_path / "run_manifest.json")
+    root_manifest["cv"]["fold_pins"]["1"]["config_sha256"] = fold_manifest["config_sha256"]
+    root_manifest["config_sha256"] = execution_config_sha256(root_manifest)
+    _replace_json(tmp_path / "run_manifest.json", root_manifest)
+    _refresh_artifacts(tmp_path)
+    assert "training semantics drift" in " ".join(verify_training_run(tmp_path)["errors"])
+
+
+def test_history_writer_rejects_same_size_inode_swap(tmp_path: Path) -> None:
+    path = tmp_path / "history.jsonl"
+    path.write_bytes(b'{"epoch":1,"global_step":2}\n')
+    writer = HistoryWriter(path, resume=True, expected_prefix_sha256=sha256_file(path))
+    path.unlink()
+    path.write_bytes(b'{"epoch":1,"global_step":9}\n')
+    with pytest.raises(TrainingHistoryError, match="changed"):
+        writer.append({"epoch": 2, "global_step": 10})
+    writer.close()
+
+
+def test_post_rename_fsync_failure_rolls_back_target(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "rolled-back.json"
+    calls = 0
+
+    def fail_first_fsync(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("directory fsync failed")
+
+    monkeypatch.setattr("biohub.training_history._fsync_directory", fail_first_fsync)
+    with pytest.raises(OSError, match="directory fsync failed"):
+        atomic_write_json(target, {"complete": True})
+    assert not target.exists()
+
+
+def test_post_rename_rollback_failure_quarantines_final_name(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "quarantined.json"
+    original_unlink = Path.unlink
+    calls = 0
+
+    def fail_first_fsync(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("directory fsync failed")
+
+    def fail_target_unlink(path: Path, *args, **kwargs) -> None:
+        if path == target:
+            raise OSError("rollback unlink failed")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr("biohub.training_history._fsync_directory", fail_first_fsync)
+    monkeypatch.setattr(Path, "unlink", fail_target_unlink)
+    with pytest.raises(TrainingHistoryError, match="was quarantined"):
+        atomic_write_json(target, {"complete": True})
+    assert not target.exists()
+    assert len(list(tmp_path.glob(".quarantined.json.failed-*"))) == 1
+
+
+def test_loss_config_formula_and_nullable_population_are_consistent(tmp_path: Path) -> None:
+    mismatch = tmp_path / "weight"
+    manifest, rows = _valid_run(mismatch)
+    manifest["loss_config"]["w_edge"] = 2.0
+    _rewrite(mismatch, manifest, rows)
+    assert "weights do not exactly match" in " ".join(verify_training_run(mismatch)["errors"])
+
+    stale = tmp_path / "nullable"
+    manifest, rows = _valid_run(stale)
+    for row in rows:
+        row["val"]["losses"]["optional_loss"] = _component(0.1, 10)
+    _rewrite(stale, manifest, rows)
+    assert "despite zero-population" in " ".join(verify_training_run(stale)["errors"])
