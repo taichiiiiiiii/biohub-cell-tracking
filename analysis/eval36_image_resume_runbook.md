@@ -186,6 +186,14 @@ label-blind ST-R3 generation は引き続き固定36本を一単位とし、全3
 すべて PASS した後に固定 `EVAL36` の同一 `--jobs 1 --fail-fast` command を使う。
 単一 file probe を含む追加 request も cooldown 中は送らない。
 
+ローカル filesystem で確認できる最後の成功 chunk
+`train/6bba_09961292.zarr/0/c/47/0/0/0` の ctime は
+`2026-09-02 01:38:13 JST` である。直後の次 file で429停止したことと、前回は
+21時間超の cooldown 後に preflight が通った実績を踏まえ、このrunでは保守的に
+**`2026-09-02 22:40 JST` より前の Kaggle request を全面禁止**する。この
+not-beforeは rate limit 解除を保証しない。時刻到達後も、自動probeは行わず、一度だけ
+fresh preflightを実行し、新しい429なら即時停止して新たなcooldownを開始する。
+
 ## 実行前 preflight
 
 以下は repo root で実行する。認証情報の値を印字する `env`, `cat`,
