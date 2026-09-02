@@ -2,7 +2,9 @@
 
 Updated: 2026-09-02 (Asia/Tokyo)
 
-Status: **`HOLD_INTERFACE_INCOMPLETE`**
+Status: **`SHIP_CHILD_INTERFACE`** at implementation commit
+`b28cff839a1a196bc4503ae7fdf82873d1ad7bf8`; supervisor, data, runtime,
+memory, GT-visibility, and scoring holds remain unchanged.
 
 This appendix binds the ST-R3 adapter review to candidate commit
 `c540102a165e34c9b2a7869ed71bf5c44cf6676b` (`c540102`,
@@ -20,21 +22,18 @@ the actual ST-R2 interface at the pinned commit and specifies the minimum
 production extension required before ST-R3 generation may leave
 `HOLD_INTERFACE_INCOMPLETE`.
 
-## Binding scope and current verdict
+## Binding scope and child-interface verdict
 
-The final ST-R2 implementation is available, but it is not yet an admissible
-ST-R3 production runner. In particular, it has no ordered-dataset allowlist,
-arm name, effective-config artifact, strict single-artifact DeepCenter load,
-dataset event sink, stable versioned stats schema, complete uncapped plan
-artifact, or atomic success receipt. These omissions are interface omissions;
-they must not be filled by reflection, log parsing, planner calls from ST-R3,
-or inferred timing.
-
-The current CLI can be launched in a fresh operating-system process and takes
-no GT or scoring argument. That fact is necessary but not sufficient. Until
-the normative extension below is implemented, tested, reviewed, and pinned to
-a new candidate commit, all ST-R3 runtime, feasibility, and scoring transitions
-remain forbidden.
+The omissions described below are the historical surface at the pinned ST-R2
+candidate.  The reviewed extension at
+`b28cff839a1a196bc4503ae7fdf82873d1ad7bf8` now supplies the ordered-dataset
+allowlist, arm identity, canonical effective-config artifact, strict
+single-artifact DeepCenter load, dataset event sink, fixed stats schema, and
+complete uncapped plan artifact required of the child.  It does not supply or
+claim the supervisor-owned success receipt, sandbox, process/RSS accounting,
+target calibration, GT-visibility proof, complete eval36 images, or metric
+result.  Consequently the child-interface hold is cleared, while every
+out-of-interface hold and all ST-R3 scoring transitions remain binding.
 
 ## Actual ST-R2 production entry points
 
@@ -646,11 +645,48 @@ and output/event information allowed by the parent contract. The supervisor
 may measure child wall time and aggregate RSS and may validate/hash sealed
 outputs; it must not import the production pipeline into the long-lived scorer.
 
-## Present conclusion
+## Rebinding receipt and present conclusion
 
-Commit `c540102a165e34c9b2a7869ed71bf5c44cf6676b` supplies the reviewed ST-R2
-mutation and conservation implementation, but its public runner surface does
-not meet the ST-R3 semantic boundary. The only honest current decision is
-`HOLD_INTERFACE_INCOMPLETE`. The normative extension above is an interface and
-artifact-publication layer; it does not authorize any change to the candidate,
+The reviewed implementation is pinned to clean commit
+`b28cff839a1a196bc4503ae7fdf82873d1ad7bf8`.  Its sole public runner is:
+
+```text
+run_production_arm(spec: ArmSpec) -> ChildResult
+```
+
+`ArmSpec` contains, in order, `arm_name`, `geff_dir`, `test_dir`,
+`deepcenter_checkpoint`, `deepcenter_manifest`, `datasets`,
+`expected_effective_config_sha256`, `staging_dir`, and `event_fd`.
+`ChildResult` contains `arm_name`, `datasets`, `total_nodes`, `total_edges`,
+`total_rows`, and `artifacts`.  The sole CLI accepts exactly
+`--arm-name`, `--geff-dir`, `--test-dir`, `--deepcenter-checkpoint`,
+`--deepcenter-manifest`, repeated `--dataset`,
+`--expected-effective-config-sha256`, `--staging-dir`, and `--event-fd`.
+It exposes no free profile, override, output path, event path, GT, evaluator,
+or scorer input.
+
+The implemented child schemas are
+`biohub.st_r3.effective_config.v1`, `biohub.st_r3.deepcenter_receipt.v1`,
+`biohub.st_r3.dataset_event.v1`, `biohub.st_r3.twin_plan.v1`,
+`biohub.st_r3.twin_plan_manifest.v1`, `biohub.st_r3.run_stats.v1`, and
+`biohub.st_r3.child_result.v1`.  The staged names are exactly
+`submission.csv.partial`, `run_stats.csv.partial`,
+`effective_config.json.partial`, `deepcenter_receipt.json.partial`,
+`twin_plans/`, `twin_plan_manifest.json.partial`, and last
+`child_result.json`; bounded debug remains disabled for the three frozen arms.
+The child writes neither `dataset_events.jsonl` nor `arm_receipt.json`.
+
+Independent review on the pinned implementation passed 573 focused plus
+public-postprocessing tests, all 645 repository tests, and all 102 selected
+official metric tests.  Touched-file Ruff, `py_compile`, and `git diff --check`
+passed.  The real pinned DeepCenter manifest/checkpoint loaded through the
+strict same-FD path with epoch 2, exact hashes, two total opens, zero fallback,
+and the separately pinned `epochs=1000`/`epochs=50` configs.  The official
+gitlink and checkout remained clean at
+`075fc5f5a52d11077f9dc2b074644618f26939e2`.
+
+Therefore the honest child decision is `SHIP_CHILD_INTERFACE`.  This is not a
+generation, runtime, memory, leakage, metric, adoption, or submission PASS.
+The supervisor and every out-of-interface hold in the parent contract remain
+mandatory.  The extension does not authorize any change to the candidate,
 metric, thresholds, or evaluation protocol.
