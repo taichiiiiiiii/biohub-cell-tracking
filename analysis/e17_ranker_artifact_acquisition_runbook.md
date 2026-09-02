@@ -23,29 +23,39 @@ regular, single-link files were copied without deletion or promotion to
 `outputs/local/e17_quarantine/cache_20260830T185150JST/`. The quarantine has an
 explicit `HOLD_UNVERIFIED_PROVENANCE` README and is never a consumer root.
 
-The three previously pinned payload hashes match exactly. Two additional files
-were also present: `local_association_features.stats.json` (118 bytes, SHA-256
+The three previously pinned consumer-payload hashes match exactly. Two
+additional dataset files were also present:
+`local_association_features.stats.json` (118 bytes, SHA-256
 `70a5a083cb177465dcbec32441621d543f572e7835269dd6b4d309d3a5a3183a`) and
 `model/history.json` (4,234 bytes, SHA-256
 `2fe5c31145998d3123a1ac7da2e2716c968893caa9e96e8310b8d5e9ce84f6be`).
-This contradicts the current three-file acquisition allowlist unless trusted
-version metadata proves that the extras are outside the intended versioned
-payload or the runbook is reviewed and versioned before acquisition.
+They are provenance-only dataset members, not ranker runtime inputs. The
+version-qualified metadata gate below now distinguishes the complete five-file
+dataset listing from the exact three-file consumer payload.
 
 A local tool-session record at `2026-08-30T09:51:50Z` explains the cache: Kaggle
 CLI 2.2.4 ran the unqualified command shape
 `kaggle datasets download pilkwang/biohub-local-association-ranker-unet300-v1
 -p <fresh-temp> --unzip`. This is useful transport provenance and explains the
 five-file extraction, but it selected the then-current `latest`; it did not pin
-or record a dataset version number. No metadata response,
-dataset-version-number/source-ID join, license, reviewed acquisition receipt, or
-support-source bundle is attached to the cache. Therefore the cache establishes
-only that bytes with the three known identities were downloaded from the named
-slug at that timestamp and are locally recoverable. It does **not** clear any
-acquisition gate, authorize model loading, allow E17 implementation/inference,
-or justify bypassing the cooldown. Never promote the quarantine in place; after
-cooldown, perform the fresh metadata and publication transaction below and
-reconcile the exact file list.
+or record a dataset version number. That download record alone does not supply a
+dataset-version-number/source-ID join, reviewed acquisition receipt, or
+support-source bundle. Therefore it establishes only that bytes with the three
+known identities were downloaded from the named slug at that timestamp and are
+locally recoverable. It does **not** clear any acquisition gate, authorize model
+loading, allow E17 implementation/inference, or justify bypassing the cooldown.
+Never promote the quarantine in place; after cooldown, perform the fresh
+metadata and publication transaction below and reconcile the exact file list.
+
+The same retained local evidence includes an unqualified metadata response for
+dataset ID `11102521`, owner `pilkwang`, the expected slug, and license
+`CC0-1.0` (raw file SHA-256
+`ad9031536e8539d0a6332ac634e042ab2ab4a27273ee751f84c57b53a78c8b4d`).
+It also includes a recovered derivative of a kernel-run data-source response
+joining dataset ID `11102521` to source ID `17840600`. Neither response supplies
+the CLI dataset version number, and the metadata query selected `latest`, so the
+two records still do not satisfy the required two-identifier acquisition gate.
+License presence is not the same as the project's explicit license acceptance.
 
 ## Frozen identities and exact payload allowlist
 
@@ -57,10 +67,11 @@ The only acceptable ranker dataset identity is:
 | Kaggle dataset ID | `11102521` |
 | immutable dataset-version source ID | `17840600` |
 
-The downloaded payload allowlist is exactly these three relative regular files.
-Names are case-sensitive; directories are permitted only as parents. Any fourth
-file, archive member, symlink, hardlink, device, FIFO, socket, path traversal,
-absolute path, duplicate normalized path, or case-fold collision is a hard HOLD.
+The downloaded **consumer payload** allowlist is exactly these three relative
+regular files. Names are case-sensitive; directories are permitted only as
+parents. Any fourth consumer-payload file, archive member, symlink, hardlink,
+device, FIFO, socket, path traversal, absolute path, duplicate normalized path,
+or case-fold collision is a hard HOLD.
 
 | Relative file | Required SHA256 |
 |---|---|
@@ -68,13 +79,26 @@ absolute path, duplicate normalized path, or case-fold collision is a hard HOLD.
 | `model/local_association_ranker.pt` | `b49a9ab4228daba63d31056ae5beef9fd3e8bcd3ba26d9f57a45ef828d4fb4b8` |
 | `model/model_info.json` | `ba8d338f4eb0b8cfa9bcffc71f3619353ed3dc297b091eebaff23e5d266a96a7` |
 
-The repository does not record authoritative byte sizes for these three files.
-Do not invent them. Before download, obtain the file list and byte sizes from the
-same metadata response proven to identify dataset `11102521` and source version
-`17840600`; pin that response by SHA256 in the acquisition record. Each staged
-file must be non-empty and must equal both its metadata byte size and the SHA256
-above. Hash agreement does not waive a size mismatch, and size agreement does not
-waive a hash mismatch.
+The version-qualified **complete dataset listing** must contain exactly five
+entries before those three consumer files are requested. These provisional
+sizes were recovered from the 2026-08-30 unqualified CLI response and must be
+reconfirmed against the pinned dataset version; any difference is HOLD.
+
+| Dataset member | Required metadata size |
+|---|---:|
+| `ASSOCIATION_RANKER_MANIFEST.json` | 1,340 |
+| `local_association_features.stats.json` | 118 |
+| `model/history.json` | 4,234 |
+| `model/local_association_ranker.pt` | 20,283 |
+| `model/model_info.json` | 917 |
+
+The recovered sizes are not yet authoritative for source version `17840600`.
+Before download, obtain the file list and byte sizes from the same metadata
+response proven to identify dataset `11102521` and source version `17840600`;
+pin that response by SHA256 in the acquisition record. Each staged consumer file
+must be non-empty and must equal both its pinned metadata byte size and the
+SHA256 above. Hash agreement does not waive a size mismatch, and size agreement
+does not waive a hash mismatch.
 
 ## Version pinning is a two-identifier gate
 
@@ -91,13 +115,15 @@ Therefore all of the following are required before acquisition:
    `11102521`, immutable source version ID `17840600`, and the CLI/API dataset
    version number in one unambiguous record.
 2. Save the redacted raw response, its SHA256, retrieval UTC timestamp, CLI/API
-   version, and the three exact file sizes. The response must contain no token,
+   version, and the three exact consumer-file sizes. The response must contain no token,
    cookie, authorization header, signed download URL, or query credential.
 3. Set `KAGGLE_DATASET_VERSION_NUMBER` only from that record. It must be a decimal
    integer and must never be populated with `17840600` merely because that value
    is available.
 4. List files using the version-qualified dataset string and require the exact
-   three-file allowlist and metadata sizes before downloading anything.
+   five-file complete dataset listing and metadata sizes above. Then request
+   only the exact three-file consumer payload allowlist; do not unzip a full
+   dataset archive into the consumer payload.
 
 If the available endpoint cannot return the dataset ID and source version ID, if
 the CLI version-number mapping cannot be proven, or if the response describes
