@@ -166,6 +166,21 @@ non-blocking で取得し、別 downloader が所有中なら download 前に
 | mismatch / extra / symlink | 0 / 0 / 0 |
 | `.kaggle-partial` / staging / ready | 0 / 0 / 0 |
 
+固定 eval12 の内訳を同じ manifest で読み取り専用検査すると、9/12 roots は
+complete である。未完了は次の3 roots、合計263 files / 1,018,606,033 bytes
+だけであり、size mismatch と extra は0である。
+
+| eval12 root | 不足files | 不足bytes |
+|---|---:|---:|
+| `6bba_09961292` | 59 | 227,903,024 |
+| `6bba_0e7c0d07` | 102 | 432,565,534 |
+| `6bba_12665c0e` | 102 | 358,137,475 |
+
+これはeval12だけを先に取得・生成・採点する許可ではない。再開コマンドと
+label-blind ST-R3 generation は引き続き固定36本を一単位とし、全36 armをseal
+する前にGT scoreを読まない。上表はcooldown後の再開進捗点を明確にするための
+内訳である。
+
 したがって状態は引き続き **NOT_READY** である。429 停止直後の即時再試行は行わず、
 十分な cooldown を置く。再開するときだけ、下記の既存 preflight を正確に再実行し、
 すべて PASS した後に固定 `EVAL36` の同一 `--jobs 1 --fail-fast` command を使う。
