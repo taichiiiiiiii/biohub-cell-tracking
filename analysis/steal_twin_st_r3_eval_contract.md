@@ -71,8 +71,9 @@ Until it exists, status is `HOLD_INTERFACE_INCOMPLETE`.
 
 The semantic inputs and outputs are binding:
 
-- input: arm name, frozen profile/effective config, sorted 36-stem set, raw
-  GEFF directory, image-only directory, the exact DeepCenter
+- input: arm name, frozen profile/effective config, the authoritative ordered
+  36-stem sequence `eval12 + eval24`, raw GEFF directory, image-only directory,
+  the exact DeepCenter
   checkpoint/manifest paths, post-R2-appendix-enumerated non-model live
   artifacts, output paths, and a dataset start/finish event sink;
 - output: process exit status, exact effective config, ordered dataset list,
@@ -129,6 +130,15 @@ stems, an empty intersection, exactly 18 `44b6` and 18 `6bba` stems, and no
 public-four stem. These sets have influenced prior analysis. Eval12 and eval24
 are staged retrospective falsification sets, not holdouts; eval36 is their
 roll-up, not a third independent validation set.
+
+**Binding ordering erratum (2026-09-02).** The former dependency-boundary
+phrase "sorted 36-stem set" was ambiguous and is replaced by the literal
+ordered sequence printed above: first the 12 eval12 stems in their printed
+order, then the 24 eval24 stems in their printed order. Raw GEFF membership is
+validated as exact set equality with those 36 stems; execution, CSV dataset
+blocks, stats, plans, and events follow the frozen concatenation without
+sorting. This corrects ordering only. No dataset member, arm, gate, threshold,
+metric, or other semantic requirement changes.
 
 ## Label-blind state machine
 
