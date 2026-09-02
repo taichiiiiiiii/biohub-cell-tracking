@@ -32,13 +32,20 @@ This contradicts the current three-file acquisition allowlist unless trusted
 version metadata proves that the extras are outside the intended versioned
 payload or the runbook is reviewed and versioned before acquisition.
 
-No retained metadata response, dataset-version-number/source-ID join, license,
-download receipt, or support-source bundle is attached to the cache. Therefore
-the cache establishes only that bytes with the three known identities are
-locally recoverable. It does **not** clear any acquisition gate, authorize model
-loading, allow E17 implementation/inference, or justify bypassing the cooldown.
-Never promote the quarantine in place; after cooldown, perform the fresh
-metadata and publication transaction below and reconcile the exact file list.
+A local tool-session record at `2026-08-30T09:51:50Z` explains the cache: Kaggle
+CLI 2.2.4 ran the unqualified command shape
+`kaggle datasets download pilkwang/biohub-local-association-ranker-unet300-v1
+-p <fresh-temp> --unzip`. This is useful transport provenance and explains the
+five-file extraction, but it selected the then-current `latest`; it did not pin
+or record a dataset version number. No metadata response,
+dataset-version-number/source-ID join, license, reviewed acquisition receipt, or
+support-source bundle is attached to the cache. Therefore the cache establishes
+only that bytes with the three known identities were downloaded from the named
+slug at that timestamp and are locally recoverable. It does **not** clear any
+acquisition gate, authorize model loading, allow E17 implementation/inference,
+or justify bypassing the cooldown. Never promote the quarantine in place; after
+cooldown, perform the fresh metadata and publication transaction below and
+reconcile the exact file list.
 
 ## Frozen identities and exact payload allowlist
 
