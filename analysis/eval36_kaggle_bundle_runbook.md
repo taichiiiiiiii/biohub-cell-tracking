@@ -1,9 +1,9 @@
 # Eval-36 Zarr bundle runbook
 
-Status: **HOLD for production use**. This implementation is locally tested,
-but an independent SOL audit, a post-cooldown Kaggle preflight, a private CPU
-runtime/output-size check, transfer, and local verification must all pass
-before installation is authorized.
+Status: **SHIP to one private CPU physical run; HOLD for installation**. The
+single-file package passed independent SOL review and local tests. Kaggle
+runtime/output persistence, transfer, importer dry-run, and the exact image
+verifier must still pass before installation or ST-R3 scoring.
 
 This workflow replaces 1,487 individual competition downloads with 15
 uncompressed deterministic USTAR files. It does not replace or relax the
@@ -59,47 +59,67 @@ manifest (expected JSON payload size `14,458` bytes), the two end blocks, and
 the unique minimal padding to a 10,240-byte USTAR record boundary. Any archive
 or aggregate size mismatch is `FAIL`, even if all extra bytes are zero.
 
-## Private Kaggle CPU preparation (future authorized action)
+## Private Kaggle CPU preparation
 
-Create a new private CPU notebook only after explicit approval. Attach the
-competition data and a private, hash-checked input containing the pinned CSV
-and the reviewed `pack_eval36_zarr_bundles.py`. Do not add a Kaggle API token.
-Do not enable internet. Record the exact script git blob/hash and every input
-dataset version in the experiment log.
-
-Before packing, confirm the mount paths in the private notebook. Then run the
-packer once, with a fresh empty output directory:
+The user has standing authority for a necessary gate-passing private run. The
+only accepted package is generated from a clean committed feature branch:
 
 ```bash
-python /kaggle/input/eval36-packer/pack_eval36_zarr_bundles.py \
-  --manifest /kaggle/input/eval36-packer/manifest.csv \
-  --source-data /kaggle/input/biohub-cell-tracking-during-development \
-  --output-dir /kaggle/working/eval36-bundles
+.venv/bin/python scripts/prepare_eval36_bundle_kernel.py \
+  --output-dir outputs/local/eval36_kernel/<fresh-run-id>
 ```
 
-Do not pass `--root` for the production job: the default is the exact fixed
-15-root set. A successful stdout value is one canonical JSON object with
-`status: "PASS"`, bounded archive paths, byte counts, and SHA-256 values.
-The archive path field is the fixed `<root>.tar` basename, never the caller's
-absolute output directory. Failure JSON contains only a bounded exception-class
-name and status; it does not echo caller-controlled or credential-bearing paths.
-Any stderr `FAIL`, traceback, missing archive, extra archive, or reused output
-directory stops the workflow. Preserve the JSON result alongside the Kaggle
-job metadata, but do not edit it.
+The fresh staging directory must contain `READY.json`,
+`STAGING_RECEIPT.json`, and a `package/` directory containing exactly:
 
-Before saving output, check that there are exactly 15 `.tar` files, no `.tmp`
-files, every byte count equals the ordered values above, their sum is exactly
-`6,104,616,960`, and every SHA-256 equals the packer result. Record CPU
-runtime, peak disk use, and total output bytes. Saving or downloading the
-private output is a separate explicitly authorized step.
+```text
+eval36_bundle_kernel.py
+kernel-metadata.json
+```
 
-If any selected root fails during one invocation, archives already published by
-that invocation are removed (or moved away from their claimed final names to an
-unpredictable failed quarantine name). A rollback that cannot make every owned
-final name absent is itself a hard failure and must be reviewed; do not treat a
-partial directory as a successful pack.
+The script embeds zlib-compressed byte-exact copies of the reviewed packer and
+the CRLF manifest. Kaggle CLI 2.2.4 uploads only this single UTF-8 code file;
+there is no sibling input dataset. Metadata is fixed to private CPU, internet,
+GPU, and TPU disabled, one competition source, and no dataset/kernel/model
+sources. Do not pass `--accelerator` or otherwise override metadata.
 
-## Local verification and installation (after authorized transfer)
+The only accepted competition mount is the path established by prior physical
+kernel logs:
+
+```text
+/kaggle/input/competitions/biohub-cell-tracking-during-development
+```
+
+The generated script has no arguments, mount discovery, fallback, or root
+selection. It creates fresh `/tmp/eval36-runtime` and
+`/kaggle/working/eval36-bundles`, requires at least 8,252,100,608 free bytes,
+loads the embedded packer under a non-main registered module, and invokes all
+15 production roots once.
+
+Before push, independently parse and rehash READY, receipt, script, and
+metadata. Their hashes, feature-branch HEAD, exact two-file package inventory,
+tool versions, and fixed metadata must agree. Then push the package directory
+without an accelerator override. Record returned kernel version and URL.
+
+A successful run requires all of the following, not merely a PASS file:
+
+- terminal Kaggle state `COMPLETE` and no user traceback/stderr failure;
+- stdout is the same one-line canonical PASS JSON as saved
+  `eval36-bundles/KERNEL_RESULT.json`;
+- saved output contains exactly the fixed 15 `.tar` files and that receipt;
+- every root byte count equals the ordered values above and their sum is
+  `6,104,616,960`;
+- no pending, temporary, quarantine, missing, duplicate, or extra output;
+- every downloaded tar SHA-256 matches the ordered receipt record.
+
+The kernel writes the receipt to a non-PASS pending name, validates it and all
+archives, rechecks script and output membership, then uses one atomic
+no-replace rename as the PASS commit point. A missing final receipt remains
+HOLD. If packing fails synchronously, the packer rolls back archives it owns;
+a SIGKILL, timeout, disk error, or output-save failure can still leave partial
+bytes and is always HOLD. Do not silently split roots or weaken checks.
+
+## Local verification and installation (after verified transfer)
 
 Place only the explicitly named downloaded `.tar` files in a staging
 directory outside `data/`. Do not rename an archive: its basename must be the

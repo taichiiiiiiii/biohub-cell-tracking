@@ -545,6 +545,35 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
   parity証明専用で候補採否には使わない。次は凍結済み`steal_twin_design.md`の
   `twin_only_v1`をST-R1→ST-R4順に実装・dry-runし、eval12の事前登録gateから進める。
 
+### E24 prerequisite loop: eval-36 image bundle recovery（2026-09-03・物理実行前）
+
+1. **固定仮説**: 429で止まった1,487個別ファイルを、competition mount内で生成する
+   15個の決定的USTARへ置き換えれば、既存manifest/security契約を弱めずeval-36画像を
+   完全復旧できる。これはtransportのみの変更で、モデル・tracking・metric・提出候補は
+   変更しない。
+2. **原因診断**: 画像は21/36 roots、2,185/3,672 filesがexact。shortfallは
+   1,487 files / 5,930,937,781 bytes、mismatch/extra/symlink/partialは0。Kaggle CLI
+   2.2.4は`code_file`本文だけを送るため、packerとCRLF manifestは単一scriptへの
+   byte-exact埋込みが必要。実ログ上のmountは`/kaggle/input/competitions/...`。
+3. **独立レビュー**: roadmap、threat、package/CLIの変更前3監査を完了。変更後security
+   監査で早すぎるPASS、output membership、local staging race、unbounded captureを
+   指摘され、pending→atomic no-replace最終公開、held dirfd照合、stable reread、4 KiB
+   capped sinkへ修正。再監査は**SHIP-to-private-run**。
+4. **単独実装**: `scripts/prepare_eval36_bundle_kernel.py`と専用testsのみ。private CPU、
+   internet/GPU/TPU off、competition source 1件、固定15 roots、固定mount/output、
+   free-space gate、archive再hash、canonical receiptを実装。`official/`変更なし。
+5. **ローカル検証**: 新規suite `22 passed`、既存bundle併合`114 passed`、全体
+   `1,189 passed / 5 skipped`。対象Ruff、format、py_compile、diff checkをPASSし、
+   `official`は`075fc5f...`不変。生成codeは254,096 bytes、raw SHA
+   `aaef03ea...30ccb`、self SHA `9ed21a22...03271`、metadata SHA
+   `ed5500fc...a876`。全体Ruffの未変更探索script由来64件は既存負債として分離した。
+6. **物理accept gate**: Kaggle `COMPLETE`＋stdout canonical PASS＋固定15 tarとreceipt、
+   tar合計6,104,616,960 bytes、download後全SHA一致、importer dry-run PASS、image verifier
+   READYをすべて要求。receipt単独、timeout、ENOSPC、mount/renameat2差、save/export失敗、
+   missing/extra/hash差はHOLD。root分割は別仮説として再レビューする。
+7. **LB境界**: E24では提出しない。画像READY後にsealed ST-R3→twin-only eval12→24→36
+   を直列評価し、事前gateを通った候補だけを必要に応じてKaggle提出する。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。

@@ -1,6 +1,6 @@
 # Biohub gold-loop protocol
 
-Updated: 2026-08-30 (Asia/Tokyo)
+Updated: 2026-09-03 (Asia/Tokyo)
 
 This file is the shared operating brief for SOL reviewers, native subagents,
 and the external Qwen implementation worker. Read it before changing an
@@ -26,9 +26,13 @@ final submission decision.
 - Read-only Kaggle/API inspection and artifact downloads are allowed.
 - Local code, tests, documentation, and ignored experiment outputs may be
   created or changed within the project.
-- Do not push a Kaggle kernel, create a Kaggle submission, choose final
-  submissions, push Git commits to a remote, or open/comment on a PR without
-  explicit user approval for that external mutation.
+- The user granted standing authority on 2026-08-30 and reconfirmed it on
+  2026-09-03 to run necessary private Kaggle kernels and submit candidates that
+  pass the preregistered local/reproducibility gates. Do not use leaderboard
+  feedback to bypass a failed gate or submit an unscored exploratory change.
+- Git commits and pushes are allowed only for complete, verified logical units
+  on a non-`main`/`master` feature branch. Inspect status/diff and exclude
+  secrets before either action. Never push incomplete or failing work.
 - Keep `official/` read-only. It is the reference metric implementation.
 - Use `src/biohub/evaluate.py`, which directly calls the official metric, for
   every adoption decision. Notebook proxy scorers are diagnostic only.
@@ -36,9 +40,11 @@ final submission decision.
 ## Model and effort routing
 
 - SOL is the primary designer and final reviewer.
-- Implementation work is assigned to the external Qwen runner in a clean,
-  registered linked worktree. SOL must reread the complete diff and rerun the
-  relevant tests before adoption.
+- Qwen is currently unavailable and must not be probed. SOL handles both
+  design and implementation until the user changes that routing. Use the one
+  canonical checkout only; do not create linked worktrees or duplicate project
+  folders. SOL must reread the complete diff and rerun relevant tests before
+  adoption.
 - Native subagent effort is task-dependent:
   - medium: inventory, downloads, deterministic operational checks;
   - high: scientific audit, metric reasoning, candidate design, code review.
@@ -56,8 +62,10 @@ final submission decision.
 2. Run official local scoring and paired per-video diagnostics.
 3. Change one causal factor at a time and preregister its gate.
 4. Reject weak or unstable changes; record every result in the ledger.
-5. Only after a local candidate passes its gate, prepare one immutable Kaggle
-   evaluation run and request approval before pushing it.
+5. Only after a local candidate passes its gate, prepare and verify one
+   immutable Kaggle evaluation run. The standing user authority permits the
+   private push/run and a necessary competition submission without another
+   routine approval request.
 6. Compare public LB with the preregistered expectation, update the model of
    the failure, then start the next loop.
 
