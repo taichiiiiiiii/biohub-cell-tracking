@@ -3,7 +3,9 @@
 This module deliberately has no torch dependency.  Checkpoints are treated as
 opaque byte strings for hashing and their *safe metadata* is read either from a
 real JSON envelope or from a caller supplied trusted ``checkpoint_metadata_loader``.
-The default code path never unpickles a ``.pt`` file.
+The default code path never unpickles a ``.pt`` file.  The explicitly selected
+PyTorch loader uses ``torch.load(..., weights_only=True)`` and converts tensors
+to the same strict, JSON-safe envelope before validation.
 
 The public surface is intentionally small: :class:`HistoryWriter`,
 :func:`strict_json_load`, :func:`strict_jsonl_load`, :func:`select_best`,
@@ -26,7 +28,6 @@ import os
 import secrets
 import stat
 import sys
-import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -83,17 +84,19 @@ def strict_json_loads(data: str, *, source: str = "<string>") -> Any:
 def strict_json_load(path: str | os.PathLike[str]) -> Any:
     source = Path(path)
     try:
-        data = source.read_text(encoding="utf-8")
+        data, _digest, _size = _read_regular_snapshot(source)
+        text = data.decode("utf-8")
     except (OSError, UnicodeError) as exc:
         raise TrainingHistoryError(f"cannot read {source}: {exc}") from exc
-    return strict_json_loads(data, source=str(source))
+    return strict_json_loads(text, source=str(source))
 
 
 def strict_jsonl_load(path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     """Read JSONL strictly; blank lines and non-object records are invalid."""
     source = Path(path)
     try:
-        lines = source.read_text(encoding="utf-8").splitlines()
+        data, _digest, _size = _read_regular_snapshot(source)
+        lines = data.decode("utf-8").splitlines()
     except (OSError, UnicodeError) as exc:
         raise TrainingHistoryError(f"cannot read {source}: {exc}") from exc
     rows: list[dict[str, Any]] = []
@@ -116,12 +119,74 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def sha256_file(path: str | os.PathLike[str]) -> str:
+def _hash_stream(stream: Any) -> str:
     digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
+    for block in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(block)
     return digest.hexdigest()
+
+
+def sha256_file(path: str | os.PathLike[str]) -> str:
+    _data, digest, _size = _read_regular_snapshot(Path(path), retain_data=False)
+    return digest
+
+
+def _stat_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _read_regular_snapshot(path: Path, *, retain_data: bool = True) -> tuple[bytes, str, int]:
+    """Read one immutable regular-file identity through O_NOFOLLOW."""
+    fd, opened = _open_regular_fd(path)
+    try:
+        digest = hashlib.sha256()
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(fd, 1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+            if retain_data:
+                chunks.append(block)
+        _verify_regular_fd(path, fd, opened)
+        return b"".join(chunks), digest.hexdigest(), opened.st_size
+    except OSError as exc:
+        raise TrainingHistoryError(f"cannot securely read {path}: {exc}") from exc
+    finally:
+        os.close(fd)
+
+
+def _open_regular_fd(path: Path) -> tuple[int, os.stat_result]:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        before = path.lstat()
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise TrainingHistoryError(f"cannot securely open {path}: {exc}") from exc
+    try:
+        opened = os.fstat(fd)
+    except OSError as exc:
+        os.close(fd)
+        raise TrainingHistoryError(f"cannot inspect opened file {path}: {exc}") from exc
+    if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or _stat_identity(before) != _stat_identity(opened):
+        os.close(fd)
+        raise TrainingHistoryError(f"file identity/link count is unsafe: {path}")
+    return fd, opened
+
+
+def _verify_regular_fd(path: Path, fd: int, opened: os.stat_result) -> None:
+    after_fd = os.fstat(fd)
+    after_path = path.lstat()
+    if _stat_identity(opened) != _stat_identity(after_fd) or _stat_identity(opened) != _stat_identity(after_path):
+        raise TrainingHistoryError(f"file changed while being read: {path}")
 
 
 def canonical_sha256(value: Any) -> str:
@@ -129,45 +194,114 @@ def canonical_sha256(value: Any) -> str:
     return sha256_bytes(canonical_json_bytes(value))
 
 
+def trusted_pytorch_checkpoint_metadata_loader(path: Path) -> Mapping[str, Any]:
+    """Safely load a real PyTorch checkpoint for :func:`verify_training_run`.
+
+    PyTorch is an optional runtime dependency.  Arbitrary pickle loading is
+    deliberately unavailable: production callers must opt in to weights-only
+    loading and every state entry must be an actual tensor.
+    """
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - depends on production environment
+        raise TrainingHistoryError("trusted PyTorch checkpoint loading requires torch") from exc
+    fd, opened = _open_regular_fd(path)
+    try:
+        with os.fdopen(fd, "rb") as stream:
+            fd = -1
+            digest_before = _hash_stream(stream)
+            stream.seek(0)
+            loaded = torch.load(stream, map_location="cpu", weights_only=True)
+            stream.seek(0)
+            digest_after = _hash_stream(stream)
+            _verify_regular_fd(path, stream.fileno(), opened)
+    except Exception as exc:
+        raise TrainingHistoryError(f"safe PyTorch checkpoint load failed: {path}: {exc}") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if digest_before != digest_after:
+        raise TrainingHistoryError(f"checkpoint changed during PyTorch load: {path}")
+    metadata = dict(_object(loaded, f"PyTorch checkpoint {path}"))
+    tensor_state = metadata.get("model_state")
+    if not isinstance(tensor_state, Mapping) or not tensor_state:
+        raise TrainingHistoryError(f"PyTorch model_state must be a nonempty tensor mapping: {path}")
+    state_keys: list[dict[str, Any]] = []
+    model_state: list[dict[str, Any]] = []
+    for name in sorted(tensor_state):
+        tensor = tensor_state[name]
+        if not isinstance(name, str) or not name or not isinstance(tensor, torch.Tensor):
+            raise TrainingHistoryError(f"PyTorch model_state contains a non-tensor entry: {path}")
+        cpu = tensor.detach().cpu().contiguous()
+        shape = list(cpu.shape)
+        dtype = str(cpu.dtype).removeprefix("torch.")
+        values = cpu.reshape(-1).tolist()
+        state_keys.append({"name": name, "shape": shape, "dtype": dtype})
+        model_state.append({"name": name, "shape": shape, "dtype": dtype, "values": values})
+    claimed_keys = metadata.get("state_keys")
+    if claimed_keys is not None and not _strict_equal(claimed_keys, state_keys):
+        raise TrainingHistoryError(f"PyTorch state_keys do not match loaded tensors: {path}")
+    metadata["state_keys"] = state_keys
+    metadata["model_state"] = model_state
+    resolved = str(path.resolve(strict=True))
+    metadata["path"] = resolved
+    metadata["checkpoint_sha256"] = digest_before
+    metadata["load_evidence"] = {
+        "trusted_safe_loader": True,
+        "strict": True,
+        "missing_keys": [],
+        "unexpected_keys": [],
+        "path": resolved,
+        "checkpoint_sha256": digest_before,
+        "model_state_sha256": canonical_sha256(model_state),
+    }
+    _require_json_tree(metadata, f"trusted PyTorch checkpoint metadata for {path}")
+    return metadata
+
+
 def atomic_write_json(path: str | os.PathLike[str], value: Any) -> None:
     """Publish immutable canonical JSON atomically and without clobbering."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    _secure_publish_parent(target)
     payload = canonical_json_bytes(value)
-    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _publish_temp_noreplace(Path(temporary), target)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
+    _atomic_publish_bytes(target, payload)
 
 
 def atomic_publish_file(path: str | os.PathLike[str], data: bytes) -> None:
     """Atomically publish immutable bytes without replacing an existing path."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    _secure_publish_parent(target)
-    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    _atomic_publish_bytes(target, data)
+
+
+def _atomic_publish_bytes(target: Path, data: bytes) -> None:
+    parent_fd = _secure_publish_parent(target)
+    temporary = f".{target.name}.{secrets.token_hex(16)}.tmp"
+    file_fd = -1
     try:
-        with os.fdopen(fd, "wb") as stream:
+        file_fd = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=parent_fd,
+        )
+        with os.fdopen(file_fd, "wb") as stream:
+            file_fd = -1
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        _publish_temp_noreplace(Path(temporary), target)
+        _assert_publish_parent_identity(target.parent, parent_fd)
+        _publish_temp_noreplace(Path(temporary), Path(target.name), parent_fd=parent_fd, expected_parent=target.parent)
     except BaseException:
+        if file_fd >= 0:
+            os.close(file_fd)
         try:
-            os.unlink(temporary)
+            os.unlink(temporary, dir_fd=parent_fd)
         except FileNotFoundError:
             pass
         raise
+    finally:
+        os.close(parent_fd)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -178,24 +312,30 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _rename_noreplace(source: Path, target: Path) -> None:
+def _rename_noreplace(
+    source: Path,
+    target: Path,
+    *,
+    source_dir_fd: int = AT_FDCWD,
+    target_dir_fd: int = AT_FDCWD,
+) -> None:
     """Use the platform's atomic no-replace rename primitive."""
     libc = ctypes.CDLL(None, use_errno=True)
     source_bytes = os.fsencode(source)
     target_bytes = os.fsencode(target)
     if sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
         result = libc.renameatx_np(
-            AT_FDCWD,
+            source_dir_fd,
             ctypes.c_char_p(source_bytes),
-            AT_FDCWD,
+            target_dir_fd,
             ctypes.c_char_p(target_bytes),
             RENAME_EXCL,
         )
     elif hasattr(libc, "renameat2"):
         result = libc.renameat2(
-            AT_FDCWD,
+            source_dir_fd,
             ctypes.c_char_p(source_bytes),
-            AT_FDCWD,
+            target_dir_fd,
             ctypes.c_char_p(target_bytes),
             RENAME_NOREPLACE,
         )
@@ -208,23 +348,44 @@ def _rename_noreplace(source: Path, target: Path) -> None:
         raise OSError(error, os.strerror(error), target)
 
 
-def _publish_temp_noreplace(temporary: Path, target: Path) -> None:
+def _publish_temp_noreplace(
+    temporary: Path,
+    target: Path,
+    *,
+    parent_fd: int | None = None,
+    expected_parent: Path | None = None,
+) -> None:
     """Commit a complete temp file, or roll it back and report an honest failure."""
     published = False
     try:
-        _rename_noreplace(temporary, target)
+        kwargs = {} if parent_fd is None else {"source_dir_fd": parent_fd, "target_dir_fd": parent_fd}
+        _rename_noreplace(temporary, target, **kwargs)
         published = True
-        _fsync_directory(target.parent)
+        if parent_fd is not None and expected_parent is not None:
+            _assert_publish_parent_identity(expected_parent, parent_fd)
+        if parent_fd is None:
+            _fsync_directory(target.parent)
+        else:
+            os.fsync(parent_fd)
+            if expected_parent is not None:
+                _assert_publish_parent_identity(expected_parent, parent_fd)
     except BaseException as original:
         if published:
             try:
-                target.unlink()
-                _fsync_directory(target.parent)
+                if parent_fd is None:
+                    target.unlink()
+                    _fsync_directory(target.parent)
+                else:
+                    os.unlink(target.name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
             except BaseException as rollback:
                 quarantine = target.with_name(f".{target.name}.failed-{secrets.token_hex(16)}")
                 try:
-                    _rename_noreplace(target, quarantine)
-                    _fsync_directory(target.parent)
+                    _rename_noreplace(target, quarantine, **kwargs)
+                    if parent_fd is None:
+                        _fsync_directory(target.parent)
+                    else:
+                        os.fsync(parent_fd)
                 except BaseException as quarantine_error:
                     raise TrainingHistoryError(
                         f"publication failed after commit and rollback failed; target MUST NOT be trusted: {target}"
@@ -235,7 +396,7 @@ def _publish_temp_noreplace(temporary: Path, target: Path) -> None:
         raise original
 
 
-def _secure_publish_parent(target: Path) -> None:
+def _secure_publish_parent(target: Path) -> int:
     parent = target.parent
     try:
         parent_info = parent.lstat()
@@ -245,8 +406,29 @@ def _secure_publish_parent(target: Path) -> None:
         raise TrainingHistoryError(f"publication parent must be a real directory: {parent}")
     if parent.resolve(strict=True) != parent.absolute():
         raise TrainingHistoryError(f"publication parent path contains a symlink: {parent}")
-    if target.exists() or target.is_symlink():
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(parent, flags)
+        _assert_publish_parent_identity(parent, parent_fd)
+        try:
+            os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return parent_fd
         raise FileExistsError(f"immutable target already exists: {target}")
+    except BaseException:
+        if "parent_fd" in locals():
+            os.close(parent_fd)
+        raise
+
+
+def _assert_publish_parent_identity(parent: Path, parent_fd: int) -> None:
+    try:
+        path_info = parent.lstat()
+        fd_info = os.fstat(parent_fd)
+    except OSError as exc:
+        raise TrainingHistoryError(f"publication parent changed: {parent}") from exc
+    if _stat_identity(path_info) != _stat_identity(fd_info):
+        raise TrainingHistoryError(f"publication parent changed: {parent}")
 
 
 def _is_regular_mode(mode: int) -> bool:
@@ -2210,7 +2392,21 @@ def _validate_checkpoints(
             pass
     try:
         last_path = _contained_regular_file(root, "checkpoints/last.pt")
-        if rows and rows[-1].get("checkpoint_sha256") != sha256_file(last_path):
+        last_hash = sha256_file(last_path)
+        selected_epoch = final.get("fixed_epoch") if kind == "final_refit" else final.get("epoch")
+        if rows and rows[-1].get("epoch") == selected_epoch:
+            selected_metadata = metadata_by_path.get(selected)
+            last_metadata = metadata_by_path.get("checkpoints/last.pt")
+            if (
+                selected_metadata is None
+                or last_metadata is None
+                or not all(
+                    _strict_equal(selected_metadata.get(field), last_metadata.get(field))
+                    for field in ("epoch", "global_step", "state_keys", "model_state")
+                )
+            ):
+                errors.append("selected/last checkpoints at the same epoch do not contain identical model state")
+        elif rows and rows[-1].get("checkpoint_sha256") != last_hash:
             errors.append("last checkpoint hash differs from final history row")
     except TrainingHistoryError:
         pass
@@ -2287,10 +2483,13 @@ def _validate_checkpoints(
 
 
 def _load_checkpoint_metadata(path: Path, loader: CheckpointMetadataLoader | None) -> Mapping[str, Any]:
-    actual_hash = sha256_file(path)
+    raw, actual_hash, _size = _read_regular_snapshot(path)
     resolved = str(path.resolve(strict=True))
     if loader is not None:
         metadata = dict(_object(loader(path), f"metadata for {path}"))
+        _raw_after, hash_after, _size_after = _read_regular_snapshot(path, retain_data=False)
+        if hash_after != actual_hash:
+            raise TrainingHistoryError(f"checkpoint changed while trusted loader was reading it: {path}")
         _require_json_tree(metadata, f"trusted checkpoint metadata for {path}")
         if metadata.get("path") != resolved or metadata.get("checkpoint_sha256") != actual_hash:
             raise TrainingHistoryError(f"trusted checkpoint loader path/hash binding mismatch: {path}")
@@ -2308,7 +2507,7 @@ def _load_checkpoint_metadata(path: Path, loader: CheckpointMetadataLoader | Non
             raise TrainingHistoryError(f"trusted checkpoint loader success evidence invalid: {path}")
         return metadata
     try:
-        metadata = dict(_object(strict_json_load(path), str(path)))
+        metadata = dict(_object(strict_json_loads(raw.decode("utf-8"), source=str(path)), str(path)))
     except TrainingHistoryError as exc:
         raise TrainingHistoryError(f"opaque checkpoint requires an injected trusted safe loader: {path}") from exc
     claimed_hash = metadata.pop("checkpoint_sha256", None)
@@ -2433,10 +2632,15 @@ def _validate_artifacts(root: Path, manifest: Mapping[str, Any], errors: list[st
         except TrainingHistoryError as exc:
             errors.append(str(exc))
             continue
+        try:
+            _data, actual_hash, actual_size = _read_regular_snapshot(path, retain_data=False)
+        except TrainingHistoryError as exc:
+            errors.append(str(exc))
+            continue
         size = entry.get("bytes")
-        if not isinstance(size, int) or isinstance(size, bool) or size < 0 or size != path.stat().st_size:
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0 or size != actual_size:
             errors.append(f"artifact byte-size mismatch: {relative}")
-        if entry.get("sha256") != sha256_file(path):
+        if entry.get("sha256") != actual_hash:
             errors.append(f"artifact SHA256 mismatch: {relative}")
     required = {"run_manifest.json"}
     if not is_cv:
@@ -2445,9 +2649,22 @@ def _validate_artifacts(root: Path, manifest: Mapping[str, Any], errors: list[st
         errors.append(f"artifact manifest lacks required files: {sorted(required - seen)}")
     actual: set[str] = set()
     for path in root.rglob("*"):
-        if path == root / "ARTIFACT_MANIFEST.json" or path.is_dir():
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            errors.append(f"cannot inspect artifact path {path}: {exc}")
             continue
         relative = path.relative_to(root).as_posix()
+        if stat.S_ISLNK(info.st_mode):
+            errors.append(f"artifact tree contains a symlink: {relative}")
+            continue
+        if stat.S_ISDIR(info.st_mode):
+            continue
+        if path == root / "ARTIFACT_MANIFEST.json":
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            errors.append(f"artifact tree contains a special file: {relative}")
+            continue
         try:
             _contained_regular_file(root, relative)
             actual.add(relative)
@@ -3115,7 +3332,12 @@ def _strict_int(value: Any, name: str, *, minimum: int) -> int:
 
 
 def _is_finite_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _finite_number(value: Any, name: str) -> None:

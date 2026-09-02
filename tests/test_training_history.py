@@ -4,12 +4,14 @@ import base64
 import copy
 import json
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+import biohub.training_history as training_history
 from biohub.training_history import (
     CHECKPOINT_FORMAT,
     DuplicateKeyError,
@@ -28,6 +30,7 @@ from biohub.training_history import (
     strict_json_load,
     strict_json_loads,
     strict_jsonl_load,
+    trusted_pytorch_checkpoint_metadata_loader,
     validate_resume_metadata,
     validate_training_run,
     validate_warm_start,
@@ -489,6 +492,49 @@ def _rewrite(root: Path, manifest: dict, rows: list[dict], *, verdict: str = "PA
     }
     _replace_json(root / "run_manifest.json", manifest)
     _refresh_artifacts(root, verdict)
+
+
+def _convert_run_checkpoints_to_pytorch(root: Path, manifest: dict, rows: list[dict]) -> None:
+    torch = pytest.importorskip("torch")
+
+    def convert(path: Path) -> None:
+        metadata = strict_json_load(path)
+        tensor_state = {
+            item["name"]: torch.tensor(item["values"], dtype=torch.float32).reshape(item["shape"])
+            for item in metadata["model_state"]
+        }
+        if metadata.get("kind") == "resume":
+            normalized = [
+                {
+                    "name": name,
+                    "shape": list(tensor.shape),
+                    "dtype": str(tensor.dtype).removeprefix("torch."),
+                    "values": tensor.reshape(-1).tolist(),
+                }
+                for name, tensor in sorted(tensor_state.items())
+            ]
+            metadata["state"]["model"]["payload"] = _state_payload(normalized)
+        metadata["model_state"] = tensor_state
+        path.unlink()
+        torch.save(metadata, path)
+
+    selected_name = "fixed_epoch.pt" if manifest.get("run_kind") == "final_refit" else "best.pt"
+    for name in (selected_name, "last.pt"):
+        convert(root / "checkpoints" / name)
+    selected_sha = sha256_file(root / "checkpoints" / selected_name)
+    last_sha = sha256_file(root / "checkpoints/last.pt")
+    manifest["final_selection"]["checkpoint_sha256"] = selected_sha
+    selected_epoch = manifest["final_selection"].get("fixed_epoch", manifest["final_selection"].get("epoch"))
+    for row in rows:
+        if row["epoch"] == selected_epoch:
+            row["checkpoint_sha256"] = selected_sha
+        elif row["epoch"] == rows[-1]["epoch"]:
+            row["checkpoint_sha256"] = last_sha
+    _rewrite(root, manifest, rows)
+    convert(root / "checkpoints/resume.pt")
+    manifest["checkpoint_refs"]["checkpoints/resume.pt"] = sha256_file(root / "checkpoints/resume.pt")
+    _replace_json(root / "run_manifest.json", manifest)
+    _refresh_artifacts(root)
 
 
 def test_valid_training_run_and_safe_checkpoint_envelopes(tmp_path: Path) -> None:
@@ -1321,7 +1367,7 @@ def test_max_classifier_requires_separately_bound_min_val_loss_checkpoint(tmp_pa
         manifest["split"][side].update(positive=examples // 2, negative=examples - examples // 2)
     manifest["split_sha256"] = canonical_sha256(manifest["split"])
     manifest["validation_snapshot"]["split_sha256"] = manifest["split_sha256"]
-    aucs = [0.7, 0.8, 0.75]
+    aucs = [0.7, 0.8, 0.9]
     for row, auc in zip(rows, aucs, strict=True):
         row["task_metrics"]["auc"] = auc
         row["selector_value"] = auc
@@ -1339,7 +1385,12 @@ def test_max_classifier_requires_separately_bound_min_val_loss_checkpoint(tmp_pa
         "margin": 0.05,
         "observed_source": "history_best",
     }
-    manifest["final_selection"]["selector_value"] = 0.8
+    best_path = tmp_path / "checkpoints/best.pt"
+    _replace_json(best_path, _checkpoint("best", manifest["run_id"], 3, 6))
+    best_sha = sha256_file(best_path)
+    rows[1]["checkpoint_sha256"] = None
+    rows[2]["checkpoint_sha256"] = best_sha
+    manifest["final_selection"] = {"epoch": 3, "selector_value": 0.9, "checkpoint_sha256": best_sha}
     manifest["degradation"] = compute_degradation(
         [0.8, 0.6, 0.7], aucs, direction="max", absolute_warning_threshold=0.01
     )
@@ -1492,15 +1543,53 @@ def test_external_symlink_and_hardlinked_artifacts_fail(tmp_path: Path) -> None:
     external.write_bytes(b"external")
     link = tmp_path / "symlink/provenance/external-link"
     link.symlink_to(external)
-    _refresh_artifacts(tmp_path / "symlink")
-    assert "symlink artifact" in " ".join(verify_training_run(tmp_path / "symlink")["errors"])
+    assert "contains a symlink" in " ".join(verify_training_run(tmp_path / "symlink")["errors"])
 
     _valid_run(tmp_path / "hardlink")
     source = tmp_path / "hardlink/provenance/input.json"
     alias = tmp_path / "hardlink/provenance/input-alias.json"
     alias.hardlink_to(source)
-    _refresh_artifacts(tmp_path / "hardlink")
-    assert "hard-linked artifact" in " ".join(verify_training_run(tmp_path / "hardlink")["errors"])
+    assert "hard-linked artifact forbidden" in " ".join(verify_training_run(tmp_path / "hardlink")["errors"])
+
+
+def test_external_directory_symlink_is_never_skipped_by_tree_inventory(tmp_path: Path) -> None:
+    _valid_run(tmp_path / "run")
+    (tmp_path / "run/provenance/external-dir").symlink_to("/private/tmp", target_is_directory=True)
+    report = verify_training_run(tmp_path / "run")
+    assert report["verdict"] == "FAIL"
+    assert "contains a symlink: provenance/external-dir" in " ".join(report["errors"])
+
+
+def test_special_file_and_symlinked_run_ancestor_fail_closed(tmp_path: Path) -> None:
+    root = tmp_path / "real-run"
+    _valid_run(root)
+    os.mkfifo(root / "provenance/pipe")
+    special = verify_training_run(root)
+    assert special["verdict"] == "FAIL"
+    assert "contains a special file: provenance/pipe" in " ".join(special["errors"])
+
+    alias = tmp_path / "run-alias"
+    alias.symlink_to(root, target_is_directory=True)
+    ancestor = verify_training_run(alias)
+    assert ancestor["verdict"] == "FAIL"
+    assert "run directory must be a real directory" in " ".join(ancestor["errors"])
+
+
+def test_best_checkpoint_may_have_distinct_envelope_when_best_is_last(tmp_path: Path) -> None:
+    _valid_run(tmp_path, values=[0.8, 0.7, 0.6])
+    report = verify_training_run(tmp_path)
+    assert report["verdict"] == "PASS"
+
+
+def test_best_and_last_same_epoch_require_exact_tensor_state(tmp_path: Path) -> None:
+    manifest, rows = _valid_run(tmp_path, values=[0.8, 0.7, 0.6])
+    last = strict_json_load(tmp_path / "checkpoints/last.pt")
+    last["model_state"][0]["values"][0] = 9.0
+    _replace_json(tmp_path / "checkpoints/last.pt", last)
+    _rewrite(tmp_path, manifest, rows)
+    report = verify_training_run(tmp_path)
+    assert report["verdict"] == "FAIL"
+    assert "identical model state" in " ".join(report["errors"])
 
 
 @pytest.mark.parametrize("attack", ["extra", "run_id", "bool_schema"])
@@ -1529,6 +1618,30 @@ def test_atomic_publication_failure_leaves_no_target_or_partial(tmp_path: Path, 
         atomic_write_json(target, {"complete": True})
     assert not target.exists()
     assert not list(tmp_path.glob(".never-published.json.*.tmp"))
+
+
+def test_atomic_publication_binds_held_parent_across_path_replacement(tmp_path: Path, monkeypatch) -> None:
+    parent = tmp_path / "publish"
+    parent.mkdir()
+    moved = tmp_path / "publish-moved"
+    target = parent / "result.json"
+    original = training_history._rename_noreplace
+    swapped = False
+
+    def replace_parent_then_rename(source: Path, destination: Path, **kwargs) -> None:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            parent.rename(moved)
+            parent.mkdir()
+            target.write_bytes(b"attacker")
+        original(source, destination, **kwargs)
+
+    monkeypatch.setattr(training_history, "_rename_noreplace", replace_parent_then_rename)
+    with pytest.raises(TrainingHistoryError, match="publication parent changed"):
+        atomic_write_json(target, {"trusted": True})
+    assert target.read_bytes() == b"attacker"
+    assert not (moved / target.name).exists()
 
 
 def test_metadata_only_checkpoint_and_placeholder_resume_state_fail(tmp_path: Path) -> None:
@@ -1600,6 +1713,70 @@ def test_opaque_checkpoint_requires_exact_trusted_loader_success_evidence(tmp_pa
 
     errors = " ".join(verify_training_run(tmp_path, checkpoint_metadata_loader=no_success_evidence)["errors"])
     assert "success evidence invalid" in errors
+
+
+def test_real_pytorch_checkpoints_and_explicit_cli_loader_are_operational(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    manifest, rows = _valid_run(tmp_path, values=[0.8, 0.7, 0.6])
+    _convert_run_checkpoints_to_pytorch(tmp_path, manifest, rows)
+    assert verify_training_run(tmp_path)["verdict"] == "FAIL"
+    report = verify_training_run(tmp_path, checkpoint_metadata_loader=trusted_pytorch_checkpoint_metadata_loader)
+    assert report["verdict"] == "PASS", report
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_training_run.py",
+            "--trusted-pytorch-checkpoints",
+            str(tmp_path),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_trusted_loader_rejects_checkpoint_replacement_during_load(tmp_path: Path) -> None:
+    manifest, rows = _valid_run(tmp_path)
+    best_path = tmp_path / "checkpoints/best.pt"
+    best_metadata = strict_json_load(best_path)
+    _replace_bytes(best_path, b"opaque-model-checkpoint")
+    best_sha = sha256_file(best_path)
+    manifest["final_selection"]["checkpoint_sha256"] = best_sha
+    rows[manifest["final_selection"]["epoch"] - 1]["checkpoint_sha256"] = best_sha
+    _rewrite(tmp_path, manifest, rows)
+
+    def loader(path: Path) -> dict:
+        metadata = copy.deepcopy(best_metadata) if path == best_path else strict_json_load(path)
+        digest = sha256_file(path)
+        resolved = str(path.resolve())
+        if path == best_path:
+            _replace_bytes(path, b"replacement-checkpoint")
+        metadata.update(path=resolved, checkpoint_sha256=digest)
+        metadata["load_evidence"] = {
+            "trusted_safe_loader": True,
+            "strict": True,
+            "missing_keys": [],
+            "unexpected_keys": [],
+            "path": resolved,
+            "checkpoint_sha256": digest,
+            "model_state_sha256": canonical_sha256(metadata["model_state"]),
+        }
+        return metadata
+
+    report = verify_training_run(tmp_path, checkpoint_metadata_loader=loader)
+    assert report["verdict"] == "FAIL"
+    assert "changed while trusted loader was reading" in " ".join(report["errors"])
+
+
+def test_huge_integer_fields_fail_canonically_without_rounding_or_overflow(tmp_path: Path) -> None:
+    manifest, rows = _valid_run(tmp_path)
+    rows[0]["global_step"] = 10**1000
+    _rewrite(tmp_path, manifest, rows)
+    report = verify_training_run(tmp_path)
+    assert report["verdict"] == "FAIL"
+    assert isinstance(report["errors"], list)
 
 
 def test_complete_execution_digest_and_resume_reject_seed_gradient_drift(tmp_path: Path) -> None:
@@ -1740,14 +1917,16 @@ def test_history_writer_rejects_same_size_inode_swap(tmp_path: Path) -> None:
 def test_post_rename_fsync_failure_rolls_back_target(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "rolled-back.json"
     calls = 0
+    original_fsync = os.fsync
 
-    def fail_first_fsync(path: Path) -> None:
+    def fail_parent_fsync(fd: int) -> None:
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls == 2:
             raise OSError("directory fsync failed")
+        original_fsync(fd)
 
-    monkeypatch.setattr("biohub.training_history._fsync_directory", fail_first_fsync)
+    monkeypatch.setattr(os, "fsync", fail_parent_fsync)
     with pytest.raises(OSError, match="directory fsync failed"):
         atomic_write_json(target, {"complete": True})
     assert not target.exists()
@@ -1755,22 +1934,24 @@ def test_post_rename_fsync_failure_rolls_back_target(tmp_path: Path, monkeypatch
 
 def test_post_rename_rollback_failure_quarantines_final_name(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "quarantined.json"
-    original_unlink = Path.unlink
+    original_unlink = os.unlink
+    original_fsync = os.fsync
     calls = 0
 
-    def fail_first_fsync(path: Path) -> None:
+    def fail_parent_fsync(fd: int) -> None:
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls == 2:
             raise OSError("directory fsync failed")
+        original_fsync(fd)
 
-    def fail_target_unlink(path: Path, *args, **kwargs) -> None:
-        if path == target:
+    def fail_target_unlink(path, *args, **kwargs) -> None:
+        if path == target.name and kwargs.get("dir_fd") is not None:
             raise OSError("rollback unlink failed")
         original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr("biohub.training_history._fsync_directory", fail_first_fsync)
-    monkeypatch.setattr(Path, "unlink", fail_target_unlink)
+    monkeypatch.setattr(os, "fsync", fail_parent_fsync)
+    monkeypatch.setattr(os, "unlink", fail_target_unlink)
     with pytest.raises(TrainingHistoryError, match="was quarantined"):
         atomic_write_json(target, {"complete": True})
     assert not target.exists()
