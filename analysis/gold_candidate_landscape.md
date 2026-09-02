@@ -1,6 +1,6 @@
 # Biohub gold candidate landscape
 
-Updated: 2026-08-30 18:45 JST
+Updated: 2026-09-02 14:50 JST
 Scope: read-only public evidence and the existing experiment ledger. This is a
 research/prioritisation note, not approval to push or submit a Kaggle notebook.
 
@@ -20,11 +20,13 @@ research/prioritisation note, not approval to push or submit a Kaggle notebook.
   followed by missed detections (`~+0.016`). Division has a large mathematical
   ceiling (`~+0.096` on eval-36) but every rule-only or old-model selector has
   failed the precision/generalisation gates.
-- **No candidate may be scored for adoption until the E23 notebook-to-local
-  parity contract is complete.** In particular, E23 all-node centroid
-  refinement gave a public-four mechanism delta of `+0.012884`, but that is an
-  in-sample diagnostic, is already part of E23, and does not validate the
-  currently incomplete local port.
+- The E23 notebook-to-local public-four parity prerequisite was cleared at
+  commit `022222b79a10df4908ee46b7ccba6ea088aa255c`: submission bytes,
+  normalized graph, telemetry, and direct official score were identical to the
+  pinned reference. This is a code-path prerequisite, not adoption evidence;
+  public-four remains in-sample and no eval-36 candidate score has been read.
+  E23 all-node centroid refinement gave a public-four mechanism delta of
+  `+0.012884`, but it is already part of E23 and cannot be counted again.
 - The first bounded candidate remains the separately designed structural
   twin-only rewire experiment. This note deliberately does not duplicate its
   detailed algorithm. The next independent lever is the frozen public association
@@ -151,7 +153,8 @@ tie-breaker, not a global veto. Existing public run:
 ## What the remaining score can plausibly come from
 
 All ceilings below are diagnostics, not additive promises. They were measured
-on the older dual-seed eval graph and must be re-counted after E23 parity.
+on the older dual-seed eval graph and must be re-counted on sealed E23 eval-36
+artifacts after the image and generation gates are READY.
 
 | Lever | Diagnostic ceiling | Plausible next single-factor delta | Existing negative evidence / constraint |
 |---|---:|---:|---|
@@ -159,7 +162,7 @@ on the older dual-seed eval graph and must be re-counted after E23 parity.
 | Detection | about `+0.016` from 127 missing-endpoint edges | `+0.003` to `+0.008` | threshold `0.96875 -> 0.9375` added 0.7% nodes but only `+0.0007` recall and score `-0.0015`; E20 local hard-window gain reversed from base2 `0.919` to LB `0.906`. Simple thresholding or unconstrained fine-tuning is closed. |
 | Retention / node budget | observed 2.5% node-count movement is worth only about `+0.0023` through the adjustment term alone | `0` to `+0.003` | `.931 -> .933` changed SDW and bidirectional weight together for only `+0.002`; the alleged `.937` SDW80 run is actually `0.930`. Retention cannot supply the `+0.014` anchor-to-target gap by itself. |
 | Division | eval-36 perfect-division headroom about `+0.096`; rule-only realistic much smaller | rule-only `0..+0.004`; learned structured head `+0.006..+0.020` | safe-div widening gave `+0.0036` on eval-12 but only `+0.0016` on eval-24, median negative, worst around `-0.02`; CNN/GBDT/forward/reverse probability selectors all missed their rank gates; oversampling left TP unchanged. |
-| Centroid localisation | public-four Phase 2 mechanism delta `+0.012884` | **no remaining delta: already in E23** | exact raw public-four score `0.8958347798 -> 0.9087191654`; in-sample only, and the E23 local port is not yet parity-complete. Do not double-count it as a candidate. |
+| Centroid localisation | public-four Phase 2 mechanism delta `+0.012884` | **no remaining delta: already in E23** | exact raw public-four score `0.8958347798 -> 0.9087191654`; in-sample only, with the E23 public-four parity prerequisite now complete. Do not double-count it as a candidate. |
 
 The official metric explains the asymmetry: an association correction can
 remove an FP and FN while adding a TP, whereas node shedding is attenuated by
@@ -207,13 +210,16 @@ Therefore:
 
 ## Information-value experiment queue
 
-### Hard prerequisite: E23 parity (not an experiment result)
+### Cleared hard prerequisite: E23 public-four parity (not an experiment result)
 
-Before reading any candidate score, require exact agreement between the E23
-notebook reference and local port for node IDs, rounded coordinates, directed
-edges, forks, official inputs/results, and telemetry. The Phase 2 centroid delta
-may be recorded as mechanism evidence but cannot waive this gate. Every arm
-below is invalid if parity or on/off identity fails.
+Exact agreement between the E23 notebook reference and local port for node IDs,
+rounded coordinates, directed edges, forks, official inputs/results, and
+telemetry was demonstrated at commit
+`022222b79a10df4908ee46b7ccba6ea088aa255c`, as recorded in
+`analysis/experiment_ledger.md`. The Phase 2 centroid delta remains mechanism
+evidence only. Every arm below is still invalid if its frozen prerequisite
+receipt is missing, its eval-36 generation drifts from that reviewed code path,
+or its on/off identity fails.
 
 ### 1. Structural twin-only rewire, bounded on/off
 
@@ -305,12 +311,13 @@ belong to `analysis/steal_twin_design.md` and are intentionally not repeated.
 
 ## Priority decision
 
-After E23 parity, run the bounded structural candidate first, then the ranker.
-Those are low-runtime, graph-level tests aimed at the largest measured error
-mass. SDW isolation is useful only to decide whether the `.933` detection axis
-should be carried forward; it is not expected to reach gold. If association
-tests fail, test consensus detection before paying the higher implementation
-and validation cost of a learned division head.
+With the E23 public-four parity prerequisite cleared, run the bounded structural
+candidate first after the frozen eval-36 image set and label-blind harness are
+READY, then the ranker. Those are low-runtime, graph-level tests aimed at the
+largest measured error mass. SDW isolation is useful only to decide whether the
+`.933` detection axis should be carried forward; it is not expected to reach
+gold. If association tests fail, test consensus detection before paying the
+higher implementation and validation cost of a learned division head.
 
 Do not queue more motion smoothing, scalar ILP weights, raw detection-threshold
 sweeps, checkpoint rollback, or unconstrained short-track retention: the ledger
