@@ -16,7 +16,7 @@ Status: **DESIGN_ONLY / HOLD_ARTIFACTS_AND_REMAINING_TRAIN**
 
 > 1-to-1 association 用 head が第二娘へ確率質量を割けない場合でも、凍結済み
 > encoder 表現には division を識別する情報が残っており、二娘を同時に見る
-> permutation-invariant head は、幾何だけより高い動画外 precision で真の
+> permutation-invariant head は、full-stack outer-excluded評価で幾何だけより高いprecisionで真の
 > `(P,{A,B})` を順位付けできる。
 
 本候補は現行 `twin_only_v1` をそのまま置換しない。最初の production 接続は、
@@ -59,7 +59,8 @@ calibration は前段 gate であって公式 graph metric の代用ではない
   `12f6881ee3620a831697ca098ff8f48e687a24225f4e048b538deec3562fe771`
   (legacy epoch 400)、secondary は
   `9bac2fa0dadc4a6fc1899e0caf187f4b553e0a7cd90ba1261a68b35ffe9e305f`
-  (legacy epoch 400) である。v1 の feature source は primary 一個に固定する。
+  (legacy epoch 400) である。legacy診断は前者一個、promotionは同じprimary architectureの
+  outer-excluded checkpointをfoldごとに一個使い、secondary featureは混ぜない。
 - 既存 tiny patch CNN は raw `(t,t+1)` patch を二 channel 入力にし、
   4-fold video-grouped CV を行うが、parent-centered binary classification であり、
   二娘 relation を陽に入力しない。既存 division-window fine-tune は全モデルを
@@ -103,8 +104,9 @@ top-level inventory（GEFF/Zarr の内部 array を開かない）では次の�
   `44b6/6bba = 18/18`。stemだけのset照合ではpaired 36本、GEFF-only 5本、Zarr-only 0本である。
   全 train inventoryでも remaining-train の complete paired corpusでもない。
   この監査では GEFF node/edge/GT metadata、Zarr array/attribute を読んでいない。
-- `outputs` にある raw GEFF は public-four diagnostic 4 本だけで、remaining-train raw prediction
-  bundle はない。public submission/stats/score CSV は本設計の入力として読んでいない。
+- `outputs` にある raw GEFF は合計40 roots（public-four 4 + sealed evaluation 36）で、
+  remaining-train raw prediction bundle はない。これはpath/root inventoryだけの確認で、sealed
+  GEFF/GTやpublic/sealed submission/stats/score CSVは本設計の入力として読んでいない。
 - 上記 DeepCenter checkpoint/manifest はある（checkpoint 37,876,911 bytes、manifest SHA
   `1eedc1af72b10c464c6995013075310510b6f6e634450ff2bc170c67b89ce911`）が、primary
   `12f...`、secondary `9bac...` の checkpoint bytes は見つからない。
@@ -134,6 +136,34 @@ top-level inventory（GEFF/Zarr の内部 array を開かない）では次の�
 従って frozen feature tap は **SOURCE_API_VERIFIED / RUNTIME_BYTES_UNVERIFIED**、学習開始は
 **HOLD_ARTIFACTS_AND_REMAINING_TRAIN** である。コードを推測して実装したり、別 checkpoint
 や sealed evaluation data で穴埋めしない。
+
+### 2.3 Upstream provenance blocker と promotion grade
+
+既知primary epoch-400 checkpointと既存raw predictionsには、学習stem manifest、split、各stemを
+除外したOOF checkpoint/featureの実artifactがない。primary encoder/detector/association stackが
+全199 train videosを見た可能性を排除できない。このcheckpointからremaining videoのraw graphや
+featureを作り、headだけをvideo-grouped CVしても、validation videoはupstream stackに対して
+未接触とはいえない。
+
+従ってこのlegacy stack上の結果は状態を
+`DIAGNOSTIC_ONLY_LEGACY_UPSTREAM_EXPOSURE_UNKNOWN` に固定する。「video-out」、OOF generalization、
+promotion-ready、held-out改善と呼ばず、G4 promotionやsealed evaluation entryに使わない。
+
+promotion gradeには、固定outer foldごとに次のfull-stack artifactを要求する。
+
+1. `upstream_outer_k` checkpointはouter-val全stemとそのGT/画像/patch/cache/gradientを一度も見ず、
+   outer-trainだけ（またはcompetition trainを含まないhash-pinned external pretrain）から作る;
+2. outer-val raw GEFF、pair-context features、association/detection signalsはそのcheckpointだけで生成;
+3. checkpoint training-stem manifest、input/code/config/seed/history/hash、open-file receiptが exclusionを
+   証明し、単なるfilename宣言でなくloader実績と一致する;
+4. outer-train用head featuresも同じ `upstream_outer_k` distributionから作る;
+5. final upstream checkpointはremaining-trainだけから新規作成し、sealed evaluationを完全除外する。
+   legacy all-train checkpointのwarm startは、warm-start自身がouter/sealed stemを見ていれば不可。
+
+許容する取得路は、上記5 outer-excluded checkpoint/raw/feature bundleをprovenance付きで取得するか、
+同じsplitでupstream stackを再学習することだけである。後者は既知約900 GPU-hour/full 400-epoch
+規模から現quotaでは非現実的なので、budget gateを通らなければHOLDする。full-stack exclusionが
+証明できない限り、以下のnested CVは実装健全性のdiagnosticに留まる。
 
 ## 3. Tuple と feature の厳密な意味
 
@@ -176,8 +206,9 @@ head 自体には `Q` を渡さず、「donor を切って安全か」という�
    envelope で、現行 twin structural 上限より広い。
 
 `deployment_universe_v1` は、同じ post-safe-division graph、同じ frozen configで現行
-`plan_twin_only_v1` が structural eligibility、DeepCenter veto、conflict/cap 前後の immutable
-recordsとして列挙する exact ST-R2 eligible tupleだけである。OOF official graph、candidate arm、
+`plan_twin_only_v1` の structural eligibilityとDeepCenter vetoを通過し、conflict/frame-cap/video-capを
+かける前のimmutable recordとして列挙するexact ST-R2 eligible tupleだけである。resolved
+planはその部分集合として別hash/countを持つ。OOF official graph、candidate arm、
 runtime/RSS、約200動画外挿はこの universe だけを使う。現行の parent `<=8 um`、sister
 `5.5..11 um`、two-successor、non-synthetic、donor条件を広げない。head は exact eligible setを
 threshold gateし、同じcap内でrankするだけである。
@@ -196,9 +227,10 @@ fallback、missing tupleを単なるreject扱い、data依存のbaseline切替�
 
 ### 3.3 Frozen feature sidecar
 
-encoder は primary checkpoint のみを `eval()`、全 parameter
+encoder はactive primary-family checkpoint（legacy診断ではexact `12f...`、promotionでは該当
+`upstream_outer_k`）一個だけを `eval()`、全 parameter
 `requires_grad_(False)`、`torch.inference_mode()` で実行する。BatchNorm running state、
-dropout、checkpoint bytes を一切変えない。primary full checkpoint を
+dropout、checkpoint bytes を一切変えない。active full checkpoint を
 `submodule_strict` と称して部分 load せず、既存 model class へ全 key/shape/dtype strict load
 したあと encoder output を tap する。
 
@@ -229,33 +261,77 @@ feature extraction は raw prediction と同じ forward pass に同居させる�
 を再実行しない。これにより head-only candidate のために primary checkpoint を現行 ST-R3
 postprocess armへ新たに mount することを避ける。
 
+### 3.4 三つの座標stageを混ぜない
+
+同じnode IDに三種類の座標を持ち、schema fieldを省略しない。
+
+- `tap_zyx_voxel`: downsample済みdetector座標で `_index_features` がinteger/clampして読む位置。
+  featureとdetection logitのprovenance専用で、物理geometryやGT matchingに使わない。
+- `planner_zyx_um`: E23 all-node centroid refinement後、safe division後、twin planner直前の物理座標。
+  label envelope/deployment candidate列挙、headのdistance/vector/midpoint feature、remaining-GTへの
+  direct label assignmentはこれだけを使う。
+- `final_zyx_voxel/um`: twin mutation、prune/short-track、linefit後、CSV丸め前後の座標。
+  official edge/division scoringと最終graph deltaだけに使い、head inputへ逆流させない。
+
+sidecarは `tap_zyx`、planner artifactは `planner_zyx`、arm receiptはlinefit前後とCSV丸め後の
+`final_zyx` hashを持つ。node IDごとに各stageの座標と変換scaleをjoinし、stage名のない `z,y,x`
+fieldを禁止する。label builderがplanner座標以外を受けたらfailし、official scorer inputはfinal
+CSV/graph以外を拒否する。
+
 ## 4. Label contract と sparse-GT 防御
 
-予測 node と GT node は、動画・frame ごとに物理 7 um gate の one-to-one assignment を行う。
-label builder は公式 scorer の matching field を再利用してよいが、公式 metric codeを変更せず、
-matching source/gitlink/hashを manifest に pin する。label は三値
-`positive / certified_negative / ignore` で、unmatched を負例にしない。
+予測 node の `planner_zyx_um` とGT nodeは物理7 um gateでone-to-one assignmentするが、単一frame
+matchingだけでlabelを確定しない。公式division scorerは各GT forkについて
+`grandparent -> divider -> children -> grandchildren` の局所windowを独立rematchし、pred forkの
+predecessorもparent-side、pred branchのsuccessorもdaughter-side evidenceにできる。従って一frame
+ずれやlocal rematchingで公式TPになり得るtupleを安易なnegativeにしない。
+
+各endpoint mappingは次の全contextで同一でなければならない。
+
+1. full-graph distance matching;
+2. tuple時刻と交差し、endpointのいずれかが7 um内にある全GT division local window;
+3. GT divider時刻 `t-1,t,t+1` のparent/child/grandchild role context;
+4. counterfactual `P->{A,B}` graphを公式 `score_divisions` へ渡したlocal candidate context。
+
+各context/roleでchosen distance `<=7 um`、pred->GTとGT->predの相互best、second-best minus best
+`>=1.0 um` を要求する。second candidateがない場合はmarginを`+inf`と記録する。mapping、role、
+nearest/second distance、marginが一contextでも変わる、またはrelevant context列挙が空/不完全なら
+ignoreとする。matching source/gitlink/hashと公式window enumerator hashをmanifestにpinし、公式
+codeは変更しない。labelは三値 `positive / certified_negative / ignore` で、unmatchedを負例にしない。
 
 ### Positive
 
-`P,A,B` がそれぞれ異なる GT node `p,a,b` に一意 match し、GT directed edge が
+primary supervised positiveを `direct_fork_positive` と呼ぶ。`P,A,B` がそれぞれ異なるGT node
+`p,a,b` に上記全contextで一意matchし、GT directed edge が
 `p->a` と `p->b` の両方を持ち、`outdegree_GT(p)=2` のときだけ positive とする。
 娘順は無視する。同一 GT fork から複数 predicted tuple が positive になる場合は、学習 weight
 を `1 / positive_tuples_for_gt_fork` とし、一つの容易な fork が loss を支配しない。
 
+別field `official_window_recoverable` はcounterfactual final graphを公式scorerへ通し、そのtupleの
+pred forkがGT division TP pairingに寄与した場合だけtrueにする。one-frame shiftやgrandchild fallback
+により `direct_fork_positive=false, official_window_recoverable=true` はあり得るが、これをprimary
+common-parent labelへ混ぜず診断/negative vetoにだけ使う。label-envelopeの「direct fork recall」と
+最終graphの「official division TP/recall」は別field/表/plotにし、相互変換しない。
+
 ### Certified negative
 
-`P,A,B` が一意 match し、少なくとも片方の娘対応 node が GT 上で別の明示 parent を持つ場合
-だけ negative とする。具体的には次のいずれかである。
+`P,A,B` が上記全contextで一意・同一roleへmatchし、`official_window_recoverable=false`、かつ
+少なくとも片方の娘対応 node がGT上で別の明示parentを持つ場合だけnegativeとする。具体的には
+次のいずれかである。
 
 - `p->a` は真だが `pred_GT(b)=q != p`（one-true-child impostor）;
 - `p->b` は真だが `pred_GT(a)=q != p`;
 - `pred_GT(a)!=p` かつ `pred_GT(b)!=p` で、両方の predecessor が明示される;
 - positive fork の一方を保ち、同 frame の別 parent の明示 child と交換した wrong-sibling tuple。
 
-GT node が predecessor を持たない、prediction/GT のいずれかが unmatched、assignment が同率、
-GT local topology が malformed、または false child の異なる parent を証明できない tuple は
-すべて ignore とする。GT `outdegree=0/1` だけを根拠に「division でない」としない。
+GT nodeがpredecessorを持たない、prediction/GTのいずれかがunmatched、uniqueness margin未達、
+context間mapping/role不一致、counterfactualが別時刻GT divisionを回収し得る、GT local topologyが
+malformed、またはfalse childの異なるparentを証明できないtupleはすべてignoreとする。GT
+`outdegree=0/1`だけを根拠に「divisionでない」としない。
+
+head labelは追加する `P->B` のcommon-parent妥当性だけを扱い、donor edge `Q->B` removalのedge
+損失、安全性、QのGT対応をmodel化しない。従って分類precisionが高くてもpromotionできず、実際の
+remove+add、downstream prune/linefit、公式window rematchingを含むG4 full-graph deltaが決定的である。
 
 ### Hard-negative sampling
 
@@ -287,6 +363,8 @@ remaining videos を単位とする outer 5-fold CV を一回だけ作る。fram
 横断させない。同一 stem 由来の raw prediction、augmentation、再抽出、primary/secondary seed
 variant は全て同じ group に置く。もし stem を超える embryo/recording family ID が metadata に
 存在するなら、それを group key とし、未取得のまま stem 独立を仮定しない。
+このsplitをupstream model trainingより前にfreezeし、outer exclusion checkpointのtraining manifestへ
+入力する。headだけがstemを除外したlegacy CVを「video-out」と表現しない。
 
 fold assignment は label 作成後、remaining GT だけを用いて次の vector を greedy snake-draft
 で均衡化する。
@@ -309,6 +387,13 @@ fold 数を結果後に変えない。
 encoder feature `f_P,f_A,f_B`、各 node の detection logit、既存 forward/reverse association
 signal、物理 relation だけ。lineage ID、dataset ID、GT degree、GT match distance、label stratum、
 ST-R2 accept/reject reason は model 入力にしない。
+encoder featureは `tap_zyx` 由来、全geometry scalar/vectorは `planner_zyx_um` 由来に固定し、
+tap/raw/final座標からgeometryを再計算しない。
+
+public scoring APIは最初に `canonicalize_children` を呼び、`node_id(A)<node_id(B)` へfeature、座標、
+logit、maskをまとめて並べ替える。node IDは並替えにだけ使いtensorへ入力しない。内部modelも順序に
+依存しないよう、child-specific branchには同じweight/functionを適用し、その後はcommutative relation
+だけを使う。
 
 ```text
 node(z) = Linear(d -> 64)(LayerNorm(z)); SiLU; Linear(64 -> 64)
@@ -324,9 +409,9 @@ pair(P,{A,B}) = [
   (branch(P,A)+branch(P,B))/2,
   abs(branch(P,A)-branch(P,B)),
   branch(P,A)*branch(P,B),
-  sister dz,dy,dx,distance,
+  sister abs(dz),abs(dy),abs(dx),distance,distance^2,
   parent-to-child-midpoint dz,dy,dx,distance,
-  cosine(branch vectors), child-distance asymmetry
+  cosine(branch vectors), abs(child-distance difference)
 ]
 
 logit = Linear(32 -> 1)(Dropout(0.10)(SiLU(Linear(pair_dim -> 32))))
@@ -337,9 +422,15 @@ association signal が upstream tap で取得不能なら 0 埋めせず schema/
 `encoder+geometry` preregistrationへ戻る。feature と scalar は fold-train の finite mean/std で
 標準化し、その統計を fold checkpoint に含める。validation 統計を混ぜない。
 
-必須 unit property は娘交換の logit/gradient 一致、batch/order 不変、mask/NaN fail-closed、
-strict shape/schema、同一 input の bitwise repeat、encoder parameter/BN buffer の training 前後
-SHA 一致である。
+signed `A->B` sister vector、ordered concatenation、`distance(P,A)-distance(P,B)`、role-specific child
+weightを禁止する。plannerのmutation role（既存子A、donor子B）はmodel tensorと別metadataに保つ。
+
+必須gradient testはCPU float64 / dropout offで、同一parameter stateに対し
+`L1=forward(P,A,B).sum()` と `L2=forward(P,B,A).sum()` を別graphでbackwardする。logitとparameter
+gradientは`torch.equal`、`grad_P1==grad_P2`、`grad_A1==grad_B2`、`grad_B1==grad_A2`を
+`torch.equal`で要求する。CUDA float32 repeat testは同じ対応に `rtol=0, atol=1e-7` を許す。
+加えてbatch/order不変、mask/NaN fail-closed、strict shape/schema、同一inputのbitwise repeat、
+encoder parameter/BN bufferのtraining前後SHA一致を要求する。
 
 ## 7. Loss、optimizer、training-loss gate
 
@@ -379,17 +470,59 @@ optimizer-batch loss、fixed-train-probe loss、validation loss を同じ field/
 stem separation を PASS しなければ OOF metric を promotion 用に読まない。best と last は別保存、
 resume は optimizer/scheduler/scaler/RNG/sampler/history-prefix を完全復元する。
 
+`training_loss_gate.md` のbaseline progressionを満たす comparatorは
+`geometry_symmetric_mlp` に固定する。同じlabel universe、split、negative IDs/weights、optimizer
+budget、nested selectionを使い、encoder featureとassociation/detection signalだけを除く。個別runの
+selectorは最小validation weighted BCE（earliest tie）のまま、bundle advancement marginは実行前に
+次へ固定する。
+
+```text
+pooled untouched weighted_BCE(candidate) / weighted_BCE(comparator) <= 0.98
+video-macro AP delta                                             >= 0.000
+44b6 weighted-BCE ratio                                         <= 1.02
+6bba weighted-BCE ratio                                         <= 1.02
+44b6 video-macro AP delta                                       >= -0.02
+6bba video-macro AP delta                                       >= -0.02
+calibrated Brier delta                                           <= 0.000
+```
+
+weighted BCEはtemperature適用前raw logitsのuntouched outer predictionから同じweightで再計算し、
+primary advancementとする。AP/Brierとlineage条件を直交non-inferiorityとする。train loss、
+inner selector、outer bundle comparatorのfieldを共有しない。legacy stackでは同じ値をdiagnosticとして
+出してもadvancement PASSを名乗れない。
+
 ## 8. Nested OOF、calibration、threshold lock
 
-outer 5 folds の各 validation video は、その stem を一度も見ていない head で score する。
-calibration label の自己利用を避けるため、各 outer-train 内で 4-fold inner OOF logits を作り、
-その inner OOF だけで正の temperature `T` を weighted NLL 最小化する。head を outer-train 全体で
-固定 epoch refit し、outer-val logits に `logit/T` を適用する。`T` の探索範囲 `[0.25,4.0]`、
-optimizer、tie rule、inner split hash を事前固定する。outer-val label で T を fit しない。
+outer fold `k` ごとにepoch、temperature、thresholdの三つをouter-train内だけで完結してfreezeする。
+promotion-gradeではsection 2.3の `upstream_outer_k` を使い、outer-valはupstream/head/calibration/
+thresholdの全stackに対して未接触でなければならない。
+
+1. outer-trainをvideo-grouped/lineage-aware inner 4-foldに分ける。各inner headをmax 30 epochまで
+   学習し、epochごとのinner-val weighted BCE numerator/denominatorを保存する。
+2. 四つのinner-valをmicro集約したweighted BCEが最小の共通epochを `E_k` とする。同値は最早。
+   fixed-train progression、training-loss integrity、各inner coverageを満たさないepoch/runは選べない。
+3. 各inner modelのexact epoch `E_k` checkpointからinner OOF raw logitsを一回再生成する。そのinner
+   OOFだけでpositive temperature `T_k`をweighted NLL最小化する。範囲 `[0.25,4.0]`、同値は
+   `|log(T)|`が小さく、それも同じなら小さいTとする。
+4. `logit/T_k`をinner OOFへ適用し、固定grid
+   `{0.50,0.70,0.80,0.90,0.95,0.975}` をexact inner deployment graphsで比較する。section 9の
+   G4 constraintsをinner-train selection用にも同じ向きで適用し、成立する中でcombined score最大、
+   同値は高いthresholdを `tau_k` とする。成立thresholdがなければouter foldをscoreせずNO-GO。
+5. outer-train全体でheadをexact `E_k` epoch refitし、normalizationもouter-trainだけでfitする。
+   `(E_k,T_k,tau_k)` と全hashをmanifestへfreezeしてからouter-valを一回だけpredictし、immutable
+   raw/calibrated scoreとcandidate graphをsealする。
+6. G0.5の事前登録済みoracle firewall以外は、全outer predictionがsealされるまで
+   outer-val label/metricをhead学習・選択・閲覧processから読まない。seal後、一回だけ公式scoreし、
+   untouched outer predictionsを結合したものだけをG4とする。outer labelでcheckpoint、T、threshold、
+   radius、cap、feature、foldを選び直さない。
+
+legacy checkpointを使う同じ手順はhead-level nestingのdiagnosticであり、outer-valがfull-stack未接触
+ではないためG4とは呼ばず `D4_LEGACY_STACK` と記録する。
 
 OOF bundle はlabel envelope全candidateの
 `example_id,dataset,P,A,B,fold,raw_logit,calibrated_probability,label_or_ignore,
-gt_fork_group,in_deployment_universe,planner_record_id` を保存する。報告は次を含む。
+gt_fork_group,in_deployment_universe,planner_record_id,E_k,T_k,tau_k,upstream_checkpoint_sha256`
+を保存する。報告は次を含む。
 
 - pooled と video-macro PR-AUC / ROC-AUC、fold/lineage 別値;
 - weighted BCE、Brier、adaptive ECE (bin merge rule を事前固定)、reliability counts;
@@ -398,13 +531,12 @@ gt_fork_group,in_deployment_universe,planner_record_id` を保存する。報告
 - calibrated probability の fold drift と temperature;
 - exact deployment universeだけを production graphへ適用した per-video official raw counts と aggregate。
 
-deployment threshold は固定 grid
-`{0.50,0.70,0.80,0.90,0.95,0.975}` だけを nested OOF graph 上で評価する。下記 graph constraint
-を全て満たす threshold のうち aggregate combined score 最大、同値は高い threshold を選ぶ。
-grid 外補間、動画/lineage 別 threshold、結果後の radius/cap変更は禁止する。threshold 選択後、
-outer best epoch の中央値（earliest integer tie）で remaining 全データを `final_refit` し、parent CV
-bundle が pin する `fixed_epoch.pt` だけを deployment 候補にできる。final refit 自体に validation
-PASS を捏造しない。
+G4 PASS後のfinal stackはouter labels/outer metricをhyperparameter集約に使わない。五つのinner-derived
+selectionを数値昇順に並べ、`E_final=median(E_k)`、`T_final=median(T_k)`、
+`tau_final=median(tau_k)` とする（5個なので一意）。この集約式自体を実行前にpinする。
+remaining全データを `E_final` epochでfinal refitし、`T_final,tau_final`をそのまま使う。parent CV
+bundleがpinする `fixed_epoch.pt` だけをdeployment候補にでき、final refitにvalidation PASSを
+捏造しない。grid外補間、動画/lineage別threshold、outer結果後の変更は禁止する。
 
 ## 9. Go / no-go gates
 
@@ -412,13 +544,60 @@ PASS を捏造しない。
 
 ### G0 Artifact / feature tap
 
-- support source 全 bytes、manifest、primary checkpoint SHA が上記 pin と完全一致;
+- support source 全 bytesとmanifestが上記 pinに完全一致。legacy診断のみprimary checkpoint
+  SHAが `12f...`に一致し、promotionは各outer/final bundleが宣言する別checkpoint SHA、
+  同一architecture/source schema、training-stem provenanceに完全一致;
+- promotion gradeでは全 `upstream_outer_k` のtraining-stem exclusion/provenanceとouter-val raw/feature
+  generator hashがsection 2.3を満たす。legacy provenance unknownはdiagnostic-only;
 - strict load、feature shape/dtype/stride、pair-context/node-ID mapping、repeatability PASS;
 - train inventory と exclusion manifest set/hashが一致し、excluded GT/image/featureを一度も open
   していない open-file receipt がある;
 - label-envelope positive recall overall `>=0.95`、lineage別 `>=0.90`;
 - exact deployment tuple/feature coverage `==100%`、planner record set/order/hash一致;
 - encoder parameters と buffers の pre/post hash が同一。
+
+### G0.5 Pre-training exact deployment oracle ceiling
+
+head parameterを一つも学習する前に、remaining-trainだけでexact
+`deployment_universe_v1` のlabel-aware oracle censusを実行する。pre-conflict poolから、元のnode conflict、
+frame cap 1、video cap 2を満たす `none / singleton / compatible pair` の全selectionを列挙し、それぞれ
+pure remove/add、全downstream pass、`final_zyx`、公式 scorerを通す。candidate countだけやdirect fork
+labelからdivision TPを推定しない。
+promotion oracleでは各videoをそのvideoがouter-valになる `upstream_outer_k` raw/feature contextで一度だけ
+評価する。legacy contextのoracleはceiling diagnosticでありpromotion gateを解除しない。このoracleは
+remaining-train labelを読むため、G4の意味は「仮説クラス自体が未閲覧」ではなく、「各outer headの出力と
+`E_k,T_k,tau_k`がouter labelで選ばれていない」である。このconditional claimをG4 reportに明記する。
+
+全video alternativeのcartesian choiceについて、official aggregate combined scoreを最大化するexact
+branch-and-bound / dynamic programとcertificateを要求する。pruning boundはper-video official sufficient
+countsの区間から作ってよいが、最終winnerとrunner-upは実graphを `src/biohub/evaluate.py` 経由で再scoreし、
+official raw counts/summaryが一致しなければfailする。探索をexact完了できなければceiling unknownとして
+trainingを始めない。
+
+oracle実行は別process/ACLに隔離し、head training processには `PASS/NO-GO`、contract SHA、
+oracle artifact SHAだけを渡す。PASSの場合は詳細をG4 outer prediction全sealまで閲覧不可とし、
+NO-GOの場合は学習を開始しない。oracle後にcandidate generator、model、split、gate、margin、
+budgetを変えることは、詳細を見たか否かに関わらずv1を終了した新仮説とする。
+
+oracle artifactはpre/post pool hash、全alternative、cap/conflict、選択、direct-fork coverage、
+official division TP/FP/FN、adjusted-edge、combined、lineage/paired deltaを保存する。direct fork recallと
+official division TPは別欄にする。v1は `analysis/gold_candidate_landscape.md` に既に記録済みの
+E23 `0.924` からbuffered target `0.947` への `+0.023` gap（今回score artifactを読み直して
+再計算した値ではない）の全量を担当する候補なので、
+cap-compatible exact oracleが次を全て満たさなければ **NO-GO before training** とする。
+
+```text
+official aggregate combined-score delta >= +0.023
+official aggregate division_tp delta     >= +4
+official aggregate adjusted-edge delta   >= -0.002
+paired worst delta                       >= -0.002
+both lineage combined-score delta        >= 0
+```
+
+oracle winner/GT deltaをhead input、hard-negative priority、loss weight、threshold、resolver sortへ渡さない。
+oracleはceilingによる早期停止だけに使う。
+
+incremental `+0.003`だけを目的に下げる場合はv1を再利用せず、目的/gate/budgetを別versionで再登録する。
 
 ### G1 Label / split
 
@@ -435,6 +614,7 @@ PASS を捏造しない。
 
 ### G3 OOF discrimination / calibration
 
+- section 7のweighted-BCE comparator margin、Brier、両lineage non-inferiorityを全て満たす;
 - geometry-only symmetric MLP に対し video-macro AP の paired mean delta `>=+0.05` かつ
   video bootstrap 95% lower bound `>0`;
 - calibrated weighted BCE と Brier が uncalibrated より非劣化、adaptive ECE `<=0.05`;
@@ -444,8 +624,14 @@ PASS を捏造しない。
 
 ### G4 Remaining-train OOF official graph
 
-baseline は同じ held-out raw prediction、同じ postprocess、同じ code、同じ DeepCenter bytes で、
-head gate のみ off。candidate は `e23_two_child_twin_gate_v1` で、R2 motif/mutation/caps は同一。
+G4はsection 2.3のfull-stack outer exclusionを証明した五つのuntouched outer predictionsだけを
+結合する。各foldでbaseline/candidateは同じ `upstream_outer_k` raw prediction、同じpostprocess、
+code、DeepCenter bytesを使い、head gateだけoff/onにする。candidateは
+`e23_two_child_twin_gate_v1`で、R2 motif/mutation/capsは同一。outer-val graphはsection 8でfreezeした
+`E_k,T_k,tau_k`から一度だけ生成・sealし、公式score後に再生成しない。
+
+legacy all-train upstream上の同型比較は `D4_LEGACY_STACK` であり、下記数値を満たしてもG4 PASS、
+video-out、promotion evidenceにならない。
 
 ```text
 official aggregate division_tp delta        >= +4
@@ -463,6 +649,7 @@ R2 が列挙しなかった tuple の改善を主張しない。
 
 ### G5 Feasibility / sealed evaluation entry
 
+- section 12の101-fit / 6-context projectionとGPU/disk/oracle total budgetを全て満たす;
 - target-equivalent T4 run で candidate wall `<=1.10 * baseline wall`、追加 peak VRAM `<=1.0 GiB`、
   OOM 0、feature sidecar追加 diskをmanifest化;
 - より上位の ST-R3 feasibility 条件を弱めず、少なくとも mirrored timing の
@@ -473,6 +660,69 @@ R2 が列挙しなかった tuple の改善を主張しない。
   training/OOF phase は sealed evaluation GTを読まない。
 
 ## 10. Production R2 / R3 との整合
+
+### 10.1 必要なpre-conflict resolver boundary
+
+現在の `twin_plan_hook` はconflict/cap解決済み `TwinPlan` を観測するため、そこへhead scoreを足しても
+cap内rankingを変えられない。実装前にplannerを次のpure boundaryへ分解し、現行profileの出力identity
+をfixture/real parity artifactで証明する。
+
+```text
+enumerate_twin_preconflict(snapshot, frozen_cfg, deepcenter_evidence)
+    -> TwinEligiblePool
+score_two_child_pool(pool, pair_feature_sidecar, head_bundle)
+    -> ScoredTwinPool
+resolve_scored_twin_pool(scored_pool, threshold, frame_cap=1, video_cap=2)
+    -> TwinPlan
+apply_twin_only_v1_plan(nodes, edges, plan)
+    -> edges, TwinMutationSummary          # existing pure mutator unchanged
+```
+
+`TwinEligibleRecord` は `record_id,dataset,frame,P,Q,A,B,A2,B2`、元 `Q->B` metadata token、
+予定 `P->B`、全structural/DC evidence、既存完全 `structural_sort_key` を持つ。mutation roleは
+`A=existing child of P`, `B=child of donor Q` のまま保存するが、model inputは
+`canonicalize_children(P,A,B)` によりunorderedである。GT path/label/metric callbackはAPI引数にない。
+
+scoreがfiniteかつ `probability>=tau` のrecordだけを次でsortする。
+
+```text
+(-probability_float64_exact, structural_sort_key, record_id)
+```
+
+epsilon tieやrounded display値を使わず、同じIEEE-754値だけをtieとして下位keyへ進む。その順に
+既存 `{P,Q,A,B,A2,B2}` node conflict、frame cap、video capを適用する。threshold rejectをcap消費に
+数えない。resolverは入力を変更せず、同一pool/score/configからbitwise同一planを返す。
+
+新規counterは少なくとも次を固定順で持つ。
+
+```text
+two_child_preconflict_enumerated
+two_child_structural_rejected
+two_child_structural_eligible
+two_child_feature_covered
+two_child_scores_checked
+two_child_score_rejected
+two_child_score_passed
+two_child_conflict_rejected
+two_child_frame_cap_rejected
+two_child_video_cap_rejected
+two_child_accepted
+two_child_edges_planned_removed
+two_child_edges_planned_added
+```
+
+各境界はsource snapshot/config/DeepCenter evidence/pool/feature manifest/head checkpoint/normalization/
+threshold/scored pool/final planのcanonical JSON SHA-256を持ち、floatは`float.hex()`でserializeする。
+conservationは `preconflict_enumerated=structural_rejected+structural_eligible`、
+`structural_eligible=feature_covered=checked=score_rejected+score_passed`、
+`score_passed=conflict+frame_cap+video_cap+accepted`（first-reject排他的）、
+`accepted=planned_removed=planned_added`。不一致はmutation前failである。
+
+master off baselineはenumerator、sidecar、head、resolver、counter allocationを一切呼ばずexact E23
+byte identityを保つ。learned dry-runは全preflight/enumerate/score/resolve/hashを行うがmutationしない。
+current `twin_only_v1` profileは旧structural resolverを維持し、新profileだけがscored resolverを使う。
+
+### 10.2 Mutation / R3 boundary
 
 現行 R2 の pure mutation は `remove(Q->B); add(P->B)` の二操作、node不変、edge数不変、
 accepted `k` に対し symmetric difference `2k` である。新 head は planner が作った immutable
@@ -506,7 +756,8 @@ root CV manifest は最低限次を pin する。
 
 - superproject Git SHA/tree、dirty flag、official gitlink/HEAD/clean flag;
 - support source各file SHAとcanonical manifest SHA、feature-tap patch SHA;
-- primary frozen checkpoint bytes、strict state schema、epoch/config、feature schema;
+- active primary-family checkpoint bytesごとのSHA、strict state schema、epoch/config、feature schema、
+  training-stem manifest（legacy診断は `12f...`、promotionは5 outer + finalを個別にpin）;
 - train Zarr/GT/raw GEFF/sidecar canonical inventory SHA、exclusion manifest SHA;
 - candidate/label/split algorithm versionと全 config、physical scale;
 - outer/inner fold assignment、seed (`20260902` rootからrun/fold/epochへhash派生);
@@ -526,19 +777,58 @@ cacheを採用しない。GPU reductionでbitwise再現不能な場合は、許�
 行わず feature extractionを既存 inference forwardへpiggybackし、head trainingはcache上だけで
 あることだけである。
 
+promotion-gradeの必須work countを先に固定する。
+
+```text
+primary head:             5 * (4 inner + 1 outer) = 25 fits
+geometry symmetric MLP:  5 * (4 inner + 1 outer) = 25 fits
+no-association ablation:  5 * (4 inner + 1 outer) = 25 fits
+geometry logistic:        5 * (4 inner + 1 outer) = 25 fits
+primary final refit:                                  1 fit
+maximum total:                                      101 head fits
+```
+
+各fitは最大30 epoch。temperature fit、threshold grid、oracle graph alternativesはhead fit数に含めず
+別計測する。最初のG3/G4 decisionに必要なのはprimary+comparatorの50 fitsで、残りablationは前段
+PASS後だけ実行するが、最終総budgetには最初から含める。
+
+section 2.3の5 `upstream_outer_k` を使う場合、innerごとにencoder inferenceを繰り返さず、各outer
+contextでremaining全videoのraw/featuresを一度生成してreuseするため、最大 `5*N_remaining`
+video-checkpoint inference。final upstream用を加えると `6*N_remaining` である。異なるcheckpointの
+featureを同じsidecarとしてdeduplicateしない。upstream checkpoint自体の再学習は既知約900
+GPU-hour/checkpoint級で下記30 GPU-hour budget外であり、既存の真正outer-excluded artifactsがなければ
+promotion routeはHOLDする。
+
 storage とhead計算の事前式は次である。
 
 ```text
-feature_bytes ~= sum_over_pairs((N_source + N_target) * (2*d + scalar/id bytes))
+feature_bytes_per_context ~= sum_over_pairs((N_source + N_target) * (2*d + scalar/id bytes))
+promotion_feature_bytes  ~= sum_over_5_outer_contexts(feature_bytes_per_context)
 tuples_per_parent <= C(K,2) = 28 (K=8)
 head_activation_bytes <= chunk_size * pair_dim * 4 * safety_factor
 ```
 
 tuple tensor全体をmaterializeせずvideo/frame順にchunk (`4096` proposal) scoreする。Phase 0の1動画
 pilotで `N_nodes,d,tuples,sidecar bytes,extract wall,head wall,peak CPU RSS,peak CUDA allocated/reserved`
-を取り、10動画（両lineage、node-count decileを含む）で事前式を較正する。約200動画への外挿は
-総node/tuple count比例と動画固定costを分け、最大/p95/slowest、係数、残差を保存する。ローカル
-macOS `ru_maxrss`だけでtarget RAM PASSを出さない。
+を取り、10動画（両lineage、node-count decileを含む）で事前式を較正する。label envelopeとexact
+deployment universeのtuple数/wallを別々に測り、広いenvelope値をR2 production実行時間に流用しない。
+
+pilot後・どのfit/generationより前に次のhard total budgetをmanifestへ数値固定する。
+
+```text
+raw + pair-feature generation (all contexts) <= 24 T4 GPU-hours
+all 101 cached head fits + calibration         <=  6 T4 GPU-hours
+new GPU total                                  <= 30 T4 GPU-hours
+oracle/postprocess search                      <= 24 wall-hours on declared 8 CPU cores
+all pair-feature sidecars                      <= 100 GiB
+all new run artifacts incl. checkpoints/OOF    <= 120 GiB
+additional production peak VRAM                <= 1.0 GiB
+```
+
+projected totalが一つでも超える、exact oracle searchが完了しない、またはsource data込みdisk余裕が
+不足する場合、fold/candidate/contextを間引かずHOLDする。約200動画への外挿はexact deployment
+node/tuple count比例と動画固定costを分け、最大/p95/slowest、係数、残差を保存する。ローカルmacOS
+`ru_maxrss`だけでtarget RAM PASSを出さない。
 
 ## 13. 必須 ablation（探索順を固定）
 
@@ -560,15 +850,17 @@ radius/K/cap変更、broader orphan/steal mutationはv1 ablationに入れない�
 学習実装へ進む前に次が必要である。
 
 1. hash-pinned support-pack source treeとoffline wheels;
-2. exact primary checkpoint bytesとconfig、必要ならprovenanceだけのsecondary hash;
+2. legacy診断にはexact primary checkpoint bytes/config、promotionには5 outer-excluded upstream
+   checkpoint/raw/feature bundlesとfinal remaining-only upstream training route;
 3. remaining trainのcomplete Zarr + GT GEFF inventoryとsealed exclusion manifest;
-4. pinned baseline raw GEFFを再生成できるinference command/config;
+4. 各outer contextのpinned baseline raw GEFFを再生成できるinference command/config/provenance;
 5. initializedかつcleanなofficial submodule（read-only）;
 6. exact DeepCenter artifact/manifest（OOF graph integration時のみ）;
 7. upstream pair-context/node-ID mappingを確定するfeature-tap audit;
 8. `training_loss_gate.md` schema writer/verifier（文書には統合候補しかなく現コード未実装）;
 9. group metadata（同一embryo/recordingが複数stemなら必須）;
-10. target-class T4 runtime/RSS measurement手段とquota/wall宣言。
+10. target-class T4 runtime/RSS measurement手段とquota/wall宣言;
+11. exact pre-conflict resolver APIとpre-training cap-compatible official oracle implementation。
 
 一つでも欠ければ feature抽出・学習・公式metric読出しを開始しない。
 
@@ -589,29 +881,42 @@ sha256sum <support-pack>/src/biohub_tracking/models/temporal_unet.py \
   <support-pack>/scripts/predict_unet_transformer.py \
   <support-pack>/scripts/train_unet_transformer.py \
   <primary-checkpoint>
+uv run python scripts/validate_upstream_outer_provenance.py \
+  --split <outer-split-manifest.json> \
+  --outer-bundles <upstream-outer-bundle-root> \
+  --out <fresh-provenance-receipt.json>
 
-# Phase 1: label-blind raw prediction + feature extraction on remaining train only
+# Phase 1: label-blind raw prediction + pair-feature extraction for 5 outer contexts
 uv run python scripts/extract_two_child_features.py \
-  --train-images <remaining-images> --raw-geff <remaining-raw-geff> \
-  --support-pack <support-pack> --weights <primary-checkpoint> \
+  --train-images <remaining-images> \
+  --outer-upstream-bundles <upstream-outer-bundle-root> \
+  --support-pack <support-pack> \
   --exclude-manifest <sealed_evaluation_exclusion.json> \
-  --out <fresh-feature-dir> --network-disabled
+  --out <fresh-outer-raw-feature-dir> --network-disabled
 
 # Phase 2: labels/splits; excluded GT directory is not mounted/passed
 PYTHONPATH="src:official/src" uv run python scripts/build_two_child_dataset.py \
-  --features <fresh-feature-dir> --gt <remaining-gt-only> \
+  --features <fresh-outer-raw-feature-dir> --gt <remaining-gt-only> \
   --exclude-manifest <sealed_evaluation_exclusion.json> \
   --out <fresh-dataset-dir>
+
+# Phase 2b: exact pre-training deployment oracle; any ceiling miss stops here
+PYTHONPATH="src:official/src" uv run python scripts/census_two_child_deployment_oracle.py \
+  --dataset <fresh-dataset-dir> --outer-raw <fresh-outer-raw-feature-dir> \
+  --gt <remaining-gt-only> --deepcenter <exact-best.pt> \
+  --out <fresh-oracle-dir>
 
 # Phase 3: nested grouped CV + loss-gate artifact validation
 uv run python scripts/train_two_child_head.py \
   --dataset <fresh-dataset-dir> --split <split-manifest.json> \
+  --upstream-provenance <fresh-provenance-receipt.json> \
+  --oracle <fresh-oracle-dir>/oracle_manifest.json \
   --config configs/two_child_head_v1.json --out <fresh-cv-dir>
 uv run python scripts/validate_training_run.py <fresh-cv-dir>
 
-# Phase 4: OOF calibration, frozen threshold grid, held-out graph arms
+# Phase 4: OOF calibration, frozen threshold grid, untouched outer graph arms
 PYTHONPATH="src:official/src" uv run python scripts/evaluate_two_child_oof.py \
-  --cv <fresh-cv-dir> --raw-geff <remaining-raw-geff> \
+  --cv <fresh-cv-dir> --outer-raw <fresh-outer-raw-feature-dir> \
   --images <remaining-images> --deepcenter <exact-best.pt> \
   --out <fresh-oof-eval-dir>
 
