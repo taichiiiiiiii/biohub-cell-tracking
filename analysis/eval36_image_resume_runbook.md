@@ -142,6 +142,35 @@ non-blocking で取得し、別 downloader が所有中なら download 前に
 `FAIL class=lock` で拒否する。既存の manifest-size exact files は script に skip
 させる。
 
+### 2026-09-02 HTTP 429 safe-stop snapshot
+
+同一の `--jobs 1 --fail-fast` resume session は、次の不足 file
+`train/6bba_09961292.zarr/0/c/48/0/0/0` の取得で HTTP `429 Too Many Requests` を受け、
+`FAIL class=rate-limit` として fail-closed に停止した。session の終了コードは 1、
+最後の進捗行は
+`[3162/4942] ok=767 skip=2394 fail=1 cancel=0`、`not-started=1780` だった。
+停止後の `pgrep` では downloader/Kaggle child はともに 0 process である。
+
+停止後に exact final verifier を実行した結果は次のとおり。21/36 roots が complete、
+現在の partial root `6bba_09961292` は 59 files 不足、残り 14 roots はそれぞれ
+102 files 不足であり、合計不足数 `59 + 14 * 102 = 1,487` と一致する。失敗 file は
+書き込まれておらず、次の manifest-order missing も引き続き
+`train/6bba_09961292.zarr/0/c/48/0/0/0` である。
+
+| 状態 | 実測 |
+|---|---:|
+| 期待 | 3,672 files / 15,932,872,938 bytes |
+| manifest とパス・サイズ一致 | 2,185 files / 10,001,935,157 bytes |
+| 完全 root | 21 / 36 |
+| 不足 | 1,487 files / 5,930,937,781 bytes |
+| mismatch / extra / symlink | 0 / 0 / 0 |
+| `.kaggle-partial` / staging / ready | 0 / 0 / 0 |
+
+したがって状態は引き続き **NOT_READY** である。429 停止直後の即時再試行は行わず、
+十分な cooldown を置く。再開するときだけ、下記の既存 preflight を正確に再実行し、
+すべて PASS した後に固定 `EVAL36` の同一 `--jobs 1 --fail-fast` command を使う。
+単一 file probe を含む追加 request も cooldown 中は送らない。
+
 ## 実行前 preflight
 
 以下は repo root で実行する。認証情報の値を印字する `env`, `cat`,
@@ -364,6 +393,6 @@ PY
 parity、公式 metric の正しさは別ゲートである。本 runbook の完了から
 submission、kernel push/run、Git push/commit への暗黙の許可は発生しない。
 
-残留する外部 blocker は **Kaggle API に到達でき、現行認証と competition
-access/rate quota が有効な環境で、残り 8,640,559,056 bytes を取得すること**
-である。snapshot 時点でこれは未解消である。
+残留する外部 blocker は **十分な cooldown 後に Kaggle API に到達でき、現行認証と
+competition access/rate quota が有効な環境で、残り 5,930,937,781 bytes を取得すること**
+である。2026-09-02 snapshot 時点でこれは未解消であり、状態は **NOT_READY** である。
