@@ -202,6 +202,11 @@ transform for scored array path `0`, resulting in exactly finite positive
 exactly; the repository default-scale fallback cannot pass. The root GEFF
 metadata must explicitly contain numeric, finite, positive
 `estimated_number_of_nodes`, and it must equal the helper result exactly.
+The image root has exactly one metadata representation: Zarr v3 `zarr.json`
+or Zarr v2 `.zattrs`; coexistence is ambiguous and rejected. Axis names are
+explicitly either uppercase `T/Z/Y/X` (the real pinned Zarr v3 bytes) or the
+lowercase NGFF spelling `t/z/y/x`. Mixed case, reordering, missing spatial
+`type=space`, or missing `unit=micrometer` is rejected rather than inferred.
 
 ## CSV and official readout
 
@@ -244,6 +249,11 @@ reject, or completed eval36 creates the first no-clobber
 atomically retained under `scores/failed_<stage>/` and inventoried. Successful
 stage directories are built under same-filesystem temporary names and renamed
 once; existing targets, symlinks, and special files are refused.
+If the directory fsync after a no-replace rename fails, a file publication is
+retracted only when the pathname still names the exact installed inode. A
+stage publication is moved away from its success name into a unique
+`failed_<stage>-publish-*` quarantine. It is never reported as a successful
+stage.
 
 Each published stage contains canonical `INPUT_RECEIPT.json`,
 `PER_VIDEO.json`, `AGGREGATES.json`, `DELTAS.json`, `GATE.json`, and
@@ -269,7 +279,8 @@ PYTHONPATH="src:official/src" python scripts/st_r3_score_stage.py \
   --stage all
 ```
 
-The CLI writes one canonical result object. ERROR/REJECT is nonzero;
+The CLI writes one canonical result object. `HOLD_INTERFACE_INCOMPLETE` is
+`status="HOLD"` with exit code 3; ERROR has exit code 2 and REJECT is nonzero.
 EVAL12_PASS, EVAL24_PASS, and EVAL36_ADOPTION_CANDIDATE are zero. The adoption
 label authorizes no Kaggle operation.
 
@@ -288,9 +299,9 @@ label authorizes no Kaggle operation.
   demonstrate schema behavior only.
 - Synthetic official fixtures validate metric direction/counts but are not
   real eval12/eval24 results and must not be reported as candidate evidence.
-- Same-UID concurrent mutation cannot be excluded by a producer's check-return
-  sequence alone. The scorer is an independent consumer trust boundary: every
-  accepted ref and every unlocked GT file must be opened with no-follow
-  semantics, have one link, retain device/inode/stat identity while hashing,
-  and match its inventory both before and after scoring. This complements but
-  does not clear the supervisor's `HOLD_PROCESS_TREE_UNPROVEN`.
+- Same-UID mutation is checked at the independent consumer boundary: every
+  accepted ref and unlocked GT file is opened with no-follow semantics, has
+  one link, and retains device/inode/mode/UID/link/size/mtime/ctime identity
+  while hashing. GT receipts bind those identities and content hashes both
+  before and after scoring. This complements but does not clear the upstream
+  supervisor's `HOLD_PROCESS_TREE_UNPROVEN` for its own process tree.

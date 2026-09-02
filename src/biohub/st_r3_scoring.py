@@ -26,6 +26,7 @@ import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -227,6 +228,7 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def sha256_file(path: Path) -> str:
+    """Hash a file for non-trust-boundary callers."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -339,8 +341,24 @@ def _validate_ref(run_dir: Path, value: Any, label: str) -> tuple[dict[str, Any]
     return ref, path
 
 
-def _secure_file_identity(path: Path, label: str) -> tuple[int, str]:
-    """Hash one stable, single-link regular-file inode through O_NOFOLLOW."""
+def _stat_identity(value: os.stat_result) -> tuple[int, ...]:
+    """Return mutable inode fields used by secure read comparisons."""
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _secure_file_measure(
+    path: Path, label: str, *, capture_bytes: bool = False
+) -> tuple[int, str, dict[str, int], bytes | None]:
+    """Measure one stable single-link inode, optionally retaining its bytes."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags)
@@ -349,8 +367,11 @@ def _secure_file_identity(path: Path, label: str) -> tuple[int, str]:
             if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
                 raise ScoringFailure("HARDLINK_REFUSED", f"{label} must be a single-link regular file")
             digest = hashlib.sha256()
+            chunks: list[bytes] | None = [] if capture_bytes else None
             while chunk := os.read(fd, 1024 * 1024):
                 digest.update(chunk)
+                if chunks is not None:
+                    chunks.append(chunk)
             after = os.fstat(fd)
             path_after = path.lstat()
         finally:
@@ -359,19 +380,39 @@ def _secure_file_identity(path: Path, label: str) -> tuple[int, str]:
         raise
     except OSError as exc:
         raise ScoringFailure("ARTIFACT_READ_ERROR", f"{label}: {exc}") from exc
-    stable = (
-        before.st_dev == after.st_dev
-        and before.st_ino == after.st_ino
-        and before.st_size == after.st_size
-        and before.st_mtime_ns == after.st_mtime_ns
-        and after.st_nlink == 1
-        and path_after.st_dev == after.st_dev
-        and path_after.st_ino == after.st_ino
-        and path_after.st_nlink == 1
-    )
+    stable = _stat_identity(before) == _stat_identity(after) == _stat_identity(path_after)
     if not stable:
         raise ScoringFailure("HASH_DRIFT", f"{label} inode/stat changed while hashing")
-    return before.st_size, digest.hexdigest()
+    evidence = {
+        "device": before.st_dev,
+        "inode": before.st_ino,
+        "mode": before.st_mode,
+        "uid": before.st_uid,
+        "links": before.st_nlink,
+        "bytes": before.st_size,
+        "mtime_ns": before.st_mtime_ns,
+        "ctime_ns": before.st_ctime_ns,
+    }
+    return before.st_size, digest.hexdigest(), evidence, b"".join(chunks) if chunks is not None else None
+
+
+def _secure_file_identity(path: Path, label: str) -> tuple[int, str]:
+    """Hash one stable, single-link regular-file inode through O_NOFOLLOW."""
+    size, digest, _, _ = _secure_file_measure(path, label)
+    return size, digest
+
+
+def _secure_file_bytes(
+    path: Path, label: str, *, expected_sha256: str | None = None, expected_size: int | None = None
+) -> bytes:
+    """Read bytes and identity from the same stable O_NOFOLLOW descriptor."""
+    size, digest, _, data = _secure_file_measure(path, label, capture_bytes=True)
+    if (expected_sha256 is not None and digest != expected_sha256) or (
+        expected_size is not None and size != expected_size
+    ):
+        raise ScoringFailure("HASH_DRIFT", f"{label} bytes/hash differs from its pinned reference")
+    assert data is not None
+    return data
 
 
 def artifact_ref(run_dir: Path, path: Path) -> dict[str, Any]:
@@ -381,9 +422,11 @@ def artifact_ref(run_dir: Path, path: Path) -> dict[str, Any]:
     return {"path": rel, "bytes": size, "sha256": digest}
 
 
-def _read_json(path: Path, label: str) -> dict[str, Any]:
+def _read_json(
+    path: Path, label: str, *, expected_sha256: str | None = None, expected_size: int | None = None
+) -> dict[str, Any]:
     try:
-        data = path.read_bytes()
+        data = _secure_file_bytes(path, label, expected_sha256=expected_sha256, expected_size=expected_size)
         value = _strict_json_loads(data, label)
     except ScoringFailure:
         raise
@@ -397,11 +440,26 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
 
 def _fsync_directory(path: Path) -> None:
     try:
-        fd = os.open(path, os.O_RDONLY)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
         try:
+            before = os.fstat(fd)
+            if not stat.S_ISDIR(before.st_mode):
+                raise ScoringFailure("FSYNC_FAILED", f"not a directory: {path}")
             os.fsync(fd)
+            after = os.fstat(fd)
+            path_after = path.lstat()
         finally:
             os.close(fd)
+        if _stat_identity(before) != _stat_identity(after) or (
+            path_after.st_dev,
+            path_after.st_ino,
+            path_after.st_mode,
+            path_after.st_uid,
+        ) != (after.st_dev, after.st_ino, after.st_mode, after.st_uid):
+            raise ScoringFailure("FSYNC_FAILED", f"directory identity changed during fsync: {path}")
+    except ScoringFailure:
+        raise
     except OSError as exc:
         raise ScoringFailure("FSYNC_FAILED", f"cannot fsync directory {path}: {exc}") from exc
 
@@ -437,11 +495,35 @@ def _atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        temporary_stat = temporary.lstat()
         _rename_noreplace(temporary, path)
-        _fsync_directory(path.parent)
+        published_identity = (temporary_stat.st_dev, temporary_stat.st_ino)
+        try:
+            _fsync_directory(path.parent)
+        except Exception as exc:
+            try:
+                current = path.lstat()
+                if (current.st_dev, current.st_ino) != published_identity:
+                    raise ScoringFailure("PUBLICATION_IDENTITY_LOST", f"cannot safely retract {path}")
+                path.unlink()
+                try:
+                    _fsync_directory(path.parent)
+                except ScoringFailure:
+                    pass
+            except FileNotFoundError:
+                pass
+            except ScoringFailure:
+                raise
+            except OSError as rollback_exc:
+                raise ScoringFailure(
+                    "PUBLICATION_ROLLBACK_FAILED", f"cannot retract non-durable publication {path}: {rollback_exc}"
+                ) from rollback_exc
+            raise exc
     finally:
-        if temporary.exists():
+        try:
             temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 @dataclass(frozen=True)
@@ -475,9 +557,16 @@ def validate_submission_csv(
     bounds: Mapping[str, tuple[int, int, int, int]],
     *,
     full_generation: bool,
+    expected_sha256: str | None = None,
+    expected_size: int | None = None,
 ) -> ValidatedCsv:
     """Strictly validate the physical writer contract and graph invariants."""
-    raw = path.read_bytes()
+    raw = _secure_file_bytes(
+        path,
+        f"submission CSV {path.name}",
+        expected_sha256=expected_sha256,
+        expected_size=expected_size,
+    )
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ScoringFailure("MALFORMED_CSV", "UTF-8 BOM is forbidden")
     try:
@@ -631,7 +720,15 @@ def _validate_artifact_list(run_dir: Path, value: Any) -> set[str]:
     for index, item in enumerate(value):
         ref, path = _validate_ref(run_dir, item, f"artifacts[{index}]")
         if path.suffix == ".json":
-            _reject_public_four(_read_json(path, f"artifacts[{index}] JSON"), f"artifacts[{index}]")
+            _reject_public_four(
+                _read_json(
+                    path,
+                    f"artifacts[{index}] JSON",
+                    expected_sha256=ref["sha256"],
+                    expected_size=ref["bytes"],
+                ),
+                f"artifacts[{index}]",
+            )
         refs.append(ref)
     paths = [ref["path"] for ref in refs]
     _check_case_collisions(paths, "artifacts")
@@ -681,8 +778,8 @@ def _validate_current_source(run_dir: Path, manifest: Mapping[str, Any]) -> None
     bindings = _require_dict(manifest["source_bindings"], "source_bindings")
     _exact_keys(bindings, SOURCE_BINDING_KEYS, "source_bindings")
     actual = {
-        "evaluate_py_sha256": sha256_file(repo / "src" / "biohub" / "evaluate.py"),
-        "st_r3_scoring_py_sha256": sha256_file(Path(__file__).resolve()),
+        "evaluate_py_sha256": _secure_file_identity(repo / "src" / "biohub" / "evaluate.py", "current evaluate.py")[1],
+        "st_r3_scoring_py_sha256": _secure_file_identity(Path(__file__).resolve(), "current st_r3_scoring.py")[1],
     }
     for key, value in actual.items():
         if _require_sha(bindings[key], f"source_bindings.{key}") != value:
@@ -748,7 +845,7 @@ def _validate_current_source(run_dir: Path, manifest: Mapping[str, Any]) -> None
         raise ScoringFailure("OFFICIAL_DIRTY", "official submodule has tracked modifications")
     for rel, expected in source_hashes.items():
         _require_sha(expected, f"official.source_hashes.{rel}")
-        if sha256_file(official_dir / "src" / rel) != expected:
+        if _secure_file_identity(official_dir / "src" / rel, f"official source {rel}")[1] != expected:
             raise ScoringFailure("OFFICIAL_HASH_DRIFT", f"official source hash drift: {rel}")
 
 
@@ -788,8 +885,8 @@ def _validate_official_runtime_binding(sealed: SealedInputs) -> None:
 
 
 def _load_gt_inventory(run_dir: Path, ref_value: Any, expected_gt_dir: PurePosixPath) -> dict[str, Any]:
-    _, path = _validate_ref(run_dir, ref_value, "scoring_inputs.gt_inventory")
-    inventory = _read_json(path, "GT inventory")
+    ref, path = _validate_ref(run_dir, ref_value, "scoring_inputs.gt_inventory")
+    inventory = _read_json(path, "GT inventory", expected_sha256=ref["sha256"], expected_size=ref["bytes"])
     _exact_keys(inventory, frozenset({"schema_version", "stems", "records"}), "GT inventory")
     if inventory["schema_version"] != GT_INVENTORY_SCHEMA or inventory["stems"] != list(EVAL36):
         raise ScoringFailure("GT_INVENTORY_MISMATCH", "GT inventory schema/stems mismatch")
@@ -830,7 +927,7 @@ def _read_shape(zarr_root: Path, stem: str) -> tuple[int, int, int, int]:
 
 def _read_json_relaxed(path: Path, label: str) -> dict[str, Any]:
     try:
-        return _require_dict(_strict_json_loads(path.read_bytes(), label), label)
+        return _require_dict(_strict_json_loads(_secure_file_bytes(path, label), label), label)
     except ScoringFailure:
         raise
     except OSError as exc:
@@ -853,9 +950,9 @@ def _validate_fixture_feasibility_manifest(run_dir: Path | str, expected_sha256:
     run_dir = supplied_run_dir.resolve()
     expected_sha256 = _require_sha(expected_sha256, "generation_manifest_sha256")
     manifest_path = _resolve(run_dir, "feasibility/FEASIBILITY_PASS.json", "feasibility manifest")
-    if sha256_file(manifest_path) != expected_sha256:
+    if _secure_file_identity(manifest_path, "feasibility manifest")[1] != expected_sha256:
         raise ScoringFailure("MANIFEST_HASH_MISMATCH", "caller-provided manifest SHA does not match")
-    manifest = _read_json(manifest_path, "feasibility manifest")
+    manifest = _read_json(manifest_path, "feasibility manifest", expected_sha256=expected_sha256)
     _exact_keys(manifest, FEASIBILITY_KEYS, "feasibility manifest")
     if manifest["schema_version"] != FEASIBILITY_SCHEMA or manifest["state"] != "FEASIBILITY_PASS":
         raise ScoringFailure("STATE_MISMATCH", "exact feasibility schema/state required")
@@ -876,13 +973,23 @@ def _validate_fixture_feasibility_manifest(run_dir: Path | str, expected_sha256:
         != prereg["sha256"]
     ):
         raise ScoringFailure("MANIFEST_CHAIN_BROKEN", "generation does not chain to preregistration")
-    generation_value = _read_json(generation_path, "generation manifest")
+    generation_value = _read_json(
+        generation_path,
+        "generation manifest",
+        expected_sha256=generation_ref["sha256"],
+        expected_size=generation_ref["bytes"],
+    )
     _reject_public_four(generation_value, "generation manifest")
     if generation_value.get("state") != "GENERATION_SEALED":
         raise ScoringFailure("STATE_MISMATCH", "preceding generation manifest is not GENERATION_SEALED")
     if generation_value.get("preregistration_sha256") != prereg["sha256"]:
         raise ScoringFailure("MANIFEST_CHAIN_BROKEN", "generation file does not bind preregistration")
-    prereg_value = _read_json(prereg_path, "preregistration")
+    prereg_value = _read_json(
+        prereg_path,
+        "preregistration",
+        expected_sha256=prereg["sha256"],
+        expected_size=prereg["bytes"],
+    )
     _reject_public_four(prereg_value, "preregistration")
     if prereg_value.get("run_id") != manifest["run_id"]:
         raise ScoringFailure("MANIFEST_CHAIN_BROKEN", "run_id differs from preregistration")
@@ -911,8 +1018,16 @@ def _validate_fixture_feasibility_manifest(run_dir: Path | str, expected_sha256:
     if len(set(execution_paths)) != len(EXECUTION_KEYS):
         raise ScoringFailure("FIVE_ARM_INCOMPLETE", "the five execution receipts must have distinct paths")
     for key in EXECUTION_KEYS:
-        _, receipt_path = _validate_ref(run_dir, executions[key], f"executions.{key}")
-        _reject_gt_exposure(_read_json(receipt_path, f"executions.{key}"), f"executions.{key}")
+        receipt_ref, receipt_path = _validate_ref(run_dir, executions[key], f"executions.{key}")
+        _reject_gt_exposure(
+            _read_json(
+                receipt_path,
+                f"executions.{key}",
+                expected_sha256=receipt_ref["sha256"],
+                expected_size=receipt_ref["bytes"],
+            ),
+            f"executions.{key}",
+        )
     sealed = _require_dict(manifest["sealed_hashes"], "sealed_hashes")
     _exact_keys(sealed, SEALED_HASH_KEYS, "sealed_hashes")
     for key, value in sealed.items():
@@ -964,7 +1079,14 @@ def _validate_fixture_feasibility_manifest(run_dir: Path | str, expected_sha256:
         ref, path = _validate_ref(run_dir, item["ref"], f"canonical_submissions.{arm}.ref")
         if ref["path"] != f"generation/canonical/{arm}/submission.csv":
             raise ScoringFailure("SCHEMA_MISMATCH", f"canonical {arm} path is fixed")
-        parsed = validate_submission_csv(path, EVAL36, bounds, full_generation=True)
+        parsed = validate_submission_csv(
+            path,
+            EVAL36,
+            bounds,
+            full_generation=True,
+            expected_sha256=ref["sha256"],
+            expected_size=ref["bytes"],
+        )
         if (
             _require_sha(item["typed_graph_sha256"], f"canonical_submissions.{arm}.typed_graph_sha256")
             != parsed.typed_graph_sha256
@@ -1051,23 +1173,40 @@ def _verify_unlocked_gt(sealed: SealedInputs, stems: Sequence[str]) -> dict[str,
         )
         if actual_paths != expected_paths:
             raise ScoringFailure("GT_INVENTORY_MISMATCH", f"{stem}: GT tree paths differ from inventory")
+        identities: list[dict[str, Any]] = []
         for path in actual_files:
             rel = path.relative_to(sealed.run_dir).as_posix()
             record = records[rel]
-            actual_size, actual_sha = _secure_file_identity(path, f"{stem} GT {rel}")
+            actual_size, actual_sha, evidence, _ = _secure_file_measure(path, f"{stem} GT {rel}")
             if actual_size != record["bytes"] or actual_sha != record["sha256"]:
                 raise ScoringFailure("GT_HASH_DRIFT", f"{stem}: hash drift at {rel}")
-        receipt[stem] = _validate_metadata_binding(sealed, stem)
+            identities.append({"path": rel, "sha256": actual_sha, **evidence})
+        receipt[stem] = {**_validate_metadata_binding(sealed, stem), "file_identities": identities}
     return receipt
 
 
 def _parse_explicit_scale(zarr_root: Path, stem: str) -> tuple[tuple[float, float, float], Any, Path]:
-    root_meta = zarr_root / "zarr.json"
+    candidates: list[Path] = []
+    for candidate in (zarr_root / "zarr.json", zarr_root / ".zattrs"):
+        try:
+            candidate_mode = candidate.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(candidate_mode):
+            raise ScoringFailure("MALFORMED_IMAGE_METADATA", f"{stem}: root metadata is not a regular file")
+        candidates.append(candidate)
+    if len(candidates) != 1:
+        raise ScoringFailure(
+            "MISSING_EXPLICIT_SCALE", f"{stem}: exactly one of zarr.json or .zattrs root metadata is required"
+        )
+    root_meta = candidates[0]
     value = _read_json_relaxed(root_meta, f"{stem} root Zarr metadata")
-    attrs = value.get("attributes")
+    attrs = value if root_meta.name == ".zattrs" else value.get("attributes")
     if not isinstance(attrs, dict):
         raise ScoringFailure("MISSING_EXPLICIT_SCALE", f"{stem}: attributes missing")
-    ngff = attrs.get("ome", attrs)
+    if "ome" in attrs and "multiscales" in attrs:
+        raise ScoringFailure("MISSING_EXPLICIT_SCALE", f"{stem}: direct and ome-wrapped multiscales are ambiguous")
+    ngff = attrs["ome"] if "ome" in attrs else attrs
     if not isinstance(ngff, dict) or not isinstance(ngff.get("multiscales"), list) or len(ngff["multiscales"]) != 1:
         raise ScoringFailure("MISSING_EXPLICIT_SCALE", f"{stem}: exactly one multiscales entry required")
     multiscale = _require_dict(ngff["multiscales"][0], f"{stem} multiscales[0]")
@@ -1089,22 +1228,30 @@ def _parse_explicit_scale(zarr_root: Path, stem: str) -> tuple[tuple[float, floa
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_scale):
         raise ScoringFailure("MALFORMED_SCALE", f"{stem}: scale values must be numeric")
     axes = multiscale.get("axes")
-    expected_axis_names = ("t", "z", "y", "x") if len(raw_scale) == 4 else ("z", "y", "x")
-    if not isinstance(axes, list) or len(axes) != len(expected_axis_names):
+    valid_axis_names = (
+        (("T", "Z", "Y", "X"), ("t", "z", "y", "x")) if len(raw_scale) == 4 else (("Z", "Y", "X"), ("z", "y", "x"))
+    )
+    if not isinstance(axes, list) or len(axes) != len(valid_axis_names[0]):
         raise ScoringFailure("MALFORMED_SCALE", f"{stem}: explicit axes must match scale")
     axis_names = tuple(axis.get("name") if isinstance(axis, dict) else None for axis in axes)
-    if axis_names != expected_axis_names:
-        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: axes are not exact TZYX/ZYX")
+    if axis_names not in valid_axis_names:
+        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: axes are not exact uppercase or lowercase TZYX/ZYX")
     spatial_axes = axes[-3:]
-    if any(not isinstance(axis, dict) or axis.get("unit") != "micrometer" for axis in spatial_axes):
-        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: spatial axes must declare micrometer units")
+    if any(
+        not isinstance(axis, dict) or axis.get("type") != "space" or axis.get("unit") != "micrometer"
+        for axis in spatial_axes
+    ):
+        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: spatial axes must declare space/micrometer")
     if len(raw_scale) == 4:
         if not isinstance(axes[0], dict) or axes[0].get("type") != "time":
             raise ScoringFailure("MALFORMED_SCALE", f"{stem}: first axis must explicitly be time")
         spatial_raw = raw_scale[-3:]
     else:
         spatial_raw = raw_scale
-    scale = tuple(float(item) for item in spatial_raw)
+    try:
+        scale = tuple(float(item) for item in spatial_raw)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: scale values are not finite floats") from exc
     if len(scale) != 3 or any(not math.isfinite(item) or item <= 0 for item in scale):
         raise ScoringFailure("MALFORMED_SCALE", f"{stem}: scale must be finite and positive")
     return scale, raw_scale, root_meta
@@ -1393,29 +1540,52 @@ def evaluate_feasibility_thresholds(values: Mapping[str, Any]) -> dict[str, Any]
         raise ScoringFailure("SCHEMA_MISMATCH", "feasibility threshold inputs differ")
     numeric: dict[str, int | float] = {}
     for key, value in values.items():
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(float(value))
-            or value <= 0
-        ):
+        if type(value) is int:
+            valid = value > 0
+        elif type(value) is float:
+            valid = math.isfinite(value) and value > 0
+        else:
+            valid = False
+        if not valid:
             raise ScoringFailure("NONFINITE_GATE_INPUT", f"{key} must be finite and positive")
         numeric[key] = value
-    hidden_200 = numeric["target_eval36_charged_seconds"] * 200 / 36
+
+    # Fraction preserves exact integer boundaries and represents accepted
+    # finite floats by their exact binary value.  No conversion of a giant
+    # integer to float occurs during a gate comparison.
+    exact = {key: Fraction(value) for key, value in numeric.items()}
+    charged = numeric["target_eval36_charged_seconds"]
+    if type(charged) is int:
+        hidden_numerator = charged * 200
+        if hidden_numerator % 36 == 0:
+            hidden_200: int | float = hidden_numerator // 36
+        else:
+            try:
+                hidden_200 = hidden_numerator / 36
+            except OverflowError as exc:
+                raise ScoringFailure(
+                    "NONFINITE_GATE_INPUT", "hidden_200_seconds is not representable as a finite JSON number"
+                ) from exc
+    else:
+        hidden_200 = charged * 200 / 36
+    if type(hidden_200) is float and not math.isfinite(hidden_200):
+        raise ScoringFailure("NONFINITE_GATE_INPUT", "hidden_200_seconds is not representable as a finite JSON number")
     gates = [
         {
             "name": "local_runtime",
-            "pass": numeric["candidate_wall_gate"] * 4 <= 5 * numeric["baseline_wall_gate"],
+            "pass": exact["candidate_wall_gate"] * 4 <= 5 * exact["baseline_wall_gate"],
         },
-        {"name": "local_rss", "pass": numeric["candidate_rss_gate"] <= numeric["baseline_rss_gate"] + 1_073_741_824},
+        {
+            "name": "local_rss",
+            "pass": exact["candidate_rss_gate"] <= exact["baseline_rss_gate"] + 1_073_741_824,
+        },
         {
             "name": "target_memory",
-            "pass": numeric["target_candidate_aggregate_peak_gate"] * 5 <= 4 * numeric["target_declared_ram_bytes"],
+            "pass": exact["target_candidate_aggregate_peak_gate"] * 5 <= 4 * exact["target_declared_ram_bytes"],
         },
         {
             "name": "hidden_200",
-            "pass": numeric["target_eval36_charged_seconds"] * 200 * 5
-            <= numeric["target_declared_wall_seconds"] * 36 * 4,
+            "pass": exact["target_eval36_charged_seconds"] * 200 * 5 <= exact["target_declared_wall_seconds"] * 36 * 4,
         },
     ]
     return {"gates": gates, "hidden_200_seconds": hidden_200, "pass": all(gate["pass"] for gate in gates)}
@@ -1440,7 +1610,6 @@ def _verify_stage_manifest(
     path = _resolve(
         run_dir, (directory / "ARTIFACT_MANIFEST.json").relative_to(run_dir).as_posix(), f"{stage} manifest"
     )
-    _secure_file_identity(path, f"{stage} manifest")
     manifest = _read_json(path, f"{stage} manifest")
     _exact_keys(manifest, STAGE_MANIFEST_KEYS, f"{stage} manifest")
     if (
@@ -1470,6 +1639,7 @@ def _verify_stage_manifest(
     if not isinstance(artifacts, list):
         raise ScoringFailure("SCHEMA_MISMATCH", f"{stage}: artifacts must be array")
     paths: list[str] = []
+    artifact_refs: dict[str, dict[str, Any]] = {}
     for index, item_value in enumerate(artifacts):
         item = _require_dict(item_value, f"{stage}.artifacts[{index}]")
         _exact_keys(item, STAGE_ARTIFACT_KEYS, f"{stage}.artifacts[{index}]")
@@ -1478,6 +1648,7 @@ def _verify_stage_manifest(
         if not all(isinstance(item[key], str) and item[key] for key in ("media_type", "schema_type", "role")):
             raise ScoringFailure("SCHEMA_MISMATCH", f"{stage}: artifact metadata invalid")
         paths.append(item["path"])
+        artifact_refs[item["path"]] = ref
     _check_case_collisions(paths, f"{stage} artifacts")
     if paths != sorted(paths):
         raise ScoringFailure("SCHEMA_MISMATCH", f"{stage}: artifact list not sorted")
@@ -1488,7 +1659,16 @@ def _verify_stage_manifest(
     if actual_files != expected_files:
         raise ScoringFailure("ARTIFACT_SET_MISMATCH", f"{stage}: unmanifested/missing stage files")
     gate_path = directory / "GATE.json"
-    gate = _read_json(gate_path, f"{stage} gate")
+    gate_rel = gate_path.relative_to(run_dir).as_posix()
+    gate_ref = artifact_refs.get(gate_rel)
+    if gate_ref is None:
+        raise ScoringFailure("ARTIFACT_SET_MISMATCH", f"{stage}: gate is absent from artifact manifest")
+    gate = _read_json(
+        gate_path,
+        f"{stage} gate",
+        expected_sha256=gate_ref["sha256"],
+        expected_size=gate_ref["bytes"],
+    )
     if gate.get("status") != expected_state:
         raise ScoringFailure("STATE_MISMATCH", f"{stage}: gate state differs")
     return manifest, gate, path
@@ -1565,10 +1745,11 @@ def _temp_write(path: Path, data: bytes) -> None:
 
 
 def _artifact_item(run_dir: Path, temp_path: Path, final_path: Path, role: str, schema_type: str) -> dict[str, Any]:
+    size, digest = _secure_file_identity(temp_path, f"stage artifact {temp_path.name}")
     return {
         "path": final_path.relative_to(run_dir).as_posix(),
-        "bytes": temp_path.stat().st_size,
-        "sha256": sha256_file(temp_path),
+        "bytes": size,
+        "sha256": digest,
         "media_type": "text/csv" if temp_path.suffix == ".csv" else "application/json",
         "schema_type": schema_type,
         "role": role,
@@ -1578,11 +1759,20 @@ def _artifact_item(run_dir: Path, temp_path: Path, final_path: Path, role: str, 
 def _source_hashes(sealed: SealedInputs, subset_paths: Mapping[str, Path]) -> dict[str, Any]:
     bindings = sealed.manifest["source_bindings"]
     official = sealed.manifest["official"]
+    full_hashes: dict[str, str] = {}
+    for arm in ("baseline", "candidate"):
+        expected_ref = sealed.manifest["canonical_submissions"][arm]["ref"]
+        size, digest = _secure_file_identity(sealed.csv_paths[arm], f"{arm} full CSV source hash")
+        if size != expected_ref["bytes"] or digest != expected_ref["sha256"]:
+            raise ScoringFailure("HASH_DRIFT", f"{arm} full CSV changed after validation")
+        full_hashes[arm] = digest
     return {
-        "baseline_full_csv_sha256": sha256_file(sealed.csv_paths["baseline"]),
-        "baseline_subset_sha256": sha256_file(subset_paths["baseline"]),
-        "candidate_full_csv_sha256": sha256_file(sealed.csv_paths["candidate"]),
-        "candidate_subset_sha256": sha256_file(subset_paths["candidate"]),
+        "baseline_full_csv_sha256": full_hashes["baseline"],
+        "baseline_subset_sha256": _secure_file_identity(subset_paths["baseline"], "baseline subset CSV source hash")[1],
+        "candidate_full_csv_sha256": full_hashes["candidate"],
+        "candidate_subset_sha256": _secure_file_identity(subset_paths["candidate"], "candidate subset CSV source hash")[
+            1
+        ],
         "evaluate_py_sha256": bindings["evaluate_py_sha256"],
         "st_r3_scoring_py_sha256": bindings["st_r3_scoring_py_sha256"],
         "official_gitlink": official["gitlink"],
@@ -1617,12 +1807,24 @@ def _score_unlocked_stage(
             singleton = temp / "singletons" / arm / f"{stem}.csv"
             _temp_write(singleton, sealed.csvs[arm].header + sealed.csvs[arm].partitions[stem].raw)
             validate_submission_csv(singleton, (stem,), {stem: bounds[stem]}, full_generation=False)
+            _, singleton_sha, singleton_before, _ = _secure_file_measure(
+                singleton, f"{arm}/{stem} singleton before official read"
+            )
             scored = _score_one(singleton, sealed, stem, arm)
+            _, singleton_sha_after, singleton_after, _ = _secure_file_measure(
+                singleton, f"{arm}/{stem} singleton after official read"
+            )
+            if singleton_sha_after != singleton_sha or singleton_after != singleton_before:
+                raise ScoringFailure(
+                    "SUBMISSION_DRIFT_DURING_SCORE",
+                    f"{arm}/{stem}: singleton identity changed during official read",
+                    gt_read_started=True,
+                )
             geff_prefix = (sealed.gt_dir / f"{stem}.geff").relative_to(sealed.run_dir).as_posix() + "/"
             zarr_prefix = (sealed.gt_dir / f"{stem}.zarr").relative_to(sealed.run_dir).as_posix() + "/"
             scored["source_hashes"] = {
                 **hashes,
-                "singleton_csv_sha256": sha256_file(singleton),
+                "singleton_csv_sha256": singleton_sha,
                 "gt_geff_partition_sha256": canonical_digest(
                     [record for record in sealed.gt_inventory["records"] if record["path"].startswith(geff_prefix)]
                 ),
@@ -1700,8 +1902,32 @@ def _publish_stage(
     _temp_write(temp / "ARTIFACT_MANIFEST.json", canonical_json_bytes(manifest))
     if target.exists() or target.is_symlink():
         raise ScoringFailure("NO_CLOBBER", f"refusing to overwrite {target}")
+    temp_stat = temp.lstat()
     _rename_noreplace(temp, target)
-    _fsync_directory(target.parent)
+    try:
+        _fsync_directory(target.parent)
+    except Exception as exc:
+        # Never leave a success-named stage after its parent durability check
+        # failed.  Quarantine only the exact directory inode we installed.
+        try:
+            current = target.lstat()
+            if (current.st_dev, current.st_ino) != (temp_stat.st_dev, temp_stat.st_ino):
+                raise ScoringFailure("PUBLICATION_IDENTITY_LOST", f"cannot safely quarantine {target}")
+            failed = target.parent / f"failed_{_stage_name(stage)}-publish-{uuid.uuid4().hex}"
+            _rename_noreplace(target, failed)
+            try:
+                _fsync_directory(target.parent)
+            except ScoringFailure:
+                pass
+        except ScoringFailure:
+            raise
+        except OSError as quarantine_exc:
+            raise ScoringFailure(
+                "PUBLICATION_ROLLBACK_FAILED", f"cannot quarantine non-durable stage {target}: {quarantine_exc}"
+            ) from quarantine_exc
+        raise ScoringFailure(
+            "STAGE_DURABILITY_FAILED", f"stage publication was quarantined after parent fsync failure: {exc}"
+        ) from exc
     return target / "ARTIFACT_MANIFEST.json", manifest
 
 
@@ -1802,12 +2028,12 @@ def score_stage(
                 "stems": list(EVAL36),
                 "metadata": None,
                 "source_hashes": {
-                    "eval12_manifest_sha256": sha256_file(
-                        _score_dir(sealed.run_dir, "eval12") / "ARTIFACT_MANIFEST.json"
-                    ),
-                    "eval24_manifest_sha256": sha256_file(
-                        _score_dir(sealed.run_dir, "eval24") / "ARTIFACT_MANIFEST.json"
-                    ),
+                    "eval12_manifest_sha256": _secure_file_identity(
+                        _score_dir(sealed.run_dir, "eval12") / "ARTIFACT_MANIFEST.json", "eval12 manifest"
+                    )[1],
+                    "eval24_manifest_sha256": _secure_file_identity(
+                        _score_dir(sealed.run_dir, "eval24") / "ARTIFACT_MANIFEST.json", "eval24 manifest"
+                    )[1],
                     "feasibility_manifest_sha256": sealed.manifest_sha256,
                 },
                 "official_evaluation_calls": 0,
@@ -1919,14 +2145,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = score_all(args.run_dir, args.generation_manifest_sha256, invocation_argv=sys.argv)
     except ScoringFailure as exc:
+        is_hold = exc.code.startswith("HOLD_")
         result = {
             "schema_version": "biohub.st_r3.cli_result.v1",
-            "status": "ERROR",
+            "status": "HOLD" if is_hold else "ERROR",
             "code": exc.code,
             "message": str(exc),
         }
         sys.stdout.buffer.write(canonical_json_bytes(result))
-        return 2
+        return 3 if is_hold else 2
     sys.stdout.buffer.write(canonical_json_bytes(result))
     return 0 if result["status"] in {"EVAL12_PASS", "EVAL24_PASS", "EVAL36_ADOPTION_CANDIDATE"} else 1
 

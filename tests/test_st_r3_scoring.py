@@ -16,6 +16,70 @@ from biohub.evaluate import graph_from_rows, score_submission
 
 PRODUCTION_VALIDATE_FEASIBILITY = scoring.validate_feasibility_manifest
 
+REAL_44B6_12DFB391_ZARR_JSON = b"""{
+  "attributes": {
+    "multiscales": [
+      {
+        "version": "0.5",
+        "axes": [
+          {
+            "name": "T",
+            "type": "time",
+            "unit": "second"
+          },
+          {
+            "name": "Z",
+            "type": "space",
+            "unit": "micrometer"
+          },
+          {
+            "name": "Y",
+            "type": "space",
+            "unit": "micrometer"
+          },
+          {
+            "name": "X",
+            "type": "space",
+            "unit": "micrometer"
+          }
+        ],
+        "datasets": [
+          {
+            "path": "0",
+            "coordinateTransformations": [
+              {
+                "type": "scale",
+                "scale": [
+                  1.0,
+                  1.625,
+                  0.40625,
+                  0.40625
+                ]
+              }
+            ]
+          }
+        ],
+        "name": "0"
+      }
+    ],
+    "image_statistics": {
+      "quantiles": {
+        "0.0": 50.0,
+        "0.001": 70.0,
+        "0.01": 133.0,
+        "0.1": 306.99999999999994,
+        "0.9": 1453.0,
+        "0.99": 2247.0000000000123,
+        "0.999": 3065.0,
+        "1.0": 5262.0
+      }
+    }
+  },
+  "zarr_format": 3,
+  "consolidated_metadata": null,
+  "node_type": "group"
+}"""
+
 
 @pytest.fixture(autouse=True)
 def _reviewed_interface_test_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -768,6 +832,42 @@ def test_scale_requires_explicit_axes_and_micrometer_units(tmp_path: Path) -> No
     assert wrong_unit.value.code == "MALFORMED_SCALE"
 
 
+def test_real_pinned_zarr_v3_uppercase_axes_are_accepted(tmp_path: Path) -> None:
+    assert len(REAL_44B6_12DFB391_ZARR_JSON) == 1282
+    assert scoring.sha256_bytes(REAL_44B6_12DFB391_ZARR_JSON) == (
+        "22c3273ffc11029659e5647a62c2bfb1576d358c37d31d70e2735d6f48f2a4cc"
+    )
+    root = tmp_path / "44b6_12dfb391.zarr"
+    _write(root / "zarr.json", REAL_44B6_12DFB391_ZARR_JSON)
+    scale, raw, metadata_path = scoring._parse_explicit_scale(root, "44b6_12dfb391")
+    assert scale == (1.625, 0.40625, 0.40625)
+    assert raw == [1.0, 1.625, 0.40625, 0.40625]
+    assert metadata_path == root / "zarr.json"
+
+
+def test_scale_case_contract_v2_and_ambiguous_metadata_fail_closed(tmp_path: Path) -> None:
+    root = tmp_path / "v.zarr"
+    value = json.loads(REAL_44B6_12DFB391_ZARR_JSON)
+    axes = value["attributes"]["multiscales"][0]["axes"]
+    for axis in axes:
+        axis["name"] = axis["name"].lower()
+    _canonical(root / ".zattrs", value["attributes"])
+    assert scoring._parse_explicit_scale(root, "v")[0] == (1.625, 0.40625, 0.40625)
+
+    axes[1]["name"] = "Z"
+    _canonical(root / ".zattrs", value["attributes"])
+    with pytest.raises(scoring.ScoringFailure) as mixed_case:
+        scoring._parse_explicit_scale(root, "v")
+    assert mixed_case.value.code == "MALFORMED_SCALE"
+
+    axes[1]["name"] = "z"
+    _canonical(root / ".zattrs", value["attributes"])
+    _write(root / "zarr.json", REAL_44B6_12DFB391_ZARR_JSON)
+    with pytest.raises(scoring.ScoringFailure) as ambiguous:
+        scoring._parse_explicit_scale(root, "v")
+    assert ambiguous.value.code == "MISSING_EXPLICIT_SCALE"
+
+
 def test_atomic_file_and_directory_publication_are_race_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "target.json"
     real = scoring._rename_noreplace
@@ -804,6 +904,93 @@ def test_atomic_file_and_directory_publication_are_race_safe(tmp_path: Path, mon
         )
     assert raced_directory.value.code == "NO_CLOBBER"
     assert stage_target.is_dir() and not any(stage_target.iterdir())
+
+
+def test_fsync_failure_retracts_file_and_quarantines_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_fsync = scoring._fsync_directory
+    calls = 0
+
+    def fail_first(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise scoring.ScoringFailure("FSYNC_FAILED", "injected")
+        real_fsync(path)
+
+    monkeypatch.setattr(scoring, "_fsync_directory", fail_first)
+    target = tmp_path / "result.json"
+    with pytest.raises(scoring.ScoringFailure) as file_failure:
+        scoring._atomic_write(target, b"result")
+    assert file_failure.value.code == "FSYNC_FAILED"
+    assert not target.exists()
+
+    calls = 0
+    run = tmp_path / "run"
+    temp = scoring._temp_stage_dir(run, "eval12")
+    scoring._temp_write(temp / "GATE.json", scoring.canonical_json_bytes({"status": "EVAL12_PASS"}))
+    sealed = SimpleNamespace(run_dir=run, manifest={"run_id": "x"}, manifest_sha256="0" * 64)
+    with pytest.raises(scoring.ScoringFailure) as stage_failure:
+        scoring._publish_stage(
+            sealed,
+            "eval12",
+            {"path": "x", "bytes": 0, "sha256": "0" * 64},
+            temp,
+            "EVAL12_PASS",
+        )
+    assert stage_failure.value.code == "STAGE_DURABILITY_FAILED"
+    assert not (run / "scores" / "eval12").exists()
+    quarantines = list((run / "scores").glob("failed_eval12-publish-*"))
+    assert len(quarantines) == 1
+    assert (quarantines[0] / "ARTIFACT_MANIFEST.json").is_file()
+
+
+def test_stage_fsync_failure_emits_terminal_evidence_without_success_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, digest = _make_sealed_run(tmp_path)
+    _patch_fake_scoring(monkeypatch)
+    real_fsync = scoring._fsync_directory
+    injected = False
+
+    def fail_score_publication(path: Path) -> None:
+        nonlocal injected
+        if path == run / "scores" and not injected:
+            injected = True
+            raise scoring.ScoringFailure("FSYNC_FAILED", "injected stage durability failure")
+        real_fsync(path)
+
+    monkeypatch.setattr(scoring, "_fsync_directory", fail_score_publication)
+    with pytest.raises(scoring.ScoringFailure) as caught:
+        scoring.score_stage(run, digest, "eval12")
+    assert caught.value.code == "STAGE_DURABILITY_FAILED"
+    assert not (run / "scores" / "eval12").exists()
+    verdict = json.loads((run / "final" / "VERDICT.json").read_text())
+    assert verdict["status"] == "ERROR_AFTER_GT_READ"
+    assert verdict["first_failure"] == "STAGE_DURABILITY_FAILED"
+    assert verdict["partial_score_inventory"]
+
+
+def test_secure_read_detects_same_inode_mode_ctime_mutation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "sealed.bin"
+    payload = b"immutable" * 1024
+    path.write_bytes(payload)
+    original_mode = path.stat().st_mode & 0o777
+    real_read = scoring.os.read
+    changed = False
+
+    def mutate_after_read(fd: int, count: int) -> bytes:
+        nonlocal changed
+        chunk = real_read(fd, count)
+        if chunk and not changed:
+            changed = True
+            path.chmod(0o400 if original_mode != 0o400 else 0o600)
+            path.chmod(original_mode)
+        return chunk
+
+    monkeypatch.setattr(scoring.os, "read", mutate_after_read)
+    with pytest.raises(scoring.ScoringFailure) as drift:
+        scoring._secure_file_identity(path, "same-UID mutation")
+    assert drift.value.code == "HASH_DRIFT"
 
 
 def test_prior_stage_tamper_is_rejected_by_in_memory_anchor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -890,6 +1077,81 @@ def test_resource_integer_precision_and_non_nan_division_nonfinite_rejection() -
     with pytest.raises(scoring.ScoringFailure) as nonfinite:
         scoring._normalise_summary(summary, "inf")
     assert nonfinite.value.code == "NONFINITE_OFFICIAL_METRIC"
+
+
+@pytest.mark.parametrize("bad", [True, False, "1", None, math.nan, math.inf, -math.inf, 0, -1])
+def test_feasibility_threshold_malformed_values_fail_with_stable_code(bad: object) -> None:
+    values: dict[str, object] = {
+        "candidate_wall_gate": 1,
+        "baseline_wall_gate": 1,
+        "candidate_rss_gate": 1,
+        "baseline_rss_gate": 1,
+        "target_candidate_aggregate_peak_gate": 1,
+        "target_declared_ram_bytes": 1,
+        "target_eval36_charged_seconds": 36,
+        "target_declared_wall_seconds": 1,
+    }
+    values["candidate_wall_gate"] = bad
+    with pytest.raises(scoring.ScoringFailure) as caught:
+        scoring.evaluate_feasibility_thresholds(values)
+    assert caught.value.code == "NONFINITE_GATE_INPUT"
+
+
+def test_feasibility_threshold_giant_integer_comparisons_remain_exact() -> None:
+    huge = 2**20000
+    values = {
+        "candidate_wall_gate": huge * 5 + 1,
+        "baseline_wall_gate": huge * 4,
+        "candidate_rss_gate": huge + 1_073_741_825,
+        "baseline_rss_gate": huge,
+        "target_candidate_aggregate_peak_gate": huge * 4 + 1,
+        "target_declared_ram_bytes": huge * 5,
+        "target_eval36_charged_seconds": huge * 36,
+        "target_declared_wall_seconds": huge * 250,
+    }
+    result = scoring.evaluate_feasibility_thresholds(values)
+    by_name = {gate["name"]: gate["pass"] for gate in result["gates"]}
+    assert by_name == {"local_runtime": False, "local_rss": False, "target_memory": False, "hidden_200": True}
+    assert result["hidden_200_seconds"] == huge * 200
+
+
+def test_nonintegral_giant_hidden_projection_fails_canonically() -> None:
+    values = {
+        "candidate_wall_gate": 1,
+        "baseline_wall_gate": 1,
+        "candidate_rss_gate": 1,
+        "baseline_rss_gate": 1,
+        "target_candidate_aggregate_peak_gate": 1,
+        "target_declared_ram_bytes": 1,
+        "target_eval36_charged_seconds": 2**20000 + 1,
+        "target_declared_wall_seconds": 1,
+    }
+    with pytest.raises(scoring.ScoringFailure) as caught:
+        scoring.evaluate_feasibility_thresholds(values)
+    assert caught.value.code == "NONFINITE_GATE_INPUT"
+
+
+def test_cli_production_hold_is_canonical_and_distinct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(scoring, "validate_feasibility_manifest", PRODUCTION_VALIDATE_FEASIBILITY)
+    code = scoring.main(
+        [
+            "--run-dir",
+            str(tmp_path / "never-read"),
+            "--generation-manifest-sha256",
+            "not-read",
+            "--stage",
+            "all",
+        ]
+    )
+    assert code == 3
+    raw = capsys.readouterr().out.encode()
+    value = json.loads(raw)
+    assert raw == scoring.canonical_json_bytes(value)
+    assert value["status"] == "HOLD"
+    assert value["code"] == "HOLD_INTERFACE_INCOMPLETE"
+    assert not (tmp_path / "never-read").exists()
 
 
 def test_evaluate_prefers_official_module_over_rogue_pythonpath(tmp_path: Path) -> None:
