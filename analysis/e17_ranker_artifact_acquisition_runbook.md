@@ -2,7 +2,7 @@
 
 Updated: 2026-09-02 (Asia/Tokyo)
 
-Status: **HOLD — acquisition is forbidden during the active Kaggle HTTP 429 cooldown; no local artifact has been verified**
+Status: **HOLD — acquisition is forbidden during the active Kaggle HTTP 429 cooldown; an untrusted local cache is quarantined but provenance/use gates are unverified**
 
 This is the fail-closed acquisition and publication procedure for the frozen E17
 association-ranker input to `e23_e17_ranker_tiebreak_v1`. It does not authorize a
@@ -14,6 +14,31 @@ The evidence boundary is the frozen E17 design, the experiment ledger, the publi
 ranker entry in the candidate landscape, and the sealed integrity cell in
 `notebooks/pub923_repro/pub923_repro.ipynb`. Values not present in those sources
 are not filled in from memory.
+
+## 2026-09-02 local-cache discovery (identity evidence only)
+
+A read-only local search found `/private/tmp/biohub-ranker.cCb2IB/`, created
+around 2026-08-30 18:51:50 JST. To avoid losing ephemeral bytes, its five
+regular, single-link files were copied without deletion or promotion to
+`outputs/local/e17_quarantine/cache_20260830T185150JST/`. The quarantine has an
+explicit `HOLD_UNVERIFIED_PROVENANCE` README and is never a consumer root.
+
+The three previously pinned payload hashes match exactly. Two additional files
+were also present: `local_association_features.stats.json` (118 bytes, SHA-256
+`70a5a083cb177465dcbec32441621d543f572e7835269dd6b4d309d3a5a3183a`) and
+`model/history.json` (4,234 bytes, SHA-256
+`2fe5c31145998d3123a1ac7da2e2716c968893caa9e96e8310b8d5e9ce84f6be`).
+This contradicts the current three-file acquisition allowlist unless trusted
+version metadata proves that the extras are outside the intended versioned
+payload or the runbook is reviewed and versioned before acquisition.
+
+No retained metadata response, dataset-version-number/source-ID join, license,
+download receipt, or support-source bundle is attached to the cache. Therefore
+the cache establishes only that bytes with the three known identities are
+locally recoverable. It does **not** clear any acquisition gate, authorize model
+loading, allow E17 implementation/inference, or justify bypassing the cooldown.
+Never promote the quarantine in place; after cooldown, perform the fresh
+metadata and publication transaction below and reconcile the exact file list.
 
 ## Frozen identities and exact payload allowlist
 
