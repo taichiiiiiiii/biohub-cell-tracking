@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import sys
 from dataclasses import dataclass
@@ -70,6 +71,7 @@ PRODUCTION_ARCHIVE_BYTES = dict(
 )
 _SAFE_ROOT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _CHUNK = 1024 * 1024
+_MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 
 
 class BundleError(RuntimeError):
@@ -86,6 +88,13 @@ class ManifestPins:
 
 
 PRODUCTION_PINS = ManifestPins(MANIFEST_SHA256, MANIFEST_LINE_COUNT, ROOTS, FILES_PER_ROOT)
+
+
+@dataclass(frozen=True)
+class _PackResult:
+    public: dict[str, object]
+    name: str
+    identity: tuple[int, int, int, int, int, int, int]
 
 
 def canonical_json(value: object) -> bytes:
@@ -134,7 +143,7 @@ def rename_noreplace(
 
 
 def _stable_published_result(
-    directory_fd: int, name: str, display_path: Path, expected_inode: tuple[int, int]
+    directory_fd: int, name: str, display_path: Path, expected_identity: tuple[int, int, int, int, int, int, int]
 ) -> tuple[int, str]:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(name, flags, dir_fd=directory_fd)
@@ -143,7 +152,7 @@ def _stable_published_result(
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_nlink != 1
-            or (before.st_dev, before.st_ino) != expected_inode
+            or _content_identity(before) != _content_identity_tuple(expected_identity)
             or _identity(os.stat(name, dir_fd=directory_fd, follow_symlinks=False)) != _identity(before)
         ):
             raise BundleError(f"published archive identity mismatch: {display_path}")
@@ -183,6 +192,96 @@ def _require_real_directory_chain(path: Path) -> None:
         _require_real_directory(current)
 
 
+def _open_directory_path(path: Path) -> int:
+    """Open an absolute directory by no-follow dirfd traversal."""
+    absolute = path.absolute()
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    current_fd = os.open(absolute.anchor, flags)
+    try:
+        for part in absolute.parts[1:]:
+            next_fd = os.open(part, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _open_source(source_root_fd: int, logical: str, expected_size: int) -> tuple[int, int, os.stat_result]:
+    """Open a pinned source leaf without a path-based ancestor race."""
+    relative = PurePosixPath(logical)
+    parent_fd = os.dup(source_root_fd)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        for part in relative.parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        leaf = relative.parts[-1]
+        before_path = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(before_path.st_mode) or before_path.st_nlink != 1 or before_path.st_size != expected_size:
+            raise BundleError(f"source type/link/size/identity mismatch: {logical}")
+        fd = os.open(leaf, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+        before = os.fstat(fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size != expected_size
+            or _identity(before_path) != _identity(before)
+        ):
+            os.close(fd)
+            raise BundleError(f"source type/link/size/identity mismatch: {logical}")
+        return fd, parent_fd, before
+    except BaseException:
+        os.close(parent_fd)
+        raise
+
+
+def _source_path_matches(
+    source_root_fd: int, logical: str, expected_identity: tuple[int, int, int, int, int, int, int]
+) -> bool:
+    current_fd = os.dup(source_root_fd)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parts = PurePosixPath(logical).parts
+        for part in parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return _identity(os.stat(parts[-1], dir_fd=current_fd, follow_symlinks=False)) == expected_identity
+    except OSError:
+        return False
+    finally:
+        os.close(current_fd)
+
+
+def _remove_owned_or_quarantine(directory_fd: int, name: str, inode: tuple[int, int]) -> None:
+    """Make the claimed final name absent, or fail honestly if that is impossible."""
+    try:
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if (info.st_dev, info.st_ino) != inode:
+        raise BundleError("publication rollback refused an unowned final")
+    try:
+        os.unlink(name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        return
+    except OSError as unlink_error:
+        for _ in range(100):
+            quarantine = f".eval36-failed-{os.getpid()}-{secrets.token_hex(8)}"
+            try:
+                rename_noreplace(name, quarantine, source_dir_fd=directory_fd, destination_dir_fd=directory_fd)
+                os.fsync(directory_fd)
+                return
+            except FileExistsError:
+                continue
+            except OSError as rollback_error:
+                raise BundleError("publication rollback failed; claimed final may remain") from rollback_error
+        raise BundleError("publication rollback could not reserve quarantine") from unlink_error
+
+
 def _require_ancestors(root: Path, relative: PurePosixPath) -> None:
     _require_real_directory(root)
     current = root
@@ -191,10 +290,47 @@ def _require_ancestors(root: Path, relative: PurePosixPath) -> None:
         _require_real_directory(current)
 
 
+def _read_stable_manifest(path: Path) -> bytes:
+    parent_fd = _open_directory_path(path.parent)
+    fd: int | None = None
+    try:
+        name = path.name
+        before_path = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before_path.st_mode)
+            or before_path.st_nlink != 1
+            or before_path.st_size > _MAX_MANIFEST_BYTES
+        ):
+            raise BundleError("manifest is not a bounded single-link regular file")
+        fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+        before = os.fstat(fd)
+        if _identity(before) != _identity(before_path):
+            raise BundleError("manifest identity changed while opening")
+        chunks: list[bytes] = []
+        count = 0
+        while chunk := os.read(fd, min(_CHUNK, _MAX_MANIFEST_BYTES + 1 - count)):
+            chunks.append(chunk)
+            count += len(chunk)
+            if count > _MAX_MANIFEST_BYTES:
+                raise BundleError("manifest exceeds byte limit")
+        after_path = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            _identity(os.fstat(fd)) != _identity(before)
+            or _identity(after_path) != _identity(before)
+            or _identity(path.lstat()) != _identity(before)
+        ):
+            raise BundleError("manifest changed while reading")
+        return b"".join(chunks)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(parent_fd)
+
+
 def load_expected_files(manifest_path: Path, pins: ManifestPins = PRODUCTION_PINS) -> dict[str, list[tuple[str, int]]]:
     """Strictly validate the CSV pin and return ordered files for every pinned root."""
     try:
-        raw = manifest_path.read_bytes()
+        raw = _read_stable_manifest(manifest_path)
     except OSError as error:
         raise BundleError(f"cannot read manifest: {error}") from error
     if hashlib.sha256(raw).hexdigest() != pins.sha256:
@@ -289,8 +425,40 @@ class _HashingReader:
             raise BundleError("source grew during read")
 
 
+class _HashingWriter:
+    def __init__(self, stream: BinaryIO) -> None:
+        self.stream = stream
+        self.digest = hashlib.sha256()
+        self.count = 0
+
+    def write(self, payload: bytes) -> int:
+        written = self.stream.write(payload)
+        if written != len(payload):
+            raise BundleError("short archive write")
+        self.digest.update(payload)
+        self.count += written
+        return written
+
+    def tell(self) -> int:
+        return self.stream.tell()
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def fileno(self) -> int:
+        return self.stream.fileno()
+
+
 def _identity(info: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
     return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _content_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size, info.st_mtime_ns)
+
+
+def _content_identity_tuple(identity: tuple[int, int, int, int, int, int, int]) -> tuple[int, int, int, int, int, int]:
+    return identity[:6]
 
 
 def _write_member(target: BinaryIO, name: str, payload: bytes) -> None:
@@ -300,11 +468,16 @@ def _write_member(target: BinaryIO, name: str, payload: bytes) -> None:
 
 
 def _pack_one(
-    root: str, files: list[tuple[str, int]], source_root: Path, output_dir: Path, pins: ManifestPins
-) -> dict[str, object]:
+    root: str,
+    files: list[tuple[str, int]],
+    source_root_fd: int,
+    output_dir: Path,
+    output_root_fd: int,
+    pins: ManifestPins,
+) -> _PackResult:
     final_name = f"{root}.tar"
     final = output_dir / final_name
-    output_fd = os.open(output_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    output_fd = os.dup(output_root_fd)
     output_info = os.fstat(output_fd)
     if _identity(output_dir.lstat()) != _identity(output_info):
         os.close(output_fd)
@@ -335,54 +508,48 @@ def _pack_one(
         raise BundleError(f"cannot reserve archive temporary: {root}")
     entries: list[dict[str, object]] = []
     published_inode: tuple[int, int] | None = None
+    written_archive_sha256: str | None = None
+    written_archive_size: int | None = None
     try:
-        with os.fdopen(fd, "wb", closefd=True) as target:
+        with os.fdopen(fd, "wb", closefd=True) as raw_target:
+            target = _HashingWriter(raw_target)
             for logical, expected_size in files:
-                relative = PurePosixPath(logical)
-                _require_ancestors(source_root, relative)
-                source = source_root.joinpath(*relative.parts)
                 try:
-                    leaf_info = source.lstat()
-                except OSError as error:
-                    raise BundleError(f"cannot stat source {logical}: {error}") from error
-                if not stat.S_ISREG(leaf_info.st_mode) or stat.S_ISLNK(leaf_info.st_mode):
-                    raise BundleError(f"source is not a non-symlink regular file: {logical}")
-                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-                try:
-                    source_fd = os.open(source, flags)
+                    source_fd, source_parent_fd, before = _open_source(source_root_fd, logical, expected_size)
                 except OSError as error:
                     raise BundleError(f"cannot safely open source {logical}: {error}") from error
-                with os.fdopen(source_fd, "rb", closefd=True) as stream:
-                    before = os.fstat(stream.fileno())
-                    path_before = source.lstat()
-                    if not stat.S_ISREG(before.st_mode) or before.st_size != expected_size:
-                        raise BundleError(f"source type/link/size mismatch: {logical}")
-                    if _identity(before) != _identity(path_before):
-                        raise BundleError(f"source identity mismatch: {logical}")
-                    target.write(_header(logical, expected_size))
-                    hashing = _HashingReader(stream)
-                    hashing.copy_to(target, expected_size)
-                    target.write(b"\0" * (-expected_size % 512))
-                    after = os.fstat(stream.fileno())
-                    path_after = source.lstat()
-                    if _identity(before) != _identity(after) or _identity(before) != _identity(path_after):
-                        raise BundleError(f"source changed during packing: {logical}")
-                    stream.seek(0)
-                    second = hashlib.sha256()
-                    second_count = 0
-                    for chunk in iter(lambda: stream.read(_CHUNK), b""):
-                        second.update(chunk)
-                        second_count += len(chunk)
-                    final_info = os.fstat(stream.fileno())
-                    final_path_info = source.lstat()
-                    if (
-                        second_count != expected_size
-                        or second.digest() != hashing.digest.digest()
-                        or _identity(before) != _identity(final_info)
-                        or _identity(before) != _identity(final_path_info)
-                    ):
-                        raise BundleError(f"source second-view mismatch: {logical}")
-                    entries.append({"path": logical, "sha256": hashing.digest.hexdigest(), "size": expected_size})
+                try:
+                    with os.fdopen(source_fd, "rb", closefd=True) as stream:
+                        target.write(_header(logical, expected_size))
+                        hashing = _HashingReader(stream)
+                        hashing.copy_to(target, expected_size)
+                        target.write(b"\0" * (-expected_size % 512))
+                        leaf = PurePosixPath(logical).parts[-1]
+                        path_after = os.stat(leaf, dir_fd=source_parent_fd, follow_symlinks=False)
+                        if (
+                            _identity(before) != _identity(os.fstat(stream.fileno()))
+                            or _identity(before) != _identity(path_after)
+                            or not _source_path_matches(source_root_fd, logical, _identity(before))
+                        ):
+                            raise BundleError(f"source changed during packing: {logical}")
+                        stream.seek(0)
+                        second = hashlib.sha256()
+                        second_count = 0
+                        for chunk in iter(lambda: stream.read(_CHUNK), b""):
+                            second.update(chunk)
+                            second_count += len(chunk)
+                        final_path_info = os.stat(leaf, dir_fd=source_parent_fd, follow_symlinks=False)
+                        if (
+                            second_count != expected_size
+                            or second.digest() != hashing.digest.digest()
+                            or _identity(before) != _identity(os.fstat(stream.fileno()))
+                            or _identity(before) != _identity(final_path_info)
+                            or not _source_path_matches(source_root_fd, logical, _identity(before))
+                        ):
+                            raise BundleError(f"source second-view mismatch: {logical}")
+                        entries.append({"path": logical, "sha256": hashing.digest.hexdigest(), "size": expected_size})
+                finally:
+                    os.close(source_parent_fd)
             embedded = {
                 "competition": pins.competition,
                 "files": entries,
@@ -399,7 +566,12 @@ def _pack_one(
             target.write(b"\0" * padding)
             target.flush()
             os.fsync(target.fileno())
+            written_archive_sha256 = target.digest.hexdigest()
+            written_archive_size = target.count
         ready_info = os.stat(temp_name, dir_fd=output_fd, follow_symlinks=False)
+        ready_identity = _identity(ready_info)
+        if not stat.S_ISREG(ready_info.st_mode) or ready_info.st_nlink != 1:
+            raise BundleError("archive temporary is not a single-link regular file")
         try:
             rename_noreplace(temp_name, final_name, source_dir_fd=output_fd, destination_dir_fd=output_fd)
         except FileExistsError as error:
@@ -414,13 +586,17 @@ def _pack_one(
             output_info.st_mode,
         ):
             raise BundleError("output directory changed during publication")
-        archive_size, archive_sha256 = _stable_published_result(
-            output_fd, final_name, final, (ready_info.st_dev, ready_info.st_ino)
-        )
+        archive_size, archive_sha256 = _stable_published_result(output_fd, final_name, final, ready_identity)
+        if archive_size != written_archive_size or archive_sha256 != written_archive_sha256:
+            raise BundleError("published archive differs from the exact written byte stream")
         if pins == PRODUCTION_PINS and archive_size != PRODUCTION_ARCHIVE_BYTES[root]:
             raise BundleError(f"production archive size drift for {root}")
-        return {"archive": str(final), "bytes": archive_size, "root": root, "sha256": archive_sha256}
-    except BaseException:
+        return _PackResult(
+            {"archive": final_name, "bytes": archive_size, "root": root, "sha256": archive_sha256},
+            final_name,
+            ready_identity,
+        )
+    except BaseException as original_error:
         if temp_name is not None:
             try:
                 os.unlink(temp_name, dir_fd=output_fd)
@@ -428,12 +604,10 @@ def _pack_one(
                 pass
         if published_inode is not None:
             try:
-                final_info = os.stat(final_name, dir_fd=output_fd, follow_symlinks=False)
-                if (final_info.st_dev, final_info.st_ino) == published_inode:
-                    os.unlink(final_name, dir_fd=output_fd)
-            except FileNotFoundError:
-                pass
-        raise
+                _remove_owned_or_quarantine(output_fd, final_name, published_inode)
+            except Exception as rollback_error:
+                raise BundleError("archive publication failed and rollback was incomplete") from rollback_error
+        raise original_error
     finally:
         os.close(output_fd)
 
@@ -455,13 +629,66 @@ def pack_bundles(
     for root in roots:
         if not isinstance(root, str) or not _SAFE_ROOT.fullmatch(root) or root not in allowed:
             raise BundleError(f"unknown or unsafe root: {root!r}")
-    _require_real_directory_chain(source_root)
-    _require_real_directory_chain(output_dir)
     expected = load_expected_files(manifest_path, pins)
-    collisions = [output_dir / f"{root}.tar" for root in roots if (output_dir / f"{root}.tar").exists()]
-    if collisions:
-        raise BundleError(f"output already exists: {collisions[0]}")
-    return [_pack_one(root, expected[root], source_root, output_dir, pins) for root in roots]
+    source_root_fd = _open_directory_path(source_root)
+    source_identity = _identity(os.fstat(source_root_fd))
+    if _identity(source_root.lstat()) != source_identity:
+        os.close(source_root_fd)
+        raise BundleError("source root identity changed")
+    try:
+        output_fd = _open_directory_path(output_dir)
+    except BaseException:
+        os.close(source_root_fd)
+        raise
+    output_identity = os.fstat(output_fd)
+    try:
+        collisions: list[str] = []
+        for root in roots:
+            try:
+                os.stat(f"{root}.tar", dir_fd=output_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            collisions.append(f"{root}.tar")
+        if collisions:
+            raise BundleError("output already exists")
+        completed: list[_PackResult] = []
+        try:
+            for root in roots:
+                completed.append(_pack_one(root, expected[root], source_root_fd, output_dir, output_fd, pins))
+                if (
+                    _identity(os.fstat(source_root_fd)) != source_identity
+                    or _identity(source_root.lstat()) != source_identity
+                ):
+                    raise BundleError("source root changed during packing")
+                current_output = output_dir.lstat()
+                if (current_output.st_dev, current_output.st_ino, current_output.st_mode) != (
+                    output_identity.st_dev,
+                    output_identity.st_ino,
+                    output_identity.st_mode,
+                ):
+                    raise BundleError("output directory changed during packing")
+                result = completed[-1]
+                final_size, final_sha256 = _stable_published_result(
+                    output_fd, result.name, output_dir / result.name, result.identity
+                )
+                if final_size != result.public["bytes"] or final_sha256 != result.public["sha256"]:
+                    raise BundleError("archive changed after publication")
+        except BaseException as original_error:
+            rollback_errors: list[Exception] = []
+            for result in reversed(completed):
+                try:
+                    _remove_owned_or_quarantine(output_fd, result.name, result.identity[:2])
+                except Exception as error:
+                    rollback_errors.append(error)
+            if rollback_errors:
+                raise BundleError("multi-archive publication failed and rollback was incomplete") from rollback_errors[
+                    0
+                ]
+            raise original_error
+        return [result.public for result in completed]
+    finally:
+        os.close(output_fd)
+        os.close(source_root_fd)
 
 
 class _FailClosedParser(argparse.ArgumentParser):
@@ -485,7 +712,7 @@ def main(argv: list[str] | None = None) -> int:
         print(canonical_json({"archives": results, "status": "PASS"}).decode(), end="")
         return 0
     except Exception as error:
-        print(canonical_json({"error": str(error), "status": "FAIL"}).decode(), end="", file=sys.stderr)
+        print(canonical_json({"error": type(error).__name__, "status": "FAIL"}).decode(), end="", file=sys.stderr)
         return 1
 
 

@@ -5,9 +5,12 @@ import fcntl
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import import_eval36_zarr_bundles as importer
 from scripts import pack_eval36_zarr_bundles as packer
@@ -70,7 +73,7 @@ def bundle(tmp_path: Path) -> dict[str, object]:
         path.write_bytes(payload)
     [result] = packer.pack_bundles(manifest, source, output, (ROOT,), pins=pins)
     return {
-        "archive": Path(str(result["archive"])),
+        "archive": output / str(result["archive"]),
         "data": data,
         "manifest": manifest,
         "output": output,
@@ -137,7 +140,7 @@ def test_deterministic_two_run_bytes_and_normalized_member_set(bundle: dict[str,
         pins=bundle["pins"],  # type: ignore[arg-type]
     )
     first: Path = bundle["archive"]  # type: ignore[assignment]
-    again = Path(str(result["archive"]))
+    again = second / str(result["archive"])
     assert first.read_bytes() == again.read_bytes()
     assert result["sha256"] == hashlib.sha256(first.read_bytes()).hexdigest()
     members = _archive_members(first)
@@ -212,6 +215,22 @@ def test_manifest_pin_count_set_and_size_drift_fail_before_mutation(bundle: dict
     assert _tree(data) == before
 
 
+@pytest.mark.parametrize("kind", ["symlink", "hardlink"])
+def test_manifest_link_is_rejected(bundle: dict[str, object], tmp_path: Path, kind: str) -> None:
+    manifest: Path = bundle["manifest"]  # type: ignore[assignment]
+    if kind == "symlink":
+        target = tmp_path / "manifest-target.csv"
+        target.write_bytes(manifest.read_bytes())
+        manifest.unlink()
+        manifest.symlink_to(target)
+    else:
+        os.link(manifest, tmp_path / "manifest-alias.csv")
+    output = tmp_path / f"manifest-{kind}-output"
+    output.mkdir()
+    with pytest.raises(packer.BundleError, match="single-link"):
+        packer.pack_bundles(manifest, bundle["source"], output, (ROOT,), pins=bundle["pins"])  # type: ignore[arg-type]
+
+
 def test_packer_rejects_existing_output_without_reuse(bundle: dict[str, object]) -> None:
     with pytest.raises(packer.BundleError, match="output already exists"):
         packer.pack_bundles(
@@ -255,7 +274,7 @@ def test_packer_rejects_symlink_source_ancestor(bundle: dict[str, object], tmp_p
     real.symlink_to(moved, target_is_directory=True)
     output = tmp_path / "ancestor-bad"
     output.mkdir()
-    with pytest.raises(packer.BundleError, match="real directory"):
+    with pytest.raises((packer.BundleError, OSError)):
         packer.pack_bundles(bundle["manifest"], source, output, (ROOT,), pins=bundle["pins"])  # type: ignore[arg-type]
 
 
@@ -278,6 +297,87 @@ def test_source_mutation_is_detected_and_no_final_is_published(
     output.mkdir()
     with pytest.raises(packer.BundleError, match="changed|mismatch"):
         packer.pack_bundles(bundle["manifest"], bundle["source"], output, (ROOT,), pins=bundle["pins"])  # type: ignore[arg-type]
+    assert list(output.iterdir()) == []
+
+
+def test_packer_rejects_source_hardlink(bundle: dict[str, object], tmp_path: Path) -> None:
+    leaf: Path = bundle["source"] / f"train/{ROOT}.zarr/a"  # type: ignore[operator]
+    os.link(leaf, tmp_path / "external-alias")
+    output = tmp_path / "hardlink-output"
+    output.mkdir()
+    with pytest.raises(packer.BundleError, match="link"):
+        packer.pack_bundles(bundle["manifest"], bundle["source"], output, (ROOT,), pins=bundle["pins"])  # type: ignore[arg-type]
+    assert list(output.iterdir()) == []
+
+
+def test_packer_ancestor_swap_cannot_escape_source_root(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source: Path = bundle["source"]  # type: ignore[assignment]
+    train = source / "train"
+    moved = source / "moved-train"
+    outside = tmp_path / "outside-train"
+    outside.mkdir()
+    original = packer.os.open
+    swapped = False
+
+    def swap_on_component(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal swapped
+        if path == "train" and kwargs.get("dir_fd") is not None and not swapped:
+            train.rename(moved)
+            train.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(packer.os, "open", swap_on_component)
+    output = tmp_path / "swap-output"
+    output.mkdir()
+    with pytest.raises(packer.BundleError):
+        packer.pack_bundles(bundle["manifest"], source, output, (ROOT,), pins=bundle["pins"])  # type: ignore[arg-type]
+    assert list(output.iterdir()) == []
+
+
+def test_packer_result_is_bounded_and_does_not_echo_output_path(bundle: dict[str, object], tmp_path: Path) -> None:
+    secret_component = "token=TOPSECRET"
+    output = tmp_path / secret_component
+    output.mkdir()
+    [result] = packer.pack_bundles(
+        bundle["manifest"],
+        bundle["source"],
+        output,
+        (ROOT,),
+        pins=bundle["pins"],  # type: ignore[arg-type]
+    )
+    assert result["archive"] == f"{ROOT}.tar"
+    assert secret_component not in packer.canonical_json(result).decode()
+
+
+def test_multi_root_runtime_failure_rolls_back_earlier_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    roots = ("root_a", "root_b")
+    rows = [(f"train/{root}.zarr/a", root.encode()) for root in roots]
+    manifest, pins = _manifest(tmp_path, rows)
+    pins = packer.ManifestPins(pins.sha256, pins.line_count, roots, 1, pins.competition)
+    source = tmp_path / "source-multi"
+    output = tmp_path / "output-multi"
+    source.mkdir()
+    output.mkdir()
+    for name, payload in rows:
+        leaf = source / name
+        leaf.parent.mkdir(parents=True)
+        leaf.write_bytes(payload)
+    original = packer._pack_one
+    calls = 0
+
+    def fail_second(*args: object, **kwargs: object) -> packer._PackResult:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected second-root failure")
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(packer, "_pack_one", fail_second)
+    with pytest.raises(OSError, match="second-root"):
+        packer.pack_bundles(manifest, source, output, roots, pins=pins)
     assert list(output.iterdir()) == []
 
 
@@ -306,6 +406,99 @@ def test_packer_publication_failure_removes_its_claimed_final(
             pins=bundle["pins"],  # type: ignore[arg-type]
         )
     assert list(output.iterdir()) == []
+
+
+@pytest.mark.parametrize("attack", ["hardlink", "mutate"])
+def test_packer_rejects_closed_temporary_alias_or_mutation(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    output = tmp_path / f"temporary-{attack}"
+    output.mkdir()
+    alias = tmp_path / f"temporary-{attack}-alias"
+    original = packer.rename_noreplace
+    attacked = False
+
+    def attack_before_rename(source: str, destination: str, **kwargs: object) -> None:
+        nonlocal attacked
+        if destination.endswith(".tar") and not attacked:
+            source_fd = int(kwargs["source_dir_fd"])
+            if attack == "hardlink":
+                os.link(source, alias, src_dir_fd=source_fd)
+            else:
+                before = os.stat(source, dir_fd=source_fd, follow_symlinks=False)
+                fd = os.open(source, os.O_WRONLY, dir_fd=source_fd)
+                try:
+                    os.pwrite(fd, b"X", 512)
+                finally:
+                    os.close(fd)
+                os.utime(
+                    source,
+                    ns=(before.st_atime_ns, before.st_mtime_ns),
+                    dir_fd=source_fd,
+                    follow_symlinks=False,
+                )
+            attacked = True
+        original(source, destination, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(packer, "rename_noreplace", attack_before_rename)
+    with pytest.raises(packer.BundleError, match="identity|written byte stream"):
+        packer.pack_bundles(bundle["manifest"], bundle["source"], output, (ROOT,), pins=bundle["pins"])  # type: ignore[arg-type]
+    assert not (output / f"{ROOT}.tar").exists()
+
+
+def test_packer_outer_seal_rejects_post_verification_hardlink(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "post-verification-hardlink"
+    output.mkdir()
+    alias = tmp_path / "post-verification-alias"
+    original = packer._stable_published_result
+    calls = 0
+
+    def link_after_inner_verify(*args: object, **kwargs: object) -> tuple[int, str]:
+        nonlocal calls
+        result = original(*args, **kwargs)  # type: ignore[arg-type]
+        calls += 1
+        if calls == 1:
+            os.link(str(args[1]), alias, src_dir_fd=int(args[0]))
+        return result
+
+    monkeypatch.setattr(packer, "_stable_published_result", link_after_inner_verify)
+    with pytest.raises(packer.BundleError, match="identity"):
+        packer.pack_bundles(bundle["manifest"], bundle["source"], output, (ROOT,), pins=bundle["pins"])  # type: ignore[arg-type]
+    assert not (output / f"{ROOT}.tar").exists()
+
+
+def test_packer_unlink_failure_quarantines_claimed_final(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "packer-quarantine"
+    output.mkdir()
+    original_fsync = packer.os.fsync
+    original_unlink = packer.os.unlink
+    fsync_calls = 0
+    blocked = False
+
+    def fail_directory_fsync(fd: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 2:
+            raise OSError("injected publication failure")
+        original_fsync(fd)
+
+    def fail_final_unlink(path: object, *args: object, **kwargs: object) -> None:
+        nonlocal blocked
+        if path == f"{ROOT}.tar" and not blocked:
+            blocked = True
+            raise PermissionError("injected unlink failure")
+        original_unlink(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(packer.os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(packer.os, "unlink", fail_final_unlink)
+    with pytest.raises(OSError, match="publication failure"):
+        packer.pack_bundles(bundle["manifest"], bundle["source"], output, (ROOT,), pins=bundle["pins"])  # type: ignore[arg-type]
+    assert not (output / f"{ROOT}.tar").exists()
+    assert len(list(output.glob(".eval36-failed-*"))) == 1
 
 
 def test_output_directory_swap_cannot_redirect_publication(
@@ -354,6 +547,39 @@ def test_duplicate_archive_members_fail(bundle: dict[str, object]) -> None:
     members = _archive_members(bundle["archive"])  # type: ignore[arg-type]
     archive = _replace_archive(bundle, [members[0], members[0], *members[1:]])
     with pytest.raises(packer.BundleError, match="duplicate"):
+        _import(bundle, archive)
+
+
+def test_archive_member_count_limit_is_exact(bundle: dict[str, object]) -> None:
+    members = _archive_members(bundle["archive"])  # type: ignore[arg-type]
+    archive = _replace_archive(bundle, [("extra", b"x"), *members])
+    with pytest.raises(packer.BundleError, match="member count"):
+        _import(bundle, archive)
+
+
+def test_oversized_sparse_archive_fails_before_parsing(bundle: dict[str, object]) -> None:
+    archive: Path = bundle["archive"]  # type: ignore[assignment]
+    with archive.open("r+b") as stream:
+        stream.truncate(max(packer.PRODUCTION_ARCHIVE_BYTES.values()) + 10_240)
+    with pytest.raises(packer.BundleError, match="byte limit"):
+        _import(bundle, archive)
+
+
+def test_nonzero_member_padding_is_rejected(bundle: dict[str, object]) -> None:
+    archive: Path = bundle["archive"]  # type: ignore[assignment]
+    raw = bytearray(archive.read_bytes())
+    members = _archive_members(archive)
+    first_payload = members[0][1]
+    raw[512 + len(first_payload)] = 1
+    archive.write_bytes(raw)
+    with pytest.raises(packer.BundleError, match="member padding"):
+        _import(bundle, archive)
+
+
+def test_member_order_is_exact(bundle: dict[str, object]) -> None:
+    members = _archive_members(bundle["archive"])  # type: ignore[arg-type]
+    archive = _replace_archive(bundle, [members[1], members[0], members[2]])
+    with pytest.raises(packer.BundleError, match="member order"):
         _import(bundle, archive)
 
 
@@ -427,6 +653,34 @@ def test_archive_symlink_and_hardlink_are_rejected(bundle: dict[str, object], tm
     os.link(archive, hardlink)
     with pytest.raises(packer.BundleError, match="single-link"):
         _import(bundle, archive)
+
+
+def test_archive_ancestor_swap_cannot_redirect_validation(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive: Path = bundle["archive"]  # type: ignore[assignment]
+    archive_dir = archive.parent
+    moved = tmp_path / "original-archives"
+    outside = tmp_path / "outside-archives"
+    outside.mkdir()
+    (outside / archive.name).write_bytes(archive.read_bytes())
+    original = importer.os.open
+    swapped = False
+
+    def swap_on_component(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal swapped
+        if path == archive_dir.name and kwargs.get("dir_fd") is not None and not swapped:
+            archive_dir.rename(moved)
+            archive_dir.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(importer.os, "open", swap_on_component)
+    data: Path = bundle["data"]  # type: ignore[assignment]
+    before = _tree(data)
+    with pytest.raises(OSError):
+        _import(bundle, archive)
+    assert _tree(data) == before
 
 
 def test_special_archive_is_rejected_without_blocking(bundle: dict[str, object]) -> None:
@@ -601,6 +855,68 @@ def test_temporary_readback_detects_post_copy_corruption(
     assert not list(data.rglob("*.tmp"))
 
 
+def test_destination_parent_swap_during_copy_publishes_no_payload(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data: Path = bundle["data"]  # type: ignore[assignment]
+    moved = tmp_path / "moved-train-during-copy"
+    original = importer._copy_payload
+    swapped = False
+
+    def swap_after_copy(archive: importer.CheckedArchive, member: importer.Member, target: object) -> str:
+        nonlocal swapped
+        digest = original(archive, member, target)  # type: ignore[arg-type]
+        if not swapped:
+            (data / "train").rename(moved)
+            (data / "train").mkdir()
+            swapped = True
+        return digest
+
+    monkeypatch.setattr(importer, "_copy_payload", swap_after_copy)
+    with pytest.raises(importer.ImportHold, match="parent changed"):
+        _import(bundle)
+    assert not (data / f"train/{ROOT}.zarr/a").exists()
+    assert not (moved / f"{ROOT}.zarr/a").exists()
+    assert not list(moved.rglob("*.tmp"))
+
+
+@pytest.mark.parametrize("attack", ["hardlink", "mutate"])
+def test_destination_rejects_temporary_alias_or_mutation_before_rename(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    alias = tmp_path / f"destination-{attack}-alias"
+    original = importer.rename_noreplace
+    attacked = False
+
+    def attack_before_rename(source: str, destination: str, **kwargs: object) -> None:
+        nonlocal attacked
+        if ".eval36-" in source and not attacked:
+            parent_fd = int(kwargs["source_dir_fd"])
+            if attack == "hardlink":
+                os.link(source, alias, src_dir_fd=parent_fd)
+            else:
+                before = os.stat(source, dir_fd=parent_fd, follow_symlinks=False)
+                fd = os.open(source, os.O_WRONLY, dir_fd=parent_fd)
+                try:
+                    os.pwrite(fd, b"X", 0)
+                finally:
+                    os.close(fd)
+                os.utime(
+                    source,
+                    ns=(before.st_atime_ns, before.st_mtime_ns),
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            attacked = True
+        original(source, destination, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(importer, "rename_noreplace", attack_before_rename)
+    with pytest.raises(importer.ImportHold, match="payload content/identity"):
+        _import(bundle)
+    data: Path = bundle["data"]  # type: ignore[assignment]
+    assert not (data / f"train/{ROOT}.zarr/a").exists()
+
+
 def test_post_publication_fsync_failure_leaves_exact_single_link_and_resumes(
     bundle: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -615,14 +931,14 @@ def test_post_publication_fsync_failure_leaves_exact_single_link_and_resumes(
         original(fd)
 
     monkeypatch.setattr(importer.os, "fsync", fail_first_parent)
-    with pytest.raises(OSError, match="post-publication"):
+    with pytest.raises(importer.ImportHold, match="post-publication"):
         _import(bundle)
     leaf: Path = bundle["data"] / f"train/{ROOT}.zarr/a"  # type: ignore[operator]
     assert leaf.read_bytes() == b"alpha"
     assert leaf.stat().st_nlink == 1
     assert not list(Path(bundle["data"]).rglob("*.tmp"))  # type: ignore[arg-type]
     receipts = [json.loads(path.read_text()) for path in Path(bundle["receipts"]).glob("*.json")]  # type: ignore[arg-type]
-    assert any(receipt["status"] == "FAIL" and receipt["installed"] == 1 for receipt in receipts)
+    assert any(receipt["status"] == "HOLD" and receipt["installed"] == 1 for receipt in receipts)
     monkeypatch.setattr(importer.os, "fsync", original)
     result = _import(bundle)
     assert result["installed"] == 1 and result["skipped"] == 1
@@ -690,6 +1006,31 @@ def test_data_root_swap_is_hold_and_cannot_redirect_installation(
     assert not (moved / "train").exists()
 
 
+def test_data_root_ancestor_swap_cannot_redirect_installation(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data: Path = bundle["data"]  # type: ignore[assignment]
+    moved = tmp_path / "original-data-ancestor"
+    outside = tmp_path / "outside-data-ancestor"
+    outside.mkdir()
+    original = importer.os.open
+    swapped = False
+
+    def swap_on_component(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal swapped
+        if path == data.name and kwargs.get("dir_fd") is not None and not swapped:
+            data.rename(moved)
+            data.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(importer.os, "open", swap_on_component)
+    with pytest.raises(packer.BundleError):
+        _import(bundle)
+    assert list(outside.iterdir()) == []
+    assert not (moved / "train").exists()
+
+
 def test_existing_receipt_reuse_requires_stable_single_link_regular_file(
     bundle: dict[str, object], tmp_path: Path
 ) -> None:
@@ -709,6 +1050,77 @@ def test_existing_receipt_reuse_requires_stable_single_link_regular_file(
     receipt.symlink_to(target)
     with pytest.raises(importer.ImportHold, match="unsafe existing receipt"):
         importer._write_receipt(receipts, value)
+
+
+def test_receipt_directory_swap_rolls_back_claimed_pass_name(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipts: Path = bundle["receipts"]  # type: ignore[assignment]
+    moved = tmp_path / "moved-receipts"
+    original = importer.rename_noreplace
+    swapped = False
+
+    def swap_after_rename(source: str, destination: str, **kwargs: object) -> None:
+        nonlocal swapped
+        original(source, destination, **kwargs)  # type: ignore[arg-type]
+        if destination.startswith("eval36-import-") and not swapped:
+            receipts.rename(moved)
+            receipts.mkdir()
+            swapped = True
+
+    monkeypatch.setattr(importer, "rename_noreplace", swap_after_rename)
+    with pytest.raises(importer.ImportHold, match="directory changed"):
+        importer._write_receipt(receipts, {"schema_version": 1, "status": "PASS"})
+    assert not list(receipts.glob("*.json"))
+    assert not list(moved.glob("*.json"))
+
+
+def test_receipt_hardlink_race_rolls_back_claimed_pass_name(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipts: Path = bundle["receipts"]  # type: ignore[assignment]
+    alias = tmp_path / "receipt-external-alias"
+    original = importer._verify_receipt_final
+    attacked = False
+
+    def link_before_verify(directory_fd: int, name: str, expected: bytes, inode: tuple[int, int]) -> None:
+        nonlocal attacked
+        if not attacked:
+            os.link(name, alias, src_dir_fd=directory_fd)
+            attacked = True
+        original(directory_fd, name, expected, inode)
+
+    monkeypatch.setattr(importer, "_verify_receipt_final", link_before_verify)
+    with pytest.raises(importer.ImportHold, match="identity"):
+        importer._write_receipt(receipts, {"schema_version": 1, "status": "PASS"})
+    assert not list(receipts.glob("*.json"))
+
+
+def test_receipt_unlink_failure_quarantines_claimed_pass_name(
+    bundle: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipts: Path = bundle["receipts"]  # type: ignore[assignment]
+    original_verify = importer._verify_receipt_final
+    original_unlink = importer.os.unlink
+    blocked = False
+
+    def fail_after_publish(*args: object, **kwargs: object) -> None:
+        original_verify(*args, **kwargs)  # type: ignore[arg-type]
+        raise importer.ImportHold("injected receipt verification failure")
+
+    def fail_json_unlink(path: object, *args: object, **kwargs: object) -> None:
+        nonlocal blocked
+        if isinstance(path, str) and path.endswith(".json") and not blocked:
+            blocked = True
+            raise PermissionError("injected receipt unlink failure")
+        original_unlink(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(importer, "_verify_receipt_final", fail_after_publish)
+    monkeypatch.setattr(importer.os, "unlink", fail_json_unlink)
+    with pytest.raises(importer.ImportHold, match="verification failure"):
+        importer._write_receipt(receipts, {"schema_version": 1, "status": "PASS"})
+    assert not list(receipts.glob("*.json"))
+    assert len(list(receipts.glob(".eval36-failed-*"))) == 1
 
 
 def test_two_archives_claiming_same_root_fail_before_data_mutation(bundle: dict[str, object], tmp_path: Path) -> None:
@@ -750,3 +1162,24 @@ def test_malformed_cli_arguments_are_canonical_failures(capsys: pytest.CaptureFi
     assert packer.main([]) == 1
     packed = json.loads(capsys.readouterr().err)
     assert packed["status"] == "FAIL"
+
+
+def test_cli_failure_does_not_echo_secret_path(capsys: pytest.CaptureFixture[str]) -> None:
+    secret = "token=TOPSECRET"
+    assert packer.main(["--manifest", f"/{secret}", "--source-data", "/missing", "--output-dir", "/missing"]) == 1
+    assert secret not in capsys.readouterr().err
+
+
+def test_importer_cli_hold_is_exit_two_and_redacted(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "Authorization: Bearer TOPSECRET"
+
+    def hold(*args: object, **kwargs: object) -> dict[str, object]:
+        raise importer.ImportHold(secret)
+
+    monkeypatch.setattr(importer, "import_bundles", hold)
+    assert importer.main(["archive.tar"]) == 2
+    result = json.loads(capsys.readouterr().err)
+    assert result == {"error": "ImportHold", "status": "HOLD"}
+    assert secret not in packer.canonical_json(result).decode()

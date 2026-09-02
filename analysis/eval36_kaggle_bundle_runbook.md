@@ -23,6 +23,13 @@ competition manifest. Never upload credentials, `data/`, or a receipt.
   exactly one `__eval36_bundle_manifest__.json` member
 - Publication and installation are no-overwrite. Existing wrong files are a
   `HOLD`; they are never repaired or replaced by these scripts.
+- Source payloads, archives, destination files, temporaries, and receipts must
+  be single-link regular files. Every path component is traversed from a held
+  directory descriptor with no-follow semantics; a symlink or membership swap
+  fails closed.
+- The pinned CSV is likewise opened as a stable, bounded, single-link regular
+  file through a held parent descriptor before its exact hash and line count
+  are accepted.
 
 The archive payload total is intentionally larger than the 1,487-file local
 shortfall: the 15 complete roots contain 1,530 files, including 43 already
@@ -73,6 +80,9 @@ python /kaggle/input/eval36-packer/pack_eval36_zarr_bundles.py \
 Do not pass `--root` for the production job: the default is the exact fixed
 15-root set. A successful stdout value is one canonical JSON object with
 `status: "PASS"`, bounded archive paths, byte counts, and SHA-256 values.
+The archive path field is the fixed `<root>.tar` basename, never the caller's
+absolute output directory. Failure JSON contains only a bounded exception-class
+name and status; it does not echo caller-controlled or credential-bearing paths.
 Any stderr `FAIL`, traceback, missing archive, extra archive, or reused output
 directory stops the workflow. Preserve the JSON result alongside the Kaggle
 job metadata, but do not edit it.
@@ -82,6 +92,12 @@ files, every byte count equals the ordered values above, their sum is exactly
 `6,104,616,960`, and every SHA-256 equals the packer result. Record CPU
 runtime, peak disk use, and total output bytes. Saving or downloading the
 private output is a separate explicitly authorized step.
+
+If any selected root fails during one invocation, archives already published by
+that invocation are removed (or moved away from their claimed final names to an
+unpredictable failed quarantine name). A rollback that cannot make every owned
+final name absent is itself a hard failure and must be reviewed; do not treat a
+partial directory as a successful pack.
 
 ## Local verification and installation (after authorized transfer)
 
@@ -128,14 +144,27 @@ same-directory temporaries and no-clobber links. A crash can leave only exact
 published files and can be resumed with the same command. Preserve the
 canonical receipt and stdout result.
 
+Validation requires the exact payload order from the pinned CSV, the embedded
+manifest last, zero member padding, two zero terminator blocks, and the unique
+minimal 10,240-byte record padding. Archive, data-root, destination-parent, and
+receipt directory membership are rechecked through held descriptors around
+publication. An fsync failure after an exact destination rename is `HOLD`, not
+`FAIL`; the exact file is left for a later hash check and parent-directory fsync.
+Receipt publication instead rolls its claimed PASS name back (or quarantines
+it) before reporting a durability ambiguity.
+Production archive sizes are rejected before parsing unless they are one of the
+15 pinned sizes; all modes also cap archive bytes and member count before any
+payload copy, so sparse/oversize and excessive-member inputs fail without
+expansion.
+
 ## Stop conditions
 
 - `FAIL`: archive, manifest, pin, path, member, payload, or argument validation
   failed. Do not retry with weakened checks.
 - `HOLD`: local state needs review (lock contention, unsafe ancestor, existing
   wrong/special/multiply-linked destination, publication race, or unsafe
-  receipt path). Do not delete or replace the reported path as part of this
-  workflow.
+  receipt path), including any post-rename fsync ambiguity. Do not delete or
+  replace the affected path as part of this workflow.
 - Any mismatch between the Kaggle packer result, transferred archive hashes,
   importer result, receipt, or the fixed root list remains `HOLD`.
 

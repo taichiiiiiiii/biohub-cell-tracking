@@ -30,6 +30,8 @@ try:  # Supports both ``python scripts/...`` and importing as ``scripts...``.
         BundleError,
         ManifestPins,
         _header,
+        _open_directory_path,
+        _remove_owned_or_quarantine,
         canonical_json,
         load_expected_files,
         rename_noreplace,
@@ -44,6 +46,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by the production CL
         BundleError,
         ManifestPins,
         _header,
+        _open_directory_path,
+        _remove_owned_or_quarantine,
         canonical_json,
         load_expected_files,
         rename_noreplace,
@@ -59,7 +63,7 @@ class ImportHold(BundleError):
     """Safe local state requires operator action rather than replacement."""
 
 
-class PublishedFileError(OSError):
+class PublishedFileError(ImportHold):
     """A verified final file was published but its directory fsync failed."""
 
     def __init__(self, logical_path: str, error: OSError) -> None:
@@ -78,6 +82,8 @@ class Member:
 class CheckedArchive:
     path: Path
     fd: int
+    parent_fd: int
+    name: str
     identity: tuple[int, int, int, int, int, int, int]
     root: str
     sha256: str
@@ -157,7 +163,7 @@ def _pread_exact(fd: int, count: int, offset: int) -> bytes:
     return b"".join(chunks)
 
 
-def _parse_ustar(fd: int, archive_size: int) -> dict[str, Member]:
+def _parse_ustar(fd: int, archive_size: int, *, max_members: int = 4096) -> dict[str, Member]:
     if archive_size < 10_240 or archive_size % 10_240:
         raise BundleError("archive length is not complete canonical USTAR records")
     members: dict[str, Member] = {}
@@ -198,6 +204,8 @@ def _parse_ustar(fd: int, archive_size: int) -> dict[str, Member]:
         logical = f"{prefix}/{name}" if prefix else name
         if not _safe_path(logical) or logical in members:
             raise BundleError(f"unsafe or duplicate archive member: {logical!r}")
+        if len(members) >= max_members:
+            raise BundleError("archive member count exceeds limit")
         size = _parse_octal(header[124:136], "size")
         if header != _header(logical, size):
             raise BundleError("non-canonical USTAR header")
@@ -212,6 +220,9 @@ def _parse_ustar(fd: int, archive_size: int) -> dict[str, Member]:
         next_offset = data_offset + size + (-size % 512)
         if next_offset > archive_size:
             raise BundleError("truncated archive member")
+        padding_size = -size % 512
+        if padding_size and _pread_exact(fd, padding_size, data_offset + size) != b"\0" * padding_size:
+            raise BundleError("nonzero USTAR member padding")
         members[logical] = Member(logical, size, data_offset)
         offset = next_offset
     raise BundleError("archive has no two-block USTAR terminator")
@@ -280,27 +291,51 @@ def _path_matches_fd(path: Path, identity: tuple[int, int, int, int, int, int, i
         return False
 
 
+def _archive_path_matches(archive: CheckedArchive) -> bool:
+    try:
+        by_parent = os.stat(archive.name, dir_fd=archive.parent_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return _archive_identity(by_parent) == archive.identity and _path_matches_fd(archive.path, archive.identity)
+
+
 def _open_checked_archive(
     path: Path, expected_maps: dict[str, list[tuple[str, int]]], pins: ManifestPins
 ) -> CheckedArchive:
-    _real_ancestors(path)
+    parent_fd = _open_directory_path(path.parent)
+    name = path.name
+    if not name or name in {".", ".."}:
+        os.close(parent_fd)
+        raise BundleError("invalid archive filename")
     try:
-        path_info = path.lstat()
+        path_info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except OSError as error:
+        os.close(parent_fd)
         raise BundleError(f"cannot stat archive {path}: {error}") from error
     if not stat.S_ISREG(path_info.st_mode) or stat.S_ISLNK(path_info.st_mode) or path_info.st_nlink != 1:
+        os.close(parent_fd)
         raise BundleError(f"archive is not a single-link regular file: {path}")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
+        fd = os.open(name, flags, dir_fd=parent_fd)
     except OSError as error:
+        os.close(parent_fd)
         raise BundleError(f"cannot safely open archive {path}: {error}") from error
     try:
         info = os.fstat(fd)
         identity = _archive_identity(info)
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not _path_matches_fd(path, identity):
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or _archive_identity(path_info) != identity
+            or not _path_matches_fd(path, identity)
+        ):
             raise BundleError(f"archive is not a stable single-link regular file: {path}")
-        members = _parse_ustar(fd, info.st_size)
+        if pins == PRODUCTION_PINS and info.st_size not in set(PRODUCTION_ARCHIVE_BYTES.values()):
+            raise BundleError("production archive byte-count is not an allowed root size")
+        if info.st_size > max(PRODUCTION_ARCHIVE_BYTES.values()):
+            raise BundleError("archive exceeds byte limit")
+        members = _parse_ustar(fd, info.st_size, max_members=pins.files_per_root + 1)
         manifest_member = members.get(BUNDLE_MANIFEST_NAME)
         if manifest_member is None:
             raise BundleError("missing unique embedded manifest")
@@ -323,6 +358,9 @@ def _open_checked_archive(
         expected_names = {entry["path"] for entry in files} | {BUNDLE_MANIFEST_NAME}
         if set(members) != expected_names:
             raise BundleError("archive member set mismatch")
+        expected_order = [str(entry["path"]) for entry in files] + [BUNDLE_MANIFEST_NAME]
+        if list(members) != expected_order:
+            raise BundleError("archive member order mismatch")
         archive_digest = hashlib.sha256()
         archive_offset = 0
         while archive_offset < info.st_size:
@@ -335,31 +373,24 @@ def _open_checked_archive(
             member = members[str(entry["path"])]
             if member.size != entry["size"] or _hash_region(fd, member.offset, member.size) != entry["sha256"]:
                 raise BundleError(f"payload size/hash mismatch: {member.name}")
-        if _archive_identity(os.fstat(fd)) != identity or not _path_matches_fd(path, identity):
+        provisional = CheckedArchive(
+            path, fd, parent_fd, name, identity, root, archive_digest.hexdigest(), members, files
+        )
+        if _archive_identity(os.fstat(fd)) != identity or not _archive_path_matches(provisional):
             raise BundleError("archive changed during validation")
-        return CheckedArchive(path, fd, identity, root, archive_digest.hexdigest(), members, files)
+        return provisional
     except BaseException:
         os.close(fd)
+        os.close(parent_fd)
         raise
 
 
-def _check_data_root(data_root: Path) -> None:
-    absolute = data_root.absolute()
-    current = Path(absolute.anchor)
-    for part in absolute.parts[1:-1]:
-        current /= part
-        try:
-            ancestor = current.lstat()
-        except OSError as error:
-            raise BundleError(f"data-root ancestor unavailable: {current}: {error}") from error
-        if not stat.S_ISDIR(ancestor.st_mode) or stat.S_ISLNK(ancestor.st_mode):
-            raise BundleError(f"data-root ancestor is unsafe: {current}")
+def _check_data_root(data_root: Path) -> int:
     try:
-        info = data_root.lstat()
+        fd = _open_directory_path(data_root)
     except OSError as error:
         raise BundleError(f"data root unavailable: {error}") from error
-    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        raise BundleError("data root is not a real directory")
+    return fd
 
 
 def _inspect_destination(data_fd: int, data_root: Path, entry: dict[str, object]) -> str:
@@ -388,6 +419,7 @@ def _inspect_destination(data_fd: int, data_root: Path, entry: dict[str, object]
             or _hash_file_stable(current_fd, relative.parts[-1], path, info) != entry["sha256"]
         ):
             raise ImportHold(f"existing destination differs; refusing replacement: {path}")
+        os.fsync(current_fd)
         return "skipped"
     finally:
         os.close(current_fd)
@@ -472,6 +504,23 @@ def _open_parent(data_fd: int, parts: tuple[str, ...]) -> int:
         raise
 
 
+def _parent_matches(data_fd: int, parts: tuple[str, ...], expected_fd: int) -> bool:
+    current = os.dup(data_fd)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        for part in parts:
+            next_fd = os.open(part, flags, dir_fd=current)
+            os.close(current)
+            current = next_fd
+        actual = os.fstat(current)
+        expected = os.fstat(expected_fd)
+        return (actual.st_dev, actual.st_ino, actual.st_mode) == (expected.st_dev, expected.st_ino, expected.st_mode)
+    except OSError:
+        return False
+    finally:
+        os.close(current)
+
+
 def _copy_payload(archive: CheckedArchive, member: Member, target: BinaryIO) -> str:
     return _hash_region(archive.fd, member.offset, member.size, target)
 
@@ -497,11 +546,26 @@ def _verify_temporary(parent_fd: int, name: str, expected_size: int, expected_sh
         os.close(fd)
 
 
+def _verify_published_payload(
+    parent_fd: int, name: str, entry: dict[str, object], expected_inode: tuple[int, int]
+) -> None:
+    info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or (info.st_dev, info.st_ino) != expected_inode
+        or info.st_size != entry["size"]
+        or _hash_file_stable(parent_fd, name, Path(str(entry["path"])), info) != entry["sha256"]
+    ):
+        raise ImportHold(f"published payload content/identity mismatch: {entry['path']}")
+
+
 def _install_entry(data_fd: int, archive: CheckedArchive, entry: dict[str, object]) -> str:
     relative = PurePosixPath(str(entry["path"]))
     parent_fd = _open_parent(data_fd, relative.parts[:-1])
     leaf = relative.parts[-1]
     temp_name: str | None = None
+    published_inode: tuple[int, int] | None = None
     try:
         try:
             existing = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
@@ -537,16 +601,33 @@ def _install_entry(data_fd: int, archive: CheckedArchive, entry: dict[str, objec
         ):
             raise BundleError(f"temporary payload verification failed: {relative}")
         _verify_temporary(parent_fd, temp_name, int(entry["size"]), str(entry["sha256"]))
+        if not _parent_matches(data_fd, relative.parts[:-1], parent_fd):
+            raise ImportHold(f"destination parent changed before publication: {relative}")
         try:
             rename_noreplace(temp_name, leaf, source_dir_fd=parent_fd, destination_dir_fd=parent_fd)
         except FileExistsError:
             return "race-existing"
         temp_name = None
+        published = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        published_inode = (published.st_dev, published.st_ino)
+        _verify_published_payload(parent_fd, leaf, entry, published_inode)
         try:
             os.fsync(parent_fd)
         except OSError as error:
             raise PublishedFileError(str(relative), error) from error
+        if not _parent_matches(data_fd, relative.parts[:-1], parent_fd):
+            raise ImportHold(f"destination parent changed during publication: {relative}")
+        _verify_published_payload(parent_fd, leaf, entry, published_inode)
         return "installed"
+    except PublishedFileError:
+        raise
+    except BaseException:
+        if published_inode is not None:
+            try:
+                _remove_owned_or_quarantine(parent_fd, leaf, published_inode)
+            except Exception as rollback_error:
+                raise ImportHold("destination publication failed and rollback was incomplete") from rollback_error
+        raise
     finally:
         if temp_name is not None:
             try:
@@ -562,7 +643,7 @@ def _write_receipt(receipt_dir: Path, value: dict[str, object]) -> Path:
     digest = hashlib.sha256(raw).hexdigest()
     final_name = f"eval36-import-{digest}.json"
     final = receipt_dir / final_name
-    directory_fd = os.open(receipt_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    directory_fd = _open_directory_path(receipt_dir)
     temp_name: str | None = None
     published_inode: tuple[int, int] | None = None
     try:
@@ -593,6 +674,12 @@ def _write_receipt(receipt_dir: Path, value: dict[str, object]) -> Path:
             finally:
                 os.close(existing_fd)
             if existing_raw == raw:
+                if not _directory_path_matches(receipt_dir, directory_info):
+                    raise ImportHold("receipt directory changed during reuse")
+                try:
+                    os.fsync(directory_fd)
+                except OSError as error:
+                    raise ImportHold("existing receipt durability is ambiguous") from error
                 return final
             raise ImportHold(f"receipt collision: {final}")
         for attempt in range(100):
@@ -614,6 +701,15 @@ def _write_receipt(receipt_dir: Path, value: dict[str, object]) -> Path:
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
+        temporary_info = os.stat(temp_name, dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(temporary_info.st_mode)
+            or temporary_info.st_nlink != 1
+            or temporary_info.st_size != len(raw)
+        ):
+            raise ImportHold("receipt temporary is not a stable single-link regular file")
+        if not _directory_path_matches(receipt_dir, directory_info):
+            raise ImportHold("receipt directory changed before publication")
         try:
             rename_noreplace(temp_name, final_name, source_dir_fd=directory_fd, destination_dir_fd=directory_fd)
         except FileExistsError as error:
@@ -621,16 +717,21 @@ def _write_receipt(receipt_dir: Path, value: dict[str, object]) -> Path:
         final_info = os.stat(final_name, dir_fd=directory_fd, follow_symlinks=False)
         published_inode = (final_info.st_dev, final_info.st_ino)
         temp_name = None
-        os.fsync(directory_fd)
+        _verify_receipt_final(directory_fd, final_name, raw, published_inode)
+        try:
+            os.fsync(directory_fd)
+        except OSError as error:
+            raise ImportHold("receipt publication durability is ambiguous") from error
+        _verify_receipt_final(directory_fd, final_name, raw, published_inode)
+        if not _directory_path_matches(receipt_dir, directory_info):
+            raise ImportHold("receipt directory changed during publication")
         return final
     except BaseException:
         if published_inode is not None:
             try:
-                final_info = os.stat(final_name, dir_fd=directory_fd, follow_symlinks=False)
-                if (final_info.st_dev, final_info.st_ino) == published_inode:
-                    os.unlink(final_name, dir_fd=directory_fd)
-            except FileNotFoundError:
-                pass
+                _remove_owned_or_quarantine(directory_fd, final_name, published_inode)
+            except Exception as rollback_error:
+                raise ImportHold("receipt publication failed and rollback was incomplete") from rollback_error
         raise
     finally:
         if temp_name is not None:
@@ -641,17 +742,48 @@ def _write_receipt(receipt_dir: Path, value: dict[str, object]) -> Path:
         os.close(directory_fd)
 
 
+def _verify_receipt_final(directory_fd: int, name: str, expected: bytes, expected_inode: tuple[int, int]) -> None:
+    fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+    try:
+        before = os.fstat(fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or (before.st_dev, before.st_ino) != expected_inode
+            or before.st_size != len(expected)
+        ):
+            raise ImportHold("published receipt identity mismatch")
+        actual = b""
+        while len(actual) <= len(expected):
+            chunk = os.read(fd, min(_CHUNK, len(expected) + 1 - len(actual)))
+            if not chunk:
+                break
+            actual += chunk
+        path_info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            actual != expected
+            or _archive_identity(os.fstat(fd)) != _archive_identity(before)
+            or _archive_identity(path_info) != _archive_identity(before)
+        ):
+            raise ImportHold("published receipt content/identity mismatch")
+    finally:
+        os.close(fd)
+
+
+def _directory_path_matches(path: Path, expected: os.stat_result) -> bool:
+    try:
+        actual = path.lstat()
+    except OSError:
+        return False
+    return (actual.st_dev, actual.st_ino, actual.st_mode) == (expected.st_dev, expected.st_ino, expected.st_mode)
+
+
 def _validate_receipt_dir(receipt_dir: Path) -> None:
     try:
-        _real_ancestors(receipt_dir / "receipt-placeholder")
-    except BundleError as error:
-        raise ImportHold(f"receipt path is unsafe: {error}") from error
-    try:
-        info = receipt_dir.lstat()
+        fd = _open_directory_path(receipt_dir)
     except OSError as error:
-        raise ImportHold(f"receipt directory unavailable: {error}") from error
-    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        raise ImportHold("receipt directory is unsafe")
+        raise ImportHold(f"receipt path is unsafe: {error}") from error
+    os.close(fd)
 
 
 def _archive_records(checked: list[CheckedArchive]) -> list[dict[str, object]]:
@@ -702,8 +834,7 @@ def _import_bundles_impl(
     """Verify all archives first, then install missing files without replacement."""
     if not archive_paths:
         raise BundleError("no archives selected")
-    _check_data_root(data_root)
-    data_fd = os.open(data_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    data_fd = _check_data_root(data_root)
     if not _data_root_matches_fd(data_root, data_fd):
         os.close(data_fd)
         raise BundleError("data root identity changed while opening")
@@ -745,8 +876,8 @@ def _import_bundles_impl(
         with _mutation_lock(data_fd, data_root):
             try:
                 for archive in checked:
-                    if _archive_identity(os.fstat(archive.fd)) != archive.identity or not _path_matches_fd(
-                        archive.path, archive.identity
+                    if _archive_identity(os.fstat(archive.fd)) != archive.identity or not _archive_path_matches(
+                        archive
                     ):
                         raise BundleError(f"archive changed before installation: {archive.path}")
                 for archive in checked:
@@ -763,15 +894,15 @@ def _import_bundles_impl(
                         else:
                             actions[str(entry["path"])] = "installed"
                 for archive in checked:
-                    if _archive_identity(os.fstat(archive.fd)) != archive.identity or not _path_matches_fd(
-                        archive.path, archive.identity
+                    if _archive_identity(os.fstat(archive.fd)) != archive.identity or not _archive_path_matches(
+                        archive
                     ):
                         raise BundleError(f"archive changed during installation: {archive.path}")
                     for entry in archive.files:
                         if _inspect_destination(data_fd, data_root, entry) != "skipped":
                             raise BundleError(f"final destination verification failed: {entry['path']}")
-                    if _archive_identity(os.fstat(archive.fd)) != archive.identity or not _path_matches_fd(
-                        archive.path, archive.identity
+                    if _archive_identity(os.fstat(archive.fd)) != archive.identity or not _archive_path_matches(
+                        archive
                     ):
                         raise BundleError(f"archive changed during final destination verification: {archive.path}")
                 if not _data_root_matches_fd(data_root, data_fd):
@@ -814,6 +945,7 @@ def _import_bundles_impl(
     finally:
         for archive in checked:
             os.close(archive.fd)
+            os.close(archive.parent_fd)
         os.close(data_fd)
 
 
@@ -880,7 +1012,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except Exception as error:
         status = "HOLD" if isinstance(error, ImportHold) else "FAIL"
-        result = {"error": str(error), "status": status}
+        result = {"error": type(error).__name__, "status": status}
         receipt = getattr(error, "receipt", None)
         if isinstance(receipt, str):
             result["receipt"] = Path(receipt).name
