@@ -57,6 +57,33 @@ the CLI dataset version number, and the metadata query selected `latest`, so the
 two records still do not satisfy the required two-identifier acquisition gate.
 License presence is not the same as the project's explicit license acceptance.
 
+### Non-executing checkpoint-structure observation
+
+The quarantined checkpoint was not loaded with PyTorch and no model code or
+inference was run. A read-only ZIP member listing followed by Python
+`pickletools` opcode disassembly of the archive's `data.pkl` establishes only
+the following byte-structure facts for the already pinned checkpoint hash:
+
+- the top-level payload has `state_dict`, `config`, `feature_columns`, `mean`,
+  `std`, `best_epoch`, and `best_score` entries;
+- the state dictionary has exactly eight float-storage entries:
+  `net.0.{weight,bias}`, `net.1.{weight,bias}`, `net.4.{weight,bias}`, and
+  `net.6.{weight,bias}`;
+- their serialized shapes are respectively `(64,22)`, `(64,)`, `(64,)`,
+  `(64,)`, `(32,64)`, `(32,)`, `(1,32)`, and `(1,)`;
+- the checkpoint repeats 22 feature names and 22-element `mean` and `std`
+  lists, and records `best_epoch=7` and
+  `best_score=0.9777398513390436`.
+
+This is content evidence from quarantined, provenance-unverified bytes, not a
+state-dict validation or permission to load them. In particular, parameterless
+module types at `net.2`, `net.3`, and `net.5`, feature units/transforms and
+missing-value rules, candidate conventions, pre/post-normalization semantics,
+and scalar output activation/calibration are not encoded by these tensor keys.
+Reverse engineering or guessing any of them remains forbidden. The static
+observation therefore does not clear the version, license, feature-contract,
+support-source, safe-load, or test-vector gates below.
+
 ## Frozen identities and exact payload allowlist
 
 The only acceptable ranker dataset identity is:
