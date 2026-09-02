@@ -389,7 +389,7 @@ def _check_data_root(data_root: Path) -> int:
     try:
         fd = _open_directory_path(data_root)
     except OSError as error:
-        raise BundleError(f"data root unavailable: {error}") from error
+        raise ImportHold(f"data root is unavailable or unsafe: {error}") from error
     return fd
 
 
@@ -421,6 +421,10 @@ def _inspect_destination(data_fd: int, data_root: Path, entry: dict[str, object]
             raise ImportHold(f"existing destination differs; refusing replacement: {path}")
         os.fsync(current_fd)
         return "skipped"
+    except ImportHold:
+        raise
+    except OSError as error:
+        raise ImportHold(f"destination inspection or durability check failed for {path}: {error}") from error
     finally:
         os.close(current_fd)
 
@@ -464,7 +468,10 @@ def _mutation_lock(data_fd: int, data_root: Path) -> Iterator[None]:
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     if not _data_root_matches_fd(data_root, data_fd):
         raise ImportHold("data root identity changed before lock")
-    fd = os.open(".download_data.lock", flags, 0o600, dir_fd=data_fd)
+    try:
+        fd = os.open(".download_data.lock", flags, 0o600, dir_fd=data_fd)
+    except OSError as error:
+        raise ImportHold(f"cannot safely open downloader lock file: {lock}") from error
     try:
         info = os.fstat(fd)
         if (
@@ -499,6 +506,9 @@ def _open_parent(data_fd: int, parts: tuple[str, ...]) -> int:
             os.close(current)
             current = next_fd
         return current
+    except OSError as error:
+        os.close(current)
+        raise ImportHold("destination ancestor is unsafe or changed during creation") from error
     except BaseException:
         os.close(current)
         raise
@@ -837,7 +847,7 @@ def _import_bundles_impl(
     data_fd = _check_data_root(data_root)
     if not _data_root_matches_fd(data_root, data_fd):
         os.close(data_fd)
-        raise BundleError("data root identity changed while opening")
+        raise ImportHold("data root identity changed while opening")
     try:
         expected = load_expected_files(manifest_path, pins)
     except BaseException:

@@ -738,6 +738,19 @@ def test_destination_symlink_ancestor_is_hold(bundle: dict[str, object], tmp_pat
     assert list(outside.iterdir()) == []
 
 
+def test_unsafe_data_root_is_hold_and_writes_hold_receipt(bundle: dict[str, object], tmp_path: Path) -> None:
+    data: Path = bundle["data"]  # type: ignore[assignment]
+    outside = tmp_path / "outside-data-root"
+    outside.mkdir()
+    data.rmdir()
+    data.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(importer.ImportHold, match="data root"):
+        _import(bundle)
+    receipts = [json.loads(path.read_text()) for path in Path(bundle["receipts"]).glob("*.json")]  # type: ignore[arg-type]
+    assert any(receipt["status"] == "HOLD" and receipt["validated"] == 0 for receipt in receipts)
+    assert list(outside.iterdir()) == []
+
+
 def test_lock_contention_is_hold(bundle: dict[str, object]) -> None:
     data: Path = bundle["data"]  # type: ignore[assignment]
     lock = data / ".download_data.lock"
@@ -745,6 +758,26 @@ def test_lock_contention_is_hold(bundle: dict[str, object]) -> None:
         fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(importer.ImportHold, match="owns lock"):
             _import(bundle)
+
+
+def test_unsafe_lock_open_and_skipped_file_fsync_are_hold(
+    bundle: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data: Path = bundle["data"]  # type: ignore[assignment]
+    target = tmp_path / "outside-lock"
+    target.write_text("")
+    (data / ".download_data.lock").symlink_to(target)
+    with pytest.raises(importer.ImportHold, match="lock"):
+        _import(bundle)
+    (data / ".download_data.lock").unlink()
+    assert _import(bundle)["installed"] == 2
+
+    def fail_directory_fsync(fd: int) -> None:
+        raise OSError(f"injected skipped-file fsync failure on {fd}")
+
+    monkeypatch.setattr(importer.os, "fsync", fail_directory_fsync)
+    with pytest.raises(importer.ImportHold, match="durability"):
+        _import(bundle, dry_run=True)
 
 
 def test_unsafe_receipt_path_fails_before_data_mutation(bundle: dict[str, object], tmp_path: Path) -> None:
