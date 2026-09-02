@@ -53,6 +53,30 @@ The v2 receipt records
 `kernel_metadata_dataset_versions_resolved=false`; therefore neither the
 v1 nor v2 ready marker is push authorization.
 
+An offline field-level audit of the pinned
+`rishabh_v2_public_view_model.json` and `rishabh_kernel_version_list.json`
+found the public author identity (`rishabhr0y`, Rishabh Roy), source notebook
+identity, and the three `pilkwang` dataset slugs/source IDs, but no license,
+licence, copyright, or attribution field. This is evidence of provenance, not
+permission to reuse. The preparer therefore records
+`source_reuse_license_reviewed=false` and `attribution_recorded=false` until
+fresh authoritative evidence is reviewed and separately recorded.
+
+A third fresh offline staging run records all three unresolved conditions and
+supersedes v2 for future review. The earlier directories remain immutable
+evidence. The v3 directory is
+`outputs/local/external_933_replay/20260902T143216JST_source_v3`, with hashes:
+
+| artifact | SHA-256 |
+|---|---|
+| `REPLAY_RECEIPT.json` | `ee227f4f7e4297477cf7014df8d7847a05c5acb77ca72142d8a91f8b0cb99633` |
+| `READY.json` | `92dd0d718435c8e43a7f33647e0bf02929b0ed9fc606670072b09ac54e7e808d` |
+| exact notebook | `c7cdda0acf9dc704865165feae06d933fc85748dd4d8e9454734b91a65f0eb10` |
+| kernel metadata | `7ede307ce9bb4ccc7a205fa3706d2de83462a3fe5d47163c3243c3c19f0fdae2` |
+
+The v3 ready marker still permits only `OFFLINE_REVIEW_ONLY`; it is not push
+authorization.
+
 The executable AST was independently recomputed with CPython `3.14.7`
 (interpreter SHA-256
 `87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634`)

@@ -89,6 +89,8 @@ def test_verify_and_stage_exact_source(tmp_path: Path) -> None:
     assert verified["status"] == "VERIFIED_SOURCE_ONLY"
     assert verified["claims"]["account_replay_executed"] is False
     assert verified["claims"]["kernel_metadata_dataset_versions_resolved"] is False
+    assert verified["claims"]["source_reuse_license_reviewed"] is False
+    assert verified["claims"]["attribution_recorded"] is False
 
     allowed = tmp_path / "staging"
     output = allowed / "run-1"

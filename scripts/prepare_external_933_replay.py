@@ -338,6 +338,8 @@ def verify_reference(
             "account_replay_executed": False,
             "account_score_observed": False,
             "kernel_metadata_dataset_versions_resolved": False,
+            "source_reuse_license_reviewed": False,
+            "attribution_recorded": False,
         },
     }
 
