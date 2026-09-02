@@ -20,6 +20,7 @@ import select
 import signal
 import stat
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -74,8 +75,8 @@ DEEPCENTER_RECEIPT_SCHEMA = "biohub.st_r3.deepcenter_receipt.v1"
 TWIN_PLAN_SCHEMA = "biohub.st_r3.twin_plan.v1"
 TWIN_PLAN_MANIFEST_SCHEMA = "biohub.st_r3.twin_plan_manifest.v1"
 RUN_STATS_SCHEMA = "biohub.st_r3.run_stats.v1"
-ARM_RECEIPT_SCHEMA = "biohub.st_r3.arm_receipt.v1"
-FAILURE_RECEIPT_SCHEMA = "biohub.st_r3.failure_receipt.v1"
+ARM_RECEIPT_SCHEMA = "biohub.st_r3.arm_receipt.v2"
+FAILURE_RECEIPT_SCHEMA = "biohub.st_r3.failure_receipt.v2"
 
 _PARTIAL_PROMOTIONS = {
     "submission.csv.partial": "submission.csv",
@@ -88,6 +89,7 @@ _SUPERVISOR_LOGS = ("supervisor_stdout.log.partial", "supervisor_stderr.log.part
 _LOCAL_HOLDS = (
     "HOLD_GT_VISIBLE",
     "HOLD_PROCESS_TREE_UNPROVEN",
+    "HOLD_PUBLICATION_CONCURRENCY_UNPROVEN",
     "HOLD_RSS_UNMEASURABLE",
     "HOLD_TARGET_RUNTIME_UNCALIBRATED",
     "HOLD_TARGET_MEMORY_UNCALIBRATED",
@@ -342,6 +344,11 @@ _TEXT_WINDOWS_PATH_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])(?:[A-Z]:\\|\\\\)[^\s\
 _SAFE_REDACTED_LOG = b"[child text rejected by supervisor policy]\n"
 _SAFE_FAILURE_REDACTION = "diagnostic redacted by supervisor policy"
 _MAX_SUPERVISOR_LOG_BYTES = 1_048_576
+_LOCAL_SUCCESS_SCOPE = "LOCAL_VALIDATION_ONLY_NOT_PRODUCTION_PERMISSION"
+_SUCCESS_EVIDENCE_STATE = "ARM_RECEIPT_PUBLISHED_WITH_HOLDS"
+_FAILURE_EVIDENCE_WRITTEN = "FAILURE_RECEIPT_WRITTEN"
+_FAILURE_EVIDENCE_FALLBACK = "FALLBACK_FAILURE_RECEIPT_WRITTEN"
+_FAILURE_EVIDENCE_UNWRITABLE = "FAILURE_RECEIPT_UNWRITABLE"
 
 
 @dataclass(frozen=True)
@@ -369,7 +376,12 @@ class SupervisorResult:
     ru_maxrss_raw: int | float | None
     ru_maxrss_unit: str | None
     ru_maxrss_bytes: int | None
+    failure_type: str | None
+    failure_message: str | None
     receipt_path: Path | None
+    failure_evidence_state: str
+    failure_evidence_errors: tuple[str, ...]
+    success_scope: str
     holds: tuple[str, ...]
 
 
@@ -2084,12 +2096,15 @@ def _cloexec_pipe() -> tuple[int, int]:
     return read_fd, write_fd
 
 
-def _close_child_fds_except(keep: int) -> None:
-    soft_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
-    maximum = int(os.sysconf("SC_OPEN_MAX")) if soft_limit == resource.RLIM_INFINITY else int(soft_limit)
-    if keep > 3:
-        os.closerange(3, keep)
-    os.closerange(keep + 1, maximum)
+def _kill_child_process_group(child_pid: int) -> None:
+    """Kill the isolated child session; a self-detached descendant remains held."""
+    try:
+        os.killpg(child_pid, signal.SIGKILL)
+    except ProcessLookupError:
+        try:
+            os.kill(child_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _drain_pipe(
@@ -2505,6 +2520,83 @@ def _sanitize_failed_text_artifacts(staging: Path) -> None:
                 pass
 
 
+def _evidence_error(operation: str, error: BaseException) -> str:
+    return f"{operation}:{type(error).__name__}"
+
+
+def _remove_invalid_success_receipt(staging_fd: int) -> tuple[dict[str, object], list[str]]:
+    errors: list[str] = []
+    recovery: dict[str, object] = {
+        "attempted": False,
+        "present_before": None,
+        "removed": None,
+        "present_after": None,
+        "directory_fsync_succeeded": None,
+        "tainted": True,
+    }
+    try:
+        present_before = _entry_exists(staging_fd, "arm_receipt.json")
+        recovery["present_before"] = present_before
+        if present_before:
+            recovery["attempted"] = True
+            os.unlink("arm_receipt.json", dir_fd=staging_fd)
+            recovery["removed"] = True
+            try:
+                os.fsync(staging_fd)
+                recovery["directory_fsync_succeeded"] = True
+            except BaseException as exc:
+                recovery["directory_fsync_succeeded"] = False
+                errors.append(_evidence_error("success_receipt_removal_fsync", exc))
+        else:
+            recovery["removed"] = True
+            recovery["directory_fsync_succeeded"] = True
+        recovery["present_after"] = _entry_exists(staging_fd, "arm_receipt.json")
+        recovery["tainted"] = bool(recovery["present_after"]) or recovery["directory_fsync_succeeded"] is not True
+    except BaseException as exc:
+        errors.append(_evidence_error("success_receipt_removal", exc))
+        try:
+            recovery["present_after"] = _entry_exists(staging_fd, "arm_receipt.json")
+        except BaseException as check_exc:
+            errors.append(_evidence_error("success_receipt_postcheck", check_exc))
+    return recovery, errors
+
+
+def _write_failure_receipt_best_effort(
+    staging: Path,
+    payload: dict[str, object],
+) -> tuple[Path | None, str, list[str]]:
+    errors: list[str] = []
+    receipt_path = staging / "failure_receipt.json"
+    try:
+        _write_new_file(receipt_path, _canonical_json_bytes(payload))
+        _fsync_directory(staging)
+        return receipt_path, _FAILURE_EVIDENCE_WRITTEN, errors
+    except BaseException as exc:
+        errors.append(_evidence_error("failure_receipt_primary", exc))
+    fallback_path = staging / f"failure_receipt.fallback.{uuid.uuid4().hex}.json"
+    fallback = {
+        "schema_version": FAILURE_RECEIPT_SCHEMA,
+        "status": "FAILED_NOT_GENERATION_INPUT",
+        "arm_name": payload["arm_name"],
+        "failure": payload["failure"],
+        "final_absent": payload["final_absent"],
+        "publication_recovery": payload["publication_recovery"],
+        "success_receipt_removal": payload["success_receipt_removal"],
+        "failure_evidence_errors": [*payload["failure_evidence_errors"], *errors],
+        "failure_evidence_state": _FAILURE_EVIDENCE_FALLBACK,
+        "partial_inventory_complete": False,
+        "holds": list(_LOCAL_HOLDS),
+        "success_scope": _LOCAL_SUCCESS_SCOPE,
+    }
+    try:
+        _write_new_file(fallback_path, _canonical_json_bytes(fallback))
+        _fsync_directory(staging)
+        return fallback_path, _FAILURE_EVIDENCE_FALLBACK, errors
+    except BaseException as exc:
+        errors.append(_evidence_error("failure_receipt_fallback", exc))
+        return None, _FAILURE_EVIDENCE_UNWRITABLE, errors
+
+
 def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
     """Run, validate, seal, and no-replace publish one frozen ST-R3 arm."""
     _validate_spec(spec)
@@ -2526,6 +2618,7 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         dir_fd=parent_fd,
     )
     child_pid: int | None = None
+    child_process: subprocess.Popen[bytes] | None = None
     duration_ns: int | None = None
     exit_code: int | None = None
     term_signal: int | None = None
@@ -2600,27 +2693,22 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         environment = _child_environment()
         started_utc_ns = time.time_ns()
         started_monotonic_ns = time.monotonic_ns()
-        child_pid = os.fork()
-        if child_pid == 0:  # pragma: no cover - executed in the authoritative child
-            try:
-                os.close(event_read)
-                os.close(stdout_read)
-                os.close(stderr_read)
-                devnull = os.open(os.devnull, os.O_RDONLY)
-                os.dup2(devnull, 0)
-                os.dup2(stdout_write, 1)
-                os.dup2(stderr_write, 2)
-                if devnull > 2:
-                    os.close(devnull)
-                os.set_inheritable(event_write, True)
-                _close_child_fds_except(event_write)
-                os.execve(python_executable, argv, environment)
-            except BaseException as exc:
-                message = f"supervisor child exec failure: {type(exc).__name__}: {exc}\n".encode(errors="replace")
-                try:
-                    os.write(2, message[:4096])
-                finally:
-                    os._exit(127)
+        devnull_fd = os.open(os.devnull, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        owned_fds.add(devnull_fd)
+        child_process = subprocess.Popen(
+            argv,
+            executable=python_executable,
+            stdin=devnull_fd,
+            stdout=stdout_write,
+            stderr=stderr_write,
+            env=environment,
+            close_fds=True,
+            pass_fds=(event_write,),
+            start_new_session=True,
+        )
+        child_pid = child_process.pid
+        os.close(devnull_fd)
+        owned_fds.remove(devnull_fd)
         os.close(event_write)
         owned_fds.remove(event_write)
         os.close(stdout_write)
@@ -2656,17 +2744,20 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
             waited_pid, status, wait_usage = os.wait4(child_pid, os.WNOHANG)
             if waited_pid == child_pid:
                 child_reaped = True
+                child_process.returncode = os.waitstatus_to_exitcode(status)
                 break
             if thread_errors:
-                os.kill(child_pid, signal.SIGKILL)
+                _kill_child_process_group(child_pid)
                 _, status, wait_usage = os.wait4(child_pid, 0)
                 child_reaped = True
+                child_process.returncode = os.waitstatus_to_exitcode(status)
                 break
             if time.monotonic_ns() >= deadline:
                 timed_out = True
-                os.kill(child_pid, signal.SIGKILL)
+                _kill_child_process_group(child_pid)
                 _, status, wait_usage = os.wait4(child_pid, 0)
                 child_reaped = True
+                child_process.returncode = os.waitstatus_to_exitcode(status)
                 break
             time.sleep(0.01)
         ended_monotonic_ns = time.monotonic_ns()
@@ -2719,13 +2810,13 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         artifact_inventory = _partial_inventory(staging, {"arm_receipt.json"})
         receipt = {
             "schema_version": ARM_RECEIPT_SCHEMA,
-            "status": "LOCAL_INTERFACE_SEALED",
+            "status": "LOCAL_VALIDATION_OBSERVED_WITH_HOLDS",
             "arm_name": spec.arm_name,
             "datasets": list(EVAL36),
             "child": {
                 "pid": child_pid,
                 "exec_same_pid": True,
-                "fork_count": 1,
+                "spawn_method": "subprocess.Popen(close_fds=True,pass_fds,start_new_session=True)",
                 "argv": argv,
                 "environment": environment,
                 "declared_fds": [0, 1, 2, event_write],
@@ -2754,8 +2845,11 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
             "artifact_inventory": artifact_inventory,
             "publication": {"primitive": None, "no_replace": True},
             "holds": list(_LOCAL_HOLDS),
+            "success_scope": _LOCAL_SUCCESS_SCOPE,
             "claims": {
-                "local_child_interface_sealed": True,
+                "local_child_interface_validated_at_publication_check": True,
+                "publication_concurrency_exclusion_proven": False,
+                "success_boolean_authorizes_production": False,
                 "gt_nonvisibility_proven": False,
                 "no_descendants_proven": False,
                 "target_runtime_calibrated": False,
@@ -2826,7 +2920,12 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
             raw_rss,
             raw_unit,
             rss_bytes,
+            None,
+            None,
             final_dir / "arm_receipt.json",
+            _SUCCESS_EVIDENCE_STATE,
+            (),
+            _LOCAL_SUCCESS_SCOPE,
             _LOCAL_HOLDS,
         )
     except BaseException as exc:
@@ -2844,80 +2943,104 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
     if tree_seal is not None:
         _release_tree_seal(tree_seal, writable=True)
         tree_seal = None
+    failure_evidence_errors: list[str] = []
     if child_pid is not None and child_pid > 0 and not child_reaped:
         try:
-            os.kill(child_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+            _kill_child_process_group(child_pid)
+        except BaseException as kill_exc:
+            failure_evidence_errors.append(_evidence_error("child_group_kill", kill_exc))
         try:
             _, cleanup_status, cleanup_usage = os.wait4(child_pid, 0)
             child_reaped = True
             status = cleanup_status
             wait_usage = cleanup_usage
+            if child_process is not None:
+                child_process.returncode = os.waitstatus_to_exitcode(status)
             if os.WIFEXITED(status):
                 exit_code = os.WEXITSTATUS(status)
             elif os.WIFSIGNALED(status):
                 term_signal = os.WTERMSIG(status)
             if raw_rss is None:
                 raw_rss, raw_unit, rss_bytes = _normalized_rss(wait_usage)
-        except (ChildProcessError, SupervisorError):
-            pass
+        except BaseException as reap_exc:
+            failure_evidence_errors.append(_evidence_error("child_reap", reap_exc))
     done.set()
     for fd in tuple(owned_fds):
         try:
             os.close(fd)
-        except OSError:
-            pass
+        except BaseException as close_exc:
+            failure_evidence_errors.append(_evidence_error("owned_fd_close", close_exc))
         owned_fds.discard(fd)
     for thread in threads:
-        thread.join(timeout=1.0)
+        try:
+            thread.join(timeout=1.0)
+        except BaseException as join_exc:
+            failure_evidence_errors.append(_evidence_error("drain_thread_join", join_exc))
     if logs_attached:
         try:
             _validate_attached_logs(staging)
-        except SupervisorError as log_exc:
+        except BaseException as log_exc:
             logs_policy_rejected = True
-            failure = log_exc
+            failure_evidence_errors.append(_evidence_error("attached_log_validation", log_exc))
             try:
                 _attach_redacted_supervisor_logs(parent_fd, staging_fd, staging, temporary_logs)
-            except BaseException:
-                pass
-    if not logs_attached and all(_entry_exists(parent_fd, name) for name in temporary_logs):
+            except BaseException as redact_exc:
+                failure_evidence_errors.append(_evidence_error("attached_log_redaction", redact_exc))
+    try:
+        temporary_logs_exist = all(_entry_exists(parent_fd, name) for name in temporary_logs)
+    except BaseException as log_check_exc:
+        temporary_logs_exist = False
+        failure_evidence_errors.append(_evidence_error("temporary_log_presence", log_check_exc))
+    if not logs_attached and temporary_logs_exist:
         if not logs_policy_safe and not logs_policy_rejected:
             try:
                 _validate_temporary_logs(parent_fd, temporary_logs)
                 logs_policy_safe = True
-            except SupervisorError as log_exc:
+            except BaseException as log_exc:
                 logs_policy_rejected = True
-                failure = log_exc
+                failure_evidence_errors.append(_evidence_error("temporary_log_validation", log_exc))
         if logs_policy_rejected:
             try:
                 _attach_redacted_supervisor_logs(parent_fd, staging_fd, staging, temporary_logs)
                 logs_attached = True
             except BaseException as log_exc:
-                if failure is None:
-                    failure = log_exc
+                failure_evidence_errors.append(_evidence_error("temporary_log_redaction", log_exc))
         else:
             try:
                 _attach_supervisor_logs(parent_fd, staging_fd, temporary_logs)
                 logs_attached = True
             except BaseException as log_exc:
+                failure_evidence_errors.append(_evidence_error("temporary_log_attachment", log_exc))
                 try:
                     _attach_redacted_supervisor_logs(parent_fd, staging_fd, staging, temporary_logs)
                     logs_attached = True
-                except BaseException:
-                    pass
-                if failure is None:
-                    failure = log_exc
+                except BaseException as redact_exc:
+                    failure_evidence_errors.append(_evidence_error("temporary_log_fallback_redaction", redact_exc))
+    success_receipt_removal, removal_errors = _remove_invalid_success_receipt(staging_fd)
+    failure_evidence_errors.extend(removal_errors)
     try:
-        (staging / "arm_receipt.json").unlink(missing_ok=True)
-    except OSError:
-        pass
-    _sanitize_failed_text_artifacts(staging)
+        _sanitize_failed_text_artifacts(staging)
+    except BaseException as sanitize_exc:
+        failure_evidence_errors.append(_evidence_error("failed_text_sanitization", sanitize_exc))
+    try:
+        partial_inventory = _partial_inventory(staging, {"failure_receipt.json"}, strict=False)
+        partial_inventory_complete = True
+    except BaseException as inventory_exc:
+        partial_inventory = []
+        partial_inventory_complete = False
+        failure_evidence_errors.append(_evidence_error("partial_inventory", inventory_exc))
+    try:
+        final_present: bool | None = _entry_exists(parent_fd, final_dir.name)
+    except BaseException as final_check_exc:
+        final_present = None
+        failure_evidence_errors.append(_evidence_error("final_presence", final_check_exc))
+    failure_type = type(failure).__name__
+    failure_message = _safe_failure_message(failure)
     failure_payload = {
         "schema_version": FAILURE_RECEIPT_SCHEMA,
         "status": "FAILED_NOT_GENERATION_INPUT",
         "arm_name": spec.arm_name,
-        "failure": {"type": type(failure).__name__, "message": _safe_failure_message(failure)},
+        "failure": {"type": failure_type, "message": failure_message},
         "child_pid": child_pid,
         "duration_monotonic_ns": duration_ns,
         "exit_code": exit_code,
@@ -2925,23 +3048,30 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         "ru_maxrss_raw": raw_rss,
         "ru_maxrss_raw_unit": raw_unit,
         "ru_maxrss_normalized_bytes": rss_bytes,
-        "final_absent": not _entry_exists(parent_fd, final_dir.name),
+        "final_absent": None if final_present is None else not final_present,
         "publication_recovery": {
             "rollback_attempted": publication_rollback_attempted,
             "rollback_succeeded": publication_rollback_succeeded,
-            "final_present": _entry_exists(parent_fd, final_dir.name),
+            "final_present": final_present,
         },
-        "partial_inventory": _partial_inventory(staging, {"failure_receipt.json"}, strict=False),
+        "success_receipt_removal": success_receipt_removal,
+        "failure_evidence_errors": failure_evidence_errors,
+        "failure_evidence_state": _FAILURE_EVIDENCE_WRITTEN,
+        "partial_inventory": partial_inventory,
+        "partial_inventory_complete": partial_inventory_complete,
         "holds": list(_LOCAL_HOLDS),
+        "success_scope": _LOCAL_SUCCESS_SCOPE,
     }
-    receipt_path = staging / "failure_receipt.json"
+    receipt_path, failure_evidence_state, write_errors = _write_failure_receipt_best_effort(staging, failure_payload)
+    failure_evidence_errors.extend(write_errors)
     try:
-        _write_new_file(receipt_path, _canonical_json_bytes(failure_payload))
-        _fsync_directory(staging)
-    except BaseException:
-        receipt_path = None
-    os.close(staging_fd)
-    os.close(parent_fd)
+        os.close(staging_fd)
+    except OSError as close_exc:
+        failure_evidence_errors.append(_evidence_error("staging_fd_close", close_exc))
+    try:
+        os.close(parent_fd)
+    except OSError as close_exc:
+        failure_evidence_errors.append(_evidence_error("parent_fd_close", close_exc))
     return SupervisorResult(
         False,
         spec.arm_name,
@@ -2954,7 +3084,12 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         raw_rss,
         raw_unit,
         rss_bytes,
+        failure_type,
+        failure_message,
         receipt_path,
+        failure_evidence_state,
+        tuple(failure_evidence_errors),
+        _LOCAL_SUCCESS_SCOPE,
         _LOCAL_HOLDS,
     )
 

@@ -2,7 +2,7 @@
 
 Updated: 2026-09-02 (Asia/Tokyo)
 
-Status: **`SHIP_LOCAL_SUPERVISOR_INTERFACE`** for the implemented local
+Status: **`FIXED_FOR_REAUDIT_LOCAL_ONLY`** for the implemented local
 child-process, event, staging-validation, sealing, and no-replace publication
 surface described here. This is not an ST-R3 generation, feasibility, metric,
 adoption, or submission pass. The binding contract remains
@@ -28,7 +28,8 @@ SupervisorResult(
   success, arm_name, child_pid, staging_dir, final_dir,
   duration_monotonic_ns, exit_code, term_signal,
   ru_maxrss_raw, ru_maxrss_unit, ru_maxrss_bytes,
-  receipt_path, holds,
+  failure_type, failure_message, receipt_path,
+  failure_evidence_state, failure_evidence_errors, success_scope, holds,
 )
 
 supervise_arm(spec: SupervisorSpec) -> SupervisorResult
@@ -45,9 +46,12 @@ sequence.
 
 For each attempt the supervisor creates a unique, never-before-used staging
 directory beside an absent final directory and verifies their filesystem
-identity. It uses one `fork`, closes undeclared descriptors, installs only
-standard input/output/error and one inherited blocking event-pipe descriptor,
-and calls direct `execve` with a fixed allowlisted environment and argv. Three
+identity. It uses the native `subprocess.Popen` spawn helper with
+`close_fds=True`, the event descriptor as the sole `pass_fds` entry, a fresh
+session, fixed standard input/output/error, and a fixed allowlisted environment
+and argv. It does not call Python-level `os.fork`, including from a
+multithreaded parent. The spawned PID is still the direct authoritative exec
+PID consumed by `wait4`. Three
 concurrent drains prevent stdout, stderr, and the event pipe from blocking the
 child. The event bytes must be exactly 72 canonical JSON lines with the child
 PID, exact field set, literal dataset order, START/FINISH alternation, sequence,
@@ -152,17 +156,37 @@ the receipt explicitly records `final_present=true` and
 `rollback_succeeded=false`. The retained tree contains canonical
 `failure_receipt.json` and a hash/byte partial inventory marked
 `FAILED_NOT_GENERATION_INPUT`; unsafe text is replaced only for secret-safe
-failure evidence, and the invalid pre-publication `arm_receipt.json` is removed
-so a failed tree exposes no success receipt. No successful output is deleted, overwritten, resumed, or
-reused by this layer.
+failure evidence. Removal of the invalid pre-publication `arm_receipt.json`
+records attempted/present-before/removed/present-after/directory-fsync/taint
+fields rather than silently claiming success. A failed tree is never a success
+input even if an I/O failure prevents removal. No successful output is deleted,
+overwritten, resumed, or reused by this layer.
 
-The supervisor receipt schemas are `biohub.st_r3.arm_receipt.v1` and
-`biohub.st_r3.failure_receipt.v1`. Existing child schemas and filenames are
+The final verification is an observation, not an exclusion lock. An unrelated
+same-UID process can add a hard link, chmod, or change a file after the final
+check and before the Python call returns. Therefore every local result and
+receipt retains `HOLD_PUBLICATION_CONCURRENCY_UNPROVEN`; `success=true` means
+only that the local checks passed at their observation points and is never a
+production permission. A consuming generation/scoring layer must reject every
+nonempty hold set and, immediately before and after consuming each referenced
+file, open with `O_NOFOLLOW`, require `st_nlink == 1`, bind FD/path device and
+inode plus the complete stat signature, and verify the registered byte count
+and SHA-256. It must also reject a failure receipt, an extra file, or an
+incomplete/tainted recovery state.
+
+Failure cleanup never replaces the original child/publication failure with a
+diagnostic-cleanup exception. If the canonical failure receipt cannot be
+written, one unpredictable fallback failure receipt is attempted. If that also
+fails, the returned result has `receipt_path=null` and
+`failure_evidence_state=FAILURE_RECEIPT_UNWRITABLE`.
+
+The supervisor receipt schemas are `biohub.st_r3.arm_receipt.v2` and
+`biohub.st_r3.failure_receipt.v2`. Existing child schemas and filenames are
 unchanged.
 
 ## Unresolved holds, explicitly not claimed
 
-Every locally sealed success receipt retains all of the following:
+Every locally validated success receipt retains all of the following:
 
 - `HOLD_GT_VISIBLE`: this phase does not construct or prove the required
   container/mount namespace, network disablement, GT sentinel negatives, host
@@ -172,6 +196,9 @@ Every locally sealed success receipt retains all of the following:
   supply the binding process-creation audit or a whole-tree/cgroup sampler.
   The local direct-child `wait4.ru_maxrss` value is recorded but cannot clear
   the RSS feasibility gate.
+- `HOLD_PUBLICATION_CONCURRENCY_UNPROVEN`: no local check-return sequence can
+  exclude a concurrent same-UID updater. No success boolean or local arm
+  receipt may be consumed without the downstream checks specified above.
 - `HOLD_TARGET_RUNTIME_UNCALIBRATED`: no target-class equivalence receipt,
   conservative multiplier, prehash/cache/gap binding, or charged integrity-I/O
   evidence is supplied.
@@ -185,13 +212,13 @@ Every locally sealed success receipt retains all of the following:
   imports none of those implementations, reads no metric, and performs no
   state-machine score transition.
 
-Accordingly, `SHIP_LOCAL_SUPERVISOR_INTERFACE` means only that a conforming
+Accordingly, local `success=true` means only that a conforming
 child's local interface artifacts can be independently validated and sealed.
 It does not authorize ST-R4, GT access, feasibility PASS, hidden-200 claims,
 candidate adoption, Kaggle execution, or submission.
 
-The final local regression evidence for this hardening pass is 213 supervisor
+The final local regression evidence for this hardening pass is 224 supervisor
 tests, 65 child-interface tests, and the remaining 585 repository tests all
-passing (650 non-supervisor tests total), plus Ruff format/check and Python
+passing (650 non-supervisor tests; 874 total), plus Ruff format/check and Python
 byte-compilation of the supervisor core and CLI. The official gitlink remains
 clean at `075fc5f5a52d11077f9dc2b074644618f26939e2`.

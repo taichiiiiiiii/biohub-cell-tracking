@@ -4,7 +4,7 @@ The only fresh-process fixture seam replaces the unavailable registered Torch
 checkpoint loader.  The child CLI, adapter, graph/image readers, dataset loop,
 artifact writers, event pipe, and all three frozen arm mappings remain real.
 Supervisor process-failure tests replace only its fixed child script while
-retaining the real fork/exec/wait4/pipe-drain path.
+retaining the real native-spawn/exec/wait4/pipe-drain path.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import struct
 import subprocess
 import sys
 import threading
+import warnings
 from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
@@ -1578,6 +1579,40 @@ def test_post_rename_hardlink_race_is_rolled_back_to_unpredictable_failure_stagi
         external_alias.unlink(missing_ok=True)
 
 
+def test_final_postcondition_check_return_window_is_explicitly_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "payload").write_bytes(b"sealed")
+    staging_fd = os.open(staging, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    parent_fd = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    seal = supervisor._seal_tree_readonly(staging, staging_fd)
+    parent_info = os.fstat(parent_fd)
+    key = (parent_info.st_dev, parent_info.st_ino, "staging")
+    supervisor._PENDING_PUBLICATION_SEALS[key] = seal
+    external_alias = tmp_path / "external-alias"
+    real_verify = supervisor._verify_tree_seal
+    verify_calls = 0
+
+    def verify_then_inject_after_final_check(tree_seal: supervisor._TreeSeal) -> None:
+        nonlocal verify_calls
+        real_verify(tree_seal)
+        verify_calls += 1
+        if verify_calls == 2:
+            os.link(tree_seal.staging / "payload", external_alias)
+
+    monkeypatch.setattr(supervisor, "_verify_tree_seal", verify_then_inject_after_final_check)
+    try:
+        assert "RENAME" in supervisor._publish_directory_no_replace(parent_fd, "staging", "final")
+        assert (tmp_path / "final" / "payload").stat().st_nlink == 2
+        assert "HOLD_PUBLICATION_CONCURRENCY_UNPROVEN" in supervisor._LOCAL_HOLDS
+    finally:
+        supervisor._PENDING_PUBLICATION_SEALS.pop(key, None)
+        supervisor._release_tree_seal(seal, writable=True)
+        os.close(staging_fd)
+        os.close(parent_fd)
+        external_alias.unlink(missing_ok=True)
+
+
 def test_postcondition_rollback_failure_is_never_reported_as_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     staging = tmp_path / "staging"
     staging.mkdir()
@@ -1781,6 +1816,65 @@ def test_supervisor_records_rollback_failure_and_never_returns_success(tmp_path:
     external_alias.unlink()
 
 
+def test_rollback_and_success_receipt_removal_failure_records_final_taint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    template_root = tmp_path / "template-root"
+    template_root.mkdir()
+    template, _images, digest = _build_valid_staging(template_root)
+    _install_fake_child(tmp_path, monkeypatch, _copying_child_source(template))
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    images = _image_root(run_root / "images")
+    final = run_root / "final"
+    external_alias = run_root / "external-alias"
+    real_verify = supervisor._verify_tree_seal
+    real_rename = supervisor._rename_directory_no_replace
+    real_unlink = supervisor.os.unlink
+    verify_calls = 0
+
+    def verify_then_race(tree_seal: supervisor._TreeSeal) -> None:
+        nonlocal verify_calls
+        real_verify(tree_seal)
+        verify_calls += 1
+        if verify_calls == 2:
+            os.link(tree_seal.staging / "submission.csv", external_alias)
+
+    def refuse_rollback(parent_fd: int, source_name: str, destination_name: str) -> str:
+        if source_name == "final":
+            raise OSError(errno.EIO, "rollback denied")
+        return real_rename(parent_fd, source_name, destination_name)
+
+    def refuse_arm_receipt_unlink(path: str | bytes, *args: object, **kwargs: object) -> None:
+        if path == "arm_receipt.json":
+            raise OSError(errno.EIO, "success receipt removal denied")
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(supervisor, "_verify_tree_seal", verify_then_race)
+    monkeypatch.setattr(supervisor, "_rename_directory_no_replace", refuse_rollback)
+    monkeypatch.setattr(supervisor.os, "unlink", refuse_arm_receipt_unlink)
+    result = supervisor.supervise_arm(_supervisor_spec(run_root, final, digest, test_dir=images))
+    assert not result.success and final.exists()
+    assert (final / "arm_receipt.json").exists()
+    invalid_success_receipt = json.loads((final / "arm_receipt.json").read_bytes())
+    assert invalid_success_receipt["holds"] == list(supervisor._LOCAL_HOLDS)
+    assert invalid_success_receipt["success_scope"] == supervisor._LOCAL_SUCCESS_SCOPE
+    assert invalid_success_receipt["claims"]["success_boolean_authorizes_production"] is False
+    receipt = json.loads((final / "failure_receipt.json").read_bytes())
+    assert receipt["success_receipt_removal"] == {
+        "attempted": True,
+        "present_before": True,
+        "removed": None,
+        "present_after": True,
+        "directory_fsync_succeeded": None,
+        "tainted": True,
+    }
+    assert receipt["publication_recovery"]["final_present"] is True
+    assert "success_receipt_removal:OSError" in receipt["failure_evidence_errors"]
+    assert receipt["success_scope"] == supervisor._LOCAL_SUCCESS_SCOPE
+    external_alias.unlink()
+
+
 def test_publish_and_rss_refuse_unsupported_platform(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(supervisor.sys, "platform", "plan9")
     with pytest.raises(supervisor.SupervisorError, match="unknown wait4"):
@@ -1844,7 +1938,7 @@ def test_pipe_and_child_fd_cleanup_contract_in_isolated_process(tmp_path: Path):
     assert completed.returncode == 0
 
 
-def test_real_fork_child_cannot_observe_unrelated_inheritable_parent_fd(
+def test_safe_spawn_child_cannot_observe_unrelated_inheritable_parent_fd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     leaked_read, leaked_write = os.pipe()
@@ -1929,6 +2023,63 @@ def test_log_drain_enforces_exact_byte_limit(tmp_path: Path, payload_size: int, 
         assert output.stat().st_size == 0
     else:
         assert output.read_bytes() == b"x" * 1024
+
+
+def test_log_drain_accepts_literal_one_mib_boundary(tmp_path: Path):
+    read_fd, write_fd = os.pipe()
+    output = tmp_path / "captured.log"
+    output_fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    errors: list[BaseException] = []
+
+    def write_payload() -> None:
+        view = memoryview(b"x" * supervisor._MAX_SUPERVISOR_LOG_BYTES)
+        try:
+            while view:
+                written = os.write(write_fd, view)
+                view = view[written:]
+        finally:
+            os.close(write_fd)
+
+    writer = threading.Thread(target=write_payload)
+    writer.start()
+    supervisor._drain_pipe(
+        read_fd,
+        output_fd,
+        bytearray(),
+        threading.Event(),
+        errors,
+        supervisor._MAX_SUPERVISOR_LOG_BYTES,
+    )
+    writer.join(timeout=2)
+    assert not writer.is_alive() and not errors
+    assert output.stat().st_size == supervisor._MAX_SUPERVISOR_LOG_BYTES
+
+
+def test_event_drain_is_bounded_at_one_mib():
+    read_fd, write_fd = os.pipe()
+    sink = bytearray()
+    errors: list[BaseException] = []
+
+    def write_payload() -> None:
+        view = memoryview(b"x" * (supervisor._MAX_SUPERVISOR_LOG_BYTES + 1))
+        try:
+            while view:
+                try:
+                    written = os.write(write_fd, view)
+                except BrokenPipeError:
+                    break
+                view = view[written:]
+        finally:
+            os.close(write_fd)
+
+    writer = threading.Thread(target=write_payload)
+    writer.start()
+    supervisor._drain_pipe(read_fd, None, sink, threading.Event(), errors)
+    writer.join(timeout=2)
+    assert not writer.is_alive()
+    assert len(errors) == 1 and isinstance(errors[0], supervisor.SupervisorError)
+    assert "bounded receipt size" in str(errors[0])
+    assert len(sink) <= supervisor._MAX_SUPERVISOR_LOG_BYTES + 65536
 
 
 def test_supervisor_kills_child_and_redacts_logs_on_log_byte_overflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2052,7 +2203,7 @@ def test_reserved_supervisor_log_spoof_is_rejected(tmp_path: Path):
     assert (staging / supervisor._SUPERVISOR_LOGS[0]).read_bytes() == b"spoof"
 
 
-def test_successful_real_fork_exec_publish_receipt_has_explicit_holds_and_no_overclaim(
+def test_successful_safe_spawn_exec_publish_receipt_has_explicit_holds_and_no_overclaim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     template_root = tmp_path / "template-root"
@@ -2068,6 +2219,7 @@ def test_successful_real_fork_exec_publish_receipt_has_explicit_holds_and_no_ove
     assert result.success is True
     assert result.staging_dir is None and result.final_dir == final
     receipt = json.loads((final / "arm_receipt.json").read_bytes())
+    assert receipt["status"] == "LOCAL_VALIDATION_OBSERVED_WITH_HOLDS"
     assert receipt["events"] == {"exact_pipe_bytes": True, "records": 72, "relative_path": "dataset_events.jsonl"}
     assert receipt["child"]["pid"] == result.child_pid
     assert (final / "supervisor_stdout.log.partial").read_bytes() == b"child stdout\n"
@@ -2082,9 +2234,16 @@ def test_successful_real_fork_exec_publish_receipt_has_explicit_holds_and_no_ove
             assert stat.S_IMODE(info.st_mode) == 0o500
     assert stat.S_IMODE(final.stat().st_mode) == 0o500
     assert set(receipt["holds"]) == set(supervisor._LOCAL_HOLDS)
+    assert "HOLD_PUBLICATION_CONCURRENCY_UNPROVEN" in receipt["holds"]
+    assert result.success_scope == supervisor._LOCAL_SUCCESS_SCOPE
+    assert result.failure_evidence_state == supervisor._SUCCESS_EVIDENCE_STATE
+    assert receipt["success_scope"] == supervisor._LOCAL_SUCCESS_SCOPE
+    assert receipt["child"]["spawn_method"].startswith("subprocess.Popen")
     assert receipt["wait4"]["authoritative_for_rss_gate"] is False
     assert receipt["claims"] == {
-        "local_child_interface_sealed": True,
+        "local_child_interface_validated_at_publication_check": True,
+        "publication_concurrency_exclusion_proven": False,
+        "success_boolean_authorizes_production": False,
         "gt_nonvisibility_proven": False,
         "no_descendants_proven": False,
         "target_runtime_calibrated": False,
@@ -2167,7 +2326,7 @@ def test_preexisting_final_and_symlink_parent_fail_closed_without_clobber(tmp_pa
     assert not (real_parent / "final").exists()
 
 
-def test_same_filesystem_identity_mismatch_fails_before_fork(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_same_filesystem_identity_mismatch_fails_before_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     final = tmp_path / "parent" / "final"
     final.parent.mkdir()
     real_fstat = supervisor.os.fstat
@@ -2185,7 +2344,7 @@ def test_same_filesystem_identity_mismatch_fails_before_fork(tmp_path: Path, mon
         return result
 
     monkeypatch.setattr(supervisor.os, "fstat", mismatched_fstat)
-    monkeypatch.setattr(supervisor.os, "fork", lambda: pytest.fail("fork after filesystem mismatch"))
+    monkeypatch.setattr(supervisor.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("spawn after mismatch"))
     result = supervisor.supervise_arm(_supervisor_spec(tmp_path, final, "0" * 64))
     assert result.success is False and not final.exists()
     assert "same filesystem" in json.loads(result.receipt_path.read_bytes())["failure"]["message"]
@@ -2304,3 +2463,142 @@ def test_failure_receipt_inventory_is_canonical_and_preserves_partial_logs(
     inventory_paths = {item["relative_path"] for item in receipt["partial_inventory"]}
     assert {"supervisor_stdout.log.partial", "supervisor_stderr.log.partial"} <= inventory_paths
     assert receipt["final_absent"] is True
+
+
+@pytest.mark.parametrize("operation", ["sanitize", "inventory", "log"])
+def test_failure_evidence_cleanup_oserror_never_escapes_or_replaces_original_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+):
+    _install_fake_child(tmp_path, monkeypatch, "raise SystemExit(7)\n")
+    final = tmp_path / "parent" / "final"
+    final.parent.mkdir()
+    if operation == "sanitize":
+        monkeypatch.setattr(
+            supervisor,
+            "_sanitize_failed_text_artifacts",
+            lambda _path: (_ for _ in ()).throw(OSError(errno.EIO, "cleanup failed")),
+        )
+    elif operation == "inventory":
+        monkeypatch.setattr(
+            supervisor,
+            "_partial_inventory",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(errno.EIO, "inventory failed")),
+        )
+    else:
+        monkeypatch.setattr(
+            supervisor,
+            "_attach_supervisor_logs",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(errno.EIO, "log attachment failed")),
+        )
+    result = supervisor.supervise_arm(_supervisor_spec(tmp_path, final, "0" * 64))
+    assert not result.success and result.receipt_path is not None
+    assert result.failure_type == "SupervisorError"
+    assert result.failure_message == "authoritative child failed: exit=7, signal=None"
+    receipt = json.loads(result.receipt_path.read_bytes())
+    assert receipt["failure"] == {
+        "type": "SupervisorError",
+        "message": "authoritative child failed: exit=7, signal=None",
+    }
+    assert any(item.endswith(":OSError") for item in receipt["failure_evidence_errors"])
+    if operation == "inventory":
+        assert receipt["partial_inventory_complete"] is False
+
+
+@pytest.mark.parametrize("fail_fallback", [False, True])
+def test_failure_receipt_primary_write_failure_has_explicit_fallback_or_unwritable_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_fallback: bool
+):
+    _install_fake_child(tmp_path, monkeypatch, "raise SystemExit(7)\n")
+    final = tmp_path / "parent" / "final"
+    final.parent.mkdir()
+    real_write = supervisor._write_new_file
+
+    def fail_receipt_write(path: Path, data: bytes) -> None:
+        if path.name == "failure_receipt.json" or (fail_fallback and path.name.startswith("failure_receipt.fallback.")):
+            raise OSError(errno.EIO, "receipt write failed")
+        real_write(path, data)
+
+    monkeypatch.setattr(supervisor, "_write_new_file", fail_receipt_write)
+    result = supervisor.supervise_arm(_supervisor_spec(tmp_path, final, "0" * 64))
+    assert not result.success
+    if fail_fallback:
+        assert result.receipt_path is None
+        assert result.failure_evidence_state == supervisor._FAILURE_EVIDENCE_UNWRITABLE
+        assert result.failure_type == "SupervisorError"
+        assert result.failure_message == "authoritative child failed: exit=7, signal=None"
+        assert "failure_receipt_fallback:OSError" in result.failure_evidence_errors
+    else:
+        assert result.receipt_path is not None
+        assert result.receipt_path.name.startswith("failure_receipt.fallback.")
+        assert result.failure_evidence_state == supervisor._FAILURE_EVIDENCE_FALLBACK
+        receipt = json.loads(result.receipt_path.read_bytes())
+        assert receipt["failure"] == {
+            "type": "SupervisorError",
+            "message": "authoritative child failed: exit=7, signal=None",
+        }
+
+
+def test_background_thread_spawn_is_warning_free_and_retains_all_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    template_root = tmp_path / "template-root"
+    template_root.mkdir()
+    template, _images, digest = _build_valid_staging(template_root)
+    _install_fake_child(tmp_path, monkeypatch, _copying_child_source(template))
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    images = _image_root(run_root / "images")
+    ready = threading.Event()
+    stop = threading.Event()
+    background = threading.Thread(target=lambda: (ready.set(), stop.wait()))
+    background.start()
+    ready.wait()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            result = supervisor.supervise_arm(_supervisor_spec(run_root, run_root / "final", digest, test_dir=images))
+    finally:
+        stop.set()
+        background.join(timeout=1)
+    assert result.success
+    assert result.holds == supervisor._LOCAL_HOLDS
+    assert not background.is_alive()
+
+
+def test_detached_descendant_can_outlive_local_success_but_cannot_clear_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    template_root = tmp_path / "template-root"
+    template_root.mkdir()
+    template, _images, digest = _build_valid_staging(template_root)
+    descendant_pid_path = tmp_path / "descendant.pid"
+    body = (
+        _copying_child_source(template)
+        + f"""
+pid=os.fork()
+if pid==0:
+    os.setsid()
+    time.sleep(30)
+    os._exit(0)
+Path({str(descendant_pid_path)!r}).write_text(str(pid))
+"""
+    )
+    _install_fake_child(tmp_path, monkeypatch, body)
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    images = _image_root(run_root / "images")
+    descendant_pid: int | None = None
+    try:
+        result = supervisor.supervise_arm(_supervisor_spec(run_root, run_root / "final", digest, test_dir=images))
+        descendant_pid = int(descendant_pid_path.read_text())
+        os.kill(descendant_pid, 0)
+        receipt = json.loads(result.receipt_path.read_bytes())
+        assert result.success
+        assert receipt["claims"]["no_descendants_proven"] is False
+        assert receipt["wait4"]["authoritative_for_rss_gate"] is False
+        assert "HOLD_PROCESS_TREE_UNPROVEN" in receipt["holds"]
+        assert "HOLD_RSS_UNMEASURABLE" in receipt["holds"]
+    finally:
+        if descendant_pid is not None:
+            try:
+                os.kill(descendant_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
