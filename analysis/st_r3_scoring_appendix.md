@@ -207,6 +207,12 @@ or Zarr v2 `.zattrs`; coexistence is ambiguous and rejected. Axis names are
 explicitly either uppercase `T/Z/Y/X` (the real pinned Zarr v3 bytes) or the
 lowercase NGFF spelling `t/z/y/x`. Mixed case, reordering, missing spatial
 `type=space`, or missing `unit=micrometer` is rejected rather than inferred.
+The four-axis time component is mandatory; a three-axis `Z/Y/X` shorthand is
+not accepted. The current repository `read_scale` consumes only the v3 root
+`zarr.json`, so a structurally valid v2 `.zattrs` remains fail-closed at the
+helper-agreement check rather than allowing an equal-to-`DEFAULT_SCALE`
+fallback to masquerade as an explicit metadata read. Supporting v2 scoring
+requires a separately reviewed `read_scale` change and source-hash binding.
 
 ## CSV and official readout
 

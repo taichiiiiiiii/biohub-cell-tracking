@@ -1223,15 +1223,13 @@ def _parse_explicit_scale(zarr_root: Path, stem: str) -> tuple[tuple[float, floa
     if len(scale_transforms) != 1:
         raise ScoringFailure("MISSING_EXPLICIT_SCALE", f"{stem}: exactly one scale transform required")
     raw_scale = scale_transforms[0].get("scale")
-    if not isinstance(raw_scale, list) or len(raw_scale) not in (3, 4):
-        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: scale must have three spatial values plus optional time")
+    if not isinstance(raw_scale, list) or len(raw_scale) != 4:
+        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: scale must be exact TZYX with one time value")
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_scale):
         raise ScoringFailure("MALFORMED_SCALE", f"{stem}: scale values must be numeric")
     axes = multiscale.get("axes")
-    valid_axis_names = (
-        (("T", "Z", "Y", "X"), ("t", "z", "y", "x")) if len(raw_scale) == 4 else (("Z", "Y", "X"), ("z", "y", "x"))
-    )
-    if not isinstance(axes, list) or len(axes) != len(valid_axis_names[0]):
+    valid_axis_names = (("T", "Z", "Y", "X"), ("t", "z", "y", "x"))
+    if not isinstance(axes, list) or len(axes) != 4:
         raise ScoringFailure("MALFORMED_SCALE", f"{stem}: explicit axes must match scale")
     axis_names = tuple(axis.get("name") if isinstance(axis, dict) else None for axis in axes)
     if axis_names not in valid_axis_names:
@@ -1242,12 +1240,9 @@ def _parse_explicit_scale(zarr_root: Path, stem: str) -> tuple[tuple[float, floa
         for axis in spatial_axes
     ):
         raise ScoringFailure("MALFORMED_SCALE", f"{stem}: spatial axes must declare space/micrometer")
-    if len(raw_scale) == 4:
-        if not isinstance(axes[0], dict) or axes[0].get("type") != "time":
-            raise ScoringFailure("MALFORMED_SCALE", f"{stem}: first axis must explicitly be time")
-        spatial_raw = raw_scale[-3:]
-    else:
-        spatial_raw = raw_scale
+    if not isinstance(axes[0], dict) or axes[0].get("type") != "time":
+        raise ScoringFailure("MALFORMED_SCALE", f"{stem}: first axis must explicitly be time")
+    spatial_raw = raw_scale[-3:]
     try:
         scale = tuple(float(item) for item in spatial_raw)
     except (OverflowError, TypeError, ValueError) as exc:
@@ -1263,9 +1258,17 @@ def _validate_metadata_binding(sealed: SealedInputs, stem: str) -> dict[str, Any
     from biohub.io import estimated_number_of_nodes, read_scale
 
     geff = sealed.gt_dir / f"{stem}.geff"
-    scale, raw_scale, scale_path = _parse_explicit_scale(sealed.gt_dir / f"{stem}.zarr", stem)
+    zarr_root = sealed.gt_dir / f"{stem}.zarr"
+    scale, raw_scale, scale_path = _parse_explicit_scale(zarr_root, stem)
+    # The current repository helper reads only the v3 root zarr.json.  A v2
+    # .zattrs value equal to DEFAULT_SCALE must not disguise that fallback as
+    # a successful helper agreement.
+    if scale_path != zarr_root / "zarr.json":
+        raise ScoringFailure(
+            "SCALE_HELPER_MISMATCH", f"{stem}: current read_scale does not consume the selected root metadata"
+        )
     try:
-        helper_scale = tuple(read_scale(sealed.gt_dir / f"{stem}.zarr"))
+        helper_scale = tuple(read_scale(zarr_root))
     except Exception as exc:
         raise ScoringFailure("SCALE_HELPER_MISMATCH", f"{stem}: read_scale failed: {exc}") from exc
     if helper_scale != scale:

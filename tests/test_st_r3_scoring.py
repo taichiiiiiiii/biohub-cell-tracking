@@ -868,6 +868,37 @@ def test_scale_case_contract_v2_and_ambiguous_metadata_fail_closed(tmp_path: Pat
     assert ambiguous.value.code == "MISSING_EXPLICIT_SCALE"
 
 
+def test_scale_requires_time_axis_and_v2_cannot_masquerade_as_helper_success(tmp_path: Path) -> None:
+    root = tmp_path / "inputs" / "gt" / "v.zarr"
+    value = json.loads(REAL_44B6_12DFB391_ZARR_JSON)
+    attrs = value["attributes"]
+    multiscale = attrs["multiscales"][0]
+    multiscale["axes"] = multiscale["axes"][1:]
+    multiscale["datasets"][0]["coordinateTransformations"][0]["scale"] = [1.625, 0.40625, 0.40625]
+    _canonical(root / ".zattrs", attrs)
+    with pytest.raises(scoring.ScoringFailure) as missing_time:
+        scoring._parse_explicit_scale(root, "v")
+    assert missing_time.value.code == "MALFORMED_SCALE"
+
+    multiscale["axes"] = [
+        {"name": "t", "type": "time", "unit": "second"},
+        {"name": "z", "type": "space", "unit": "micrometer"},
+        {"name": "y", "type": "space", "unit": "micrometer"},
+        {"name": "x", "type": "space", "unit": "micrometer"},
+    ]
+    multiscale["datasets"][0]["coordinateTransformations"][0]["scale"] = [
+        1.0,
+        1.625,
+        0.40625,
+        0.40625,
+    ]
+    _canonical(root / ".zattrs", attrs)
+    sealed = SimpleNamespace(gt_dir=tmp_path / "inputs" / "gt")
+    with pytest.raises(scoring.ScoringFailure) as fallback:
+        scoring._validate_metadata_binding(sealed, "v")
+    assert fallback.value.code == "SCALE_HELPER_MISMATCH"
+
+
 def test_atomic_file_and_directory_publication_are_race_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "target.json"
     real = scoring._rename_noreplace
