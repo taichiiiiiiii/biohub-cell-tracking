@@ -88,6 +88,7 @@ def test_verify_and_stage_exact_source(tmp_path: Path) -> None:
     verified = replay.verify_reference(reference, spec, ast_python=Path(sys.executable))
     assert verified["status"] == "VERIFIED_SOURCE_ONLY"
     assert verified["claims"]["account_replay_executed"] is False
+    assert verified["claims"]["kernel_metadata_dataset_versions_resolved"] is False
 
     allowed = tmp_path / "staging"
     output = allowed / "run-1"
@@ -100,6 +101,7 @@ def test_verify_and_stage_exact_source(tmp_path: Path) -> None:
         ast_python=Path(sys.executable),
     )
     assert receipt["status"] == "STAGED_NOT_AUTHORIZED_TO_PUSH"
+    assert "each dataset slug resolves to the pinned source version ID" in receipt["required_before_push"]
     assert (output / "READY.json").is_file()
     assert not (output / "INCOMPLETE").exists()
     assert replay.sha256_file(output / "package/external_933_replay.ipynb") == spec.notebook_sha256

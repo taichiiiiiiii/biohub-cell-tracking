@@ -35,6 +35,24 @@ Kaggle request. Its hashes are:
 | exact notebook | `c7cdda0acf9dc704865165feae06d933fc85748dd4d8e9454734b91a65f0eb10` |
 | kernel metadata | `7ede307ce9bb4ccc7a205fa3706d2de83462a3fe5d47163c3243c3c19f0fdae2` |
 
+After making the unresolved dataset-version condition explicit, a second
+fresh offline staging run superseded v1 for any future review. The v1
+directory remains immutable evidence and was not reused or deleted. The v2
+directory is
+`outputs/local/external_933_replay/20260902T141535JST_source_v2`, and its
+hashes are:
+
+| artifact | SHA-256 |
+|---|---|
+| `REPLAY_RECEIPT.json` | `1912090568c297ce804ea959af4c05b0175eae4d9786494101dfa53c367a2590` |
+| `READY.json` | `391f3899b215c1312c1a9de37af602dd692bfcde64f5468156ef5ea3614c43fa` |
+| exact notebook | `c7cdda0acf9dc704865165feae06d933fc85748dd4d8e9454734b91a65f0eb10` |
+| kernel metadata | `7ede307ce9bb4ccc7a205fa3706d2de83462a3fe5d47163c3243c3c19f0fdae2` |
+
+The v2 receipt records
+`kernel_metadata_dataset_versions_resolved=false`; therefore neither the
+v1 nor v2 ready marker is push authorization.
+
 The executable AST was independently recomputed with CPython `3.14.7`
 (interpreter SHA-256
 `87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634`)
@@ -47,13 +65,17 @@ Before any future `kaggle kernels push`, all of the following remain mandatory:
 1. the `2026-09-02 22:40 JST` no-request boundary in
    `eval36_image_resume_runbook.md` has elapsed and a single fresh preflight
    passes without HTTP 429;
-2. source reuse/license and attribution are reviewed and recorded—the staged
+2. each of the three dataset slugs is freshly resolved to the exact pinned
+   source version ID (`17751825`, `17804310`, `18187037`). Kernel metadata uses
+   slugs and does not itself prove that their current latest versions still
+   equal the source run; any mismatch is HOLD, not an automatic upgrade;
+3. source reuse/license and attribution are reviewed and recorded—the staged
    bytes are a public-source replay, not original account code;
-3. `READY.json`, `REPLAY_RECEIPT.json`, notebook, and metadata hashes are
+4. `READY.json`, `REPLAY_RECEIPT.json`, notebook, and metadata hashes are
    reverified, and the package contains no credential or unpinned input;
-4. the operator records that this is a portability/runtime replay of an
+5. the operator records that this is a portability/runtime replay of an
    already verified 0.933 anchor, not evidence of a new 0.933 claim;
-5. run completion, output schema, full hidden coverage, runtime, and the exact
+6. run completion, output schema, full hidden coverage, runtime, and the exact
    account submission join are inspected before any score is adopted.
 
 Do not use the public-four CSV as the hidden output. Do not alter the source

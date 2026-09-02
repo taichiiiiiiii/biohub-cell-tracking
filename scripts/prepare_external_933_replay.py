@@ -337,6 +337,7 @@ def verify_reference(
             "hidden_submission_bytes_available": False,
             "account_replay_executed": False,
             "account_score_observed": False,
+            "kernel_metadata_dataset_versions_resolved": False,
         },
     }
 
@@ -437,6 +438,7 @@ def stage_replay(
             },
             "required_before_push": [
                 "Kaggle HTTP 429 not-before has elapsed and fresh preflight passes",
+                "each dataset slug resolves to the pinned source version ID",
                 "source reuse/license and attribution review is recorded",
                 "operator confirms this is portability replay, not a new 0.933 claim",
             ],
