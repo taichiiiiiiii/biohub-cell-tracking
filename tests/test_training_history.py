@@ -24,6 +24,7 @@ from biohub.training_history import (
     canonical_sha256,
     compute_degradation,
     execution_config_sha256,
+    normalize_pytorch_state_tree,
     select_best,
     sha256_bytes,
     sha256_file,
@@ -494,7 +495,9 @@ def _rewrite(root: Path, manifest: dict, rows: list[dict], *, verdict: str = "PA
     _refresh_artifacts(root, verdict)
 
 
-def _convert_run_checkpoints_to_pytorch(root: Path, manifest: dict, rows: list[dict]) -> None:
+def _convert_run_checkpoints_to_pytorch(
+    root: Path, manifest: dict, rows: list[dict], *, genuine_resume_state: bool = False
+) -> None:
     torch = pytest.importorskip("torch")
 
     def convert(path: Path) -> None:
@@ -514,6 +517,23 @@ def _convert_run_checkpoints_to_pytorch(root: Path, manifest: dict, rows: list[d
                 for name, tensor in sorted(tensor_state.items())
             ]
             metadata["state"]["model"]["payload"] = _state_payload(normalized)
+            if genuine_resume_state:
+                parameter = torch.nn.Parameter(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+                optimizer = torch.optim.Adam([parameter], lr=0.01)
+                scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+                parameter.sum().backward()
+                optimizer.step()
+                scheduler.step()
+                scaler = torch.amp.GradScaler("cpu")
+                for name, value in (
+                    ("optimizer", optimizer.state_dict()),
+                    ("scheduler", scheduler.state_dict()),
+                    ("scaler", scaler.state_dict()),
+                ):
+                    metadata["state"][name]["payload"] = {
+                        "state_dict": value,
+                        "sha256": canonical_sha256(normalize_pytorch_state_tree(value)),
+                    }
         metadata["model_state"] = tensor_state
         path.unlink()
         torch.save(metadata, path)
@@ -1735,6 +1755,55 @@ def test_real_pytorch_checkpoints_and_explicit_cli_loader_are_operational(tmp_pa
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_real_pytorch_resume_normalizes_genuine_adam_scheduler_and_scaler_state(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    manifest, rows = _valid_run(tmp_path, values=[0.8, 0.7, 0.6])
+    _convert_run_checkpoints_to_pytorch(tmp_path, manifest, rows, genuine_resume_state=True)
+
+    report = verify_training_run(tmp_path, checkpoint_metadata_loader=trusted_pytorch_checkpoint_metadata_loader)
+    assert report["verdict"] == "PASS", report
+    metadata = trusted_pytorch_checkpoint_metadata_loader(tmp_path / "checkpoints/resume.pt")
+    optimizer = metadata["state"]["optimizer"]["payload"]
+    assert optimizer["sha256"] == canonical_sha256(optimizer["state_dict"])
+    assert optimizer["state_dict"]["state"]["__biohub_pytorch_state__"] == "mapping"
+    assert optimizer["state_dict"]["param_groups"][0]["betas"]["__biohub_pytorch_state__"] == "tuple"
+
+
+@pytest.mark.parametrize(
+    ("value_factory", "message"),
+    [
+        (lambda torch: torch.tensor([float("nan")]), "non-finite"),
+        (lambda torch: torch.tensor([float("inf")]), "non-finite"),
+        (lambda torch: torch.tensor([1 + 2j]), "complex"),
+        (lambda torch: torch.tensor([[1.0]]).to_sparse(), "dense strided"),
+        (lambda torch: torch.quantize_per_tensor(torch.tensor([1.0]), 0.1, 0, torch.qint8), "quantized"),
+        (lambda torch: torch.tensor([1], dtype=torch.uint16), "unsupported"),
+        (lambda torch: {1.5: "unsafe-key"}, "exact strings or integers"),
+        (lambda torch: {"unsafe-object"}, "unsupported"),
+    ],
+)
+def test_pytorch_state_normalizer_rejects_unsafe_or_unsupported_values(value_factory, message: str) -> None:
+    torch = pytest.importorskip("torch")
+    with pytest.raises(TrainingHistoryError, match=message):
+        normalize_pytorch_state_tree(value_factory(torch))
+
+
+def test_pytorch_state_normalizer_is_typed_canonical_and_collision_safe() -> None:
+    torch = pytest.importorskip("torch")
+    distinct = [
+        [1],
+        (1,),
+        {1: "value"},
+        {"1": "value"},
+        {"__biohub_pytorch_state__": "tuple", "items": [1]},
+        torch.tensor([1], dtype=torch.int32),
+        torch.tensor([1], dtype=torch.int64),
+    ]
+    hashes = [canonical_sha256(normalize_pytorch_state_tree(value)) for value in distinct]
+    assert len(hashes) == len(set(hashes))
+    assert normalize_pytorch_state_tree({2: "b", 1: "a"}) == normalize_pytorch_state_tree({1: "a", 2: "b"})
 
 
 def test_trusted_loader_rejects_checkpoint_replacement_during_load(tmp_path: Path) -> None:

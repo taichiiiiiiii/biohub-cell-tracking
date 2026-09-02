@@ -10,8 +10,8 @@ to the same strict, JSON-safe envelope before validation.
 The public surface is intentionally small: :class:`HistoryWriter`,
 :func:`strict_json_load`, :func:`strict_jsonl_load`, :func:`select_best`,
 :func:`compute_degradation`, :func:`validate_resume_metadata`,
-:func:`validate_warm_start`, :func:`verify_training_run`, and
-:func:`validate_training_run`.
+:func:`normalize_pytorch_state_tree`, :func:`validate_warm_start`,
+:func:`verify_training_run`, and :func:`validate_training_run`.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import os
 import secrets
 import stat
 import sys
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -38,6 +39,8 @@ HEX_SHA256_LENGTH = 64
 AT_FDCWD = -2
 RENAME_NOREPLACE = 1
 RENAME_EXCL = 4
+PYTORCH_STATE_TAG = "__biohub_pytorch_state__"
+PYTORCH_STATE_MAX_DEPTH = 100
 
 
 class TrainingHistoryError(ValueError):
@@ -226,23 +229,34 @@ def trusted_pytorch_checkpoint_metadata_loader(path: Path) -> Mapping[str, Any]:
     tensor_state = metadata.get("model_state")
     if not isinstance(tensor_state, Mapping) or not tensor_state:
         raise TrainingHistoryError(f"PyTorch model_state must be a nonempty tensor mapping: {path}")
-    state_keys: list[dict[str, Any]] = []
-    model_state: list[dict[str, Any]] = []
-    for name in sorted(tensor_state):
-        tensor = tensor_state[name]
-        if not isinstance(name, str) or not name or not isinstance(tensor, torch.Tensor):
-            raise TrainingHistoryError(f"PyTorch model_state contains a non-tensor entry: {path}")
-        cpu = tensor.detach().cpu().contiguous()
-        shape = list(cpu.shape)
-        dtype = str(cpu.dtype).removeprefix("torch.")
-        values = cpu.reshape(-1).tolist()
-        state_keys.append({"name": name, "shape": shape, "dtype": dtype})
-        model_state.append({"name": name, "shape": shape, "dtype": dtype, "values": values})
+    state_keys, model_state = _normalize_pytorch_model_state(tensor_state, torch, str(path))
     claimed_keys = metadata.get("state_keys")
     if claimed_keys is not None and not _strict_equal(claimed_keys, state_keys):
         raise TrainingHistoryError(f"PyTorch state_keys do not match loaded tensors: {path}")
     metadata["state_keys"] = state_keys
     metadata["model_state"] = model_state
+    resume_state = metadata.get("state")
+    if isinstance(resume_state, Mapping):
+        for name in ("optimizer", "scheduler", "scaler", "sampler"):
+            entry = resume_state.get(name)
+            payload = entry.get("payload") if isinstance(entry, Mapping) else None
+            if isinstance(payload, Mapping) and "state_dict" in payload:
+                payload["state_dict"] = _normalize_pytorch_state_tree(
+                    payload["state_dict"], torch, f"{path}:state.{name}.payload.state_dict"
+                )
+        model_entry = resume_state.get("model")
+        model_payload = model_entry.get("payload") if isinstance(model_entry, Mapping) else None
+        raw_model_payload = model_payload.get("state_dict") if isinstance(model_payload, Mapping) else None
+        if (
+            isinstance(raw_model_payload, Mapping)
+            and raw_model_payload
+            and all(
+                isinstance(name, str) and type(tensor) is torch.Tensor for name, tensor in raw_model_payload.items()
+            )
+        ):
+            _payload_keys, model_payload["state_dict"] = _normalize_pytorch_model_state(
+                raw_model_payload, torch, f"{path}:state.model.payload.state_dict"
+            )
     resolved = str(path.resolve(strict=True))
     metadata["path"] = resolved
     metadata["checkpoint_sha256"] = digest_before
@@ -257,6 +271,131 @@ def trusted_pytorch_checkpoint_metadata_loader(path: Path) -> Mapping[str, Any]:
     }
     _require_json_tree(metadata, f"trusted PyTorch checkpoint metadata for {path}")
     return metadata
+
+
+def normalize_pytorch_state_tree(value: Any) -> Any:
+    """Return the canonical JSON-safe envelope for a PyTorch state-dict tree.
+
+    This helper is the writer-side counterpart to
+    :func:`trusted_pytorch_checkpoint_metadata_loader`: checkpoint producers
+    hash this result while storing the original state dict with ``torch.save``.
+    Only exact JSON primitives, lists, tuples, string/integer-keyed mappings,
+    and finite dense CPU tensors of common real dtypes are accepted.
+    """
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - depends on production environment
+        raise TrainingHistoryError("PyTorch state normalization requires torch") from exc
+    return _normalize_pytorch_state_tree(value, torch, "PyTorch state")
+
+
+def _normalize_pytorch_model_state(tensor_state: Mapping[Any, Any], torch: Any, source: str) -> tuple[list, list]:
+    state_keys: list[dict[str, Any]] = []
+    model_state: list[dict[str, Any]] = []
+    for name in sorted(tensor_state, key=lambda item: item if isinstance(item, str) else ""):
+        tensor = tensor_state[name]
+        if not isinstance(name, str) or not name or type(tensor) is not torch.Tensor:
+            raise TrainingHistoryError(f"PyTorch model_state contains a non-tensor entry: {source}")
+        record = _normalize_pytorch_tensor(tensor, torch, f"{source}:model_state.{name}")
+        shape, dtype, values = record["shape"], record["dtype"], record["values"]
+        state_keys.append({"name": name, "shape": shape, "dtype": dtype})
+        model_state.append({"name": name, "shape": shape, "dtype": dtype, "values": values})
+    return state_keys, model_state
+
+
+def _normalize_pytorch_state_tree(value: Any, torch: Any, source: str) -> Any:
+    return _normalize_pytorch_value(value, torch, source, active=set(), depth=0)
+
+
+def _normalize_pytorch_value(value: Any, torch: Any, source: str, *, active: set[int], depth: int) -> Any:
+    if depth > PYTORCH_STATE_MAX_DEPTH:
+        raise TrainingHistoryError(f"PyTorch state nesting exceeds {PYTORCH_STATE_MAX_DEPTH}: {source}")
+    if value is None or type(value) in (bool, str, int):
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise TrainingHistoryError(f"non-finite PyTorch state number: {source}")
+        return value
+    if type(value) is torch.Tensor:
+        return _normalize_pytorch_tensor(value, torch, source)
+    if type(value) not in (dict, OrderedDict, list, tuple):
+        raise TrainingHistoryError(f"unsupported PyTorch state value {type(value).__name__}: {source}")
+    identity = id(value)
+    if identity in active:
+        raise TrainingHistoryError(f"cyclic PyTorch state container: {source}")
+    active.add(identity)
+    try:
+        if type(value) is list:
+            return [
+                _normalize_pytorch_value(child, torch, f"{source}[{index}]", active=active, depth=depth + 1)
+                for index, child in enumerate(value)
+            ]
+        if type(value) is tuple:
+            return {
+                PYTORCH_STATE_TAG: "tuple",
+                "items": [
+                    _normalize_pytorch_value(child, torch, f"{source}[{index}]", active=active, depth=depth + 1)
+                    for index, child in enumerate(value)
+                ],
+            }
+        keys = list(value)
+        if not all(type(key) in (str, int) for key in keys):
+            raise TrainingHistoryError(f"PyTorch state mapping keys must be exact strings or integers: {source}")
+        if all(type(key) is str for key in keys) and PYTORCH_STATE_TAG not in value:
+            return {
+                key: _normalize_pytorch_value(value[key], torch, f"{source}.{key}", active=active, depth=depth + 1)
+                for key in keys
+            }
+        ordered_keys = sorted(keys, key=lambda key: (0, key) if type(key) is int else (1, key))
+        return {
+            PYTORCH_STATE_TAG: "mapping",
+            "items": [
+                {
+                    "key": {"type": "integer" if type(key) is int else "string", "value": key},
+                    "value": _normalize_pytorch_value(
+                        value[key], torch, f"{source}[{key!r}]", active=active, depth=depth + 1
+                    ),
+                }
+                for key in ordered_keys
+            ],
+        }
+    finally:
+        active.remove(identity)
+
+
+def _normalize_pytorch_tensor(value: Any, torch: Any, source: str) -> dict[str, Any]:
+    if value.device.type != "cpu":
+        raise TrainingHistoryError(f"PyTorch state tensor must be on CPU: {source}")
+    if value.layout is not torch.strided:
+        raise TrainingHistoryError(f"PyTorch state tensor must have dense strided layout: {source}")
+    if value.is_quantized:
+        raise TrainingHistoryError(f"quantized PyTorch state tensor is forbidden: {source}")
+    if value.is_complex():
+        raise TrainingHistoryError(f"complex PyTorch state tensor is forbidden: {source}")
+    permitted_dtypes = {
+        torch.bool,
+        torch.uint8,
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.int64,
+        torch.float16,
+        torch.bfloat16,
+        torch.float32,
+        torch.float64,
+    }
+    if value.dtype not in permitted_dtypes:
+        raise TrainingHistoryError(f"unsupported PyTorch state tensor dtype {value.dtype}: {source}")
+    cpu = value.detach().contiguous()
+    if cpu.is_floating_point() and not bool(torch.isfinite(cpu).all().item()):
+        raise TrainingHistoryError(f"non-finite PyTorch state tensor is forbidden: {source}")
+    return {
+        PYTORCH_STATE_TAG: "tensor",
+        "shape": list(cpu.shape),
+        "dtype": str(cpu.dtype).removeprefix("torch."),
+        "requires_grad": value.requires_grad,
+        "values": cpu.reshape(-1).tolist(),
+    }
 
 
 def atomic_write_json(path: str | os.PathLike[str], value: Any) -> None:
@@ -3440,6 +3579,7 @@ __all__ = [
     "compute_degradation",
     "execution_config_sha256",
     "expected_best_flags",
+    "normalize_pytorch_state_tree",
     "select_best",
     "sha256_bytes",
     "sha256_file",
