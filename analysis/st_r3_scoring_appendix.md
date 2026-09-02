@@ -1,0 +1,274 @@
+# ST-R3 scoring appendix: sealed feasibility handoff and score artifacts
+
+Updated: 2026-09-02 (Asia/Tokyo)
+
+## Status
+
+The scoring implementation is complete for code audit and synthetic-fixture
+verification. Production execution remains **HOLD_INTERFACE_INCOMPLETE**. No
+full five-arm generation/feasibility manifest exists yet, no GT-backed ST-R4
+score was read, and no Kaggle/network action was taken. The subsequent
+generation orchestrator must emit the exact handoff below; the scorer has no
+legacy, reflection, or best-effort compatibility path.
+
+The CLI argument retains the contract spelling
+`--generation-manifest-sha256`, but its value is deliberately the SHA-256 of
+`feasibility/FEASIBILITY_PASS.json`. That file hash-pins the preceding
+`generation/ARTIFACT_MANIFEST.json` and its preregistration chain. This gives
+the scoring entry point only `(immutable run directory, exact sealed handoff
+hash, stage)`.
+
+## Exact feasibility handoff schema
+
+`feasibility/FEASIBILITY_PASS.json` is canonical UTF-8 JSON (sorted keys,
+compact separators, one trailing newline, no NaN/Inf) with exactly these
+top-level keys:
+
+```text
+schema_version state run_id preregistration generation_manifest datasets
+executions canonical_submissions sealed_hashes official source_bindings
+feasibility scoring_inputs artifacts
+```
+
+The exact values/children are:
+
+```text
+schema_version = "biohub.st_r3.feasibility_manifest.v1"
+state          = "FEASIBILITY_PASS"
+run_id         = nonempty immutable string, equal to PREREGISTRATION.json
+
+preregistration = REF, path exactly "PREREGISTRATION.json"
+generation_manifest = {
+  ref: REF,  # path exactly "generation/ARTIFACT_MANIFEST.json"
+  preregistration_sha256: SHA256
+}
+
+datasets = {
+  eval12: exact frozen ordered 12-list,
+  eval24: exact frozen ordered 24-list,
+  eval36: exact concatenation eval12 + eval24,
+  digests: {eval12: SHA256, eval24: SHA256, eval36: SHA256}
+}
+
+executions = {
+  safety_dry_run: REF,
+  baseline_ab: REF,
+  candidate_ab: REF,
+  candidate_ba: REF,
+  baseline_ba: REF
+}
+
+canonical_submissions = {
+  baseline: CANONICAL_SUBMISSION,
+  candidate: CANONICAL_SUBMISSION
+}
+
+sealed_hashes = {
+  full_arm_outputs_sha256: SHA256,
+  stats_sha256: SHA256,
+  plans_sha256: SHA256,
+  configs_sha256: SHA256,
+  source_inventory_sha256: SHA256,
+  live_artifact_inventory_sha256: SHA256,
+  image_content_inventory_sha256: SHA256,
+  raw_inventory_sha256: SHA256
+}
+
+official = {
+  gitlink: lowercase Git object ID,
+  head: lowercase Git object ID exactly equal to gitlink,
+  clean: true,
+  source_hashes: {
+    "tracking_cellmot/metrics.py": SHA256,
+    "tracking_cellmot/division_metrics.py": SHA256
+  }
+}
+
+source_bindings = {
+  superproject_commit: lowercase Git object ID,
+  tracked_tree_clean: true,
+  evaluate_py_sha256: SHA256,
+  st_r3_scoring_py_sha256: SHA256
+}
+
+feasibility = {
+  ref: REF,
+  prerequisites_passed: true,
+  e23_parity: true,
+  base1_non_regression: true,
+  adapter_reviewed: true,
+  training_gate_not_applicable: true,
+  source_clean: true,
+  official_clean: true,
+  generation_sealed: true,
+  gt_nonvisibility: true,
+  deepcenter_bound: true,
+  data_ready: true,
+  image_ready: true,
+  deterministic_replay: true,
+  dry_run_identity: true,
+  conservation: true,
+  local_runtime: true,
+  local_rss: true,
+  target_runtime: true,
+  target_memory: true,
+  hidden_200: true
+}
+
+scoring_inputs = {
+  gt_view: portable relative directory path,
+  gt_inventory: REF,
+  image_view: portable relative directory path,
+  image_content_inventory: REF
+}
+
+artifacts = [REF, ...]  # strictly POSIX-path sorted, no duplicates/case collisions
+```
+
+The referenced generation JSON must report `state="GENERATION_SEALED"` and
+the same `preregistration_sha256`; its remaining schema is owned by the
+generation supervisor.
+
+`REF` has exactly `{path,bytes,sha256}`. `path` is a nonempty portable POSIX
+relative path without `.`/`..`, backslashes, absolute roots, symlinks, or
+special-file traversal. `bytes` is a nonnegative JSON integer. `sha256` is 64
+lowercase hexadecimal characters. Every referenced regular file is rehashed.
+
+`CANONICAL_SUBMISSION` has exactly:
+
+```text
+{
+  ref: REF,
+  typed_graph_sha256: SHA256,
+  partitions: {
+    <each exact eval36 stem>: {sha256: SHA256, bytes: integer, row_count: integer}
+  }
+}
+```
+
+Its ref path is fixed to
+`generation/canonical/{baseline,candidate}/submission.csv`. The typed graph
+digest is SHA-256 of canonical JSON with schema
+`biohub.st_r3.typed_submission_graph.v1` and the ordered dataset records
+`{dataset,nodes,edges}`; node tuples are `[node_id,t,z,y,x]`, edge tuples are
+`[source_id,target_id]`. Each partition hash/byte count is over the exact
+physical data-row bytes for that dataset, excluding the header. It is checked
+back against the full CSV before any stage subset is created.
+
+Each execution receipt must itself be canonical JSON. Any explicit `gt` or
+`ground_truth` field in an arm receipt is rejected. The generation supervisor
+must define and verify its complete receipt schema; the scoring boundary only
+accepts the five immutable refs and the sealed cross-arm hash aggregates above.
+
+## GT inventory and preflight
+
+The GT inventory has exactly:
+
+```text
+{
+  "schema_version": "biohub.st_r3.gt_inventory.v1",
+  "stems": [exact ordered eval36],
+  "records": [REF, ...]
+}
+```
+
+Records are sorted by path and exactly cover regular files below the relative
+GT view. The GT view has exactly one `<stem>.geff` and one `<stem>.zarr`
+directory for every eval36 stem, no other root, symlink, or special file. At an
+eval12/eval24 transition, all files under only the unlocked roots are matched
+to inventory byte counts and SHA-256s before parsing/scoring.
+
+For every unlocked stem the scorer requires one unambiguous OME-NGFF scale
+transform for scored array path `0`, resulting in exactly finite positive
+`(z,y,x)` micrometre values. The strict values must equal `read_scale`
+exactly; the repository default-scale fallback cannot pass. The root GEFF
+metadata must explicitly contain numeric, finite, positive
+`estimated_number_of_nodes`, and it must equal the helper result exactly.
+
+## CSV and official readout
+
+Both sealed full CSVs require the exact ten-column header. All cells are
+unquoted, nonempty, canonical base-10 integers where numeric, with a final and
+consistent newline. Full IDs are physical-order contiguous `0..N-1`; dataset
+blocks use frozen eval36 order; nodes precede edges; node IDs strictly
+increase. Sentinel, TZYX-bound, endpoint, t-to-t+1, uniqueness, indegree,
+outdegree, and nonempty-dataset constraints are checked.
+
+Eval12/eval24/singleton CSVs are byte-exact row subsequences. Their original
+IDs, text, newline, and relative order are preserved; renumbering,
+reformatting, reordering, missing rows, or extra rows cannot hash back to the
+sealed partition and fail.
+
+Each unlocked stem/arm is passed singleton-by-singleton to
+`biohub.evaluate.score_submission(..., max_distance=7.0, verbose=False)`.
+Missing-GT skip is an error. The scorer calls the imported official
+`summarise` again for each singleton, then separately for baseline/candidate
+stage and lineage groups. The exact official summary key set is enforced.
+Official counts remain integers and floats retain Python round-trip precision.
+Only a zero division denominator becomes JSON `null` plus
+`NO_DIVISION_DENOMINATOR`; all other nonfinite values fail.
+
+Eval36 loads the already published eval12 and eval24 `PER_VIDEO.json` rows in
+their exact concatenated order. It performs zero GT/evaluator calls, then runs
+official `summarise` on the stored per-sample rows for eval36 and its two
+lineage partitions.
+
+## State, artifacts, and commands
+
+Legal transitions are eval12 after the sealed feasibility handoff, eval24 only
+after `EVAL12_PASS`, and eval36 only after `EVAL24_PASS`. A skip, error, metric
+reject, or completed eval36 creates the first no-clobber
+`final/VERDICT.json`; later continuation is refused. Partial score files are
+atomically retained under `scores/failed_<stage>/` and inventoried. Successful
+stage directories are built under same-filesystem temporary names and renamed
+once; existing targets, symlinks, and special files are refused.
+
+Each published stage contains canonical `INPUT_RECEIPT.json`,
+`PER_VIDEO.json`, `AGGREGATES.json`, `DELTAS.json`, `GATE.json`, and
+`ARTIFACT_MANIFEST.json`; eval12/eval24 also retain exact stage and singleton
+CSV subsequences. The manifest has exactly:
+
+```text
+schema_version = "biohub.st_r3.score_stage_manifest.v1"
+state run_id stage preceding_manifest feasibility_manifest_sha256 artifacts
+```
+
+Every artifact record has exactly `{path,bytes,sha256,media_type,schema_type,role}`.
+The manifest excludes itself and chains to feasibility, eval12, or eval24 as
+appropriate. Published stage directories must contain exactly the manifest
+and its listed regular files.
+
+Commands, after the future upstream handoff exists:
+
+```bash
+PYTHONPATH="src:official/src" python scripts/st_r3_score_stage.py \
+  --run-dir outputs/local/steal_twin/<immutable_run_id> \
+  --generation-manifest-sha256 <FEASIBILITY_PASS.json SHA256> \
+  --stage eval12
+
+# Only after EVAL12_PASS:
+... --stage eval24
+
+# Only after EVAL24_PASS; stored-row roll-up, zero new evaluator calls:
+... --stage eval36
+```
+
+The CLI writes one canonical result object. ERROR/REJECT is nonzero;
+EVAL12_PASS, EVAL24_PASS, and EVAL36_ADOPTION_CANDIDATE are zero. The adoption
+label authorizes no Kaggle operation.
+
+## Remaining holds
+
+- Full generation supervisor and this exact feasibility handoff do not yet
+  exist: `HOLD_INTERFACE_INCOMPLETE`.
+- No READY latest image-verifier receipt was supplied to this phase: data
+  remains `NOT_READY` for production ST-R4.
+- No target-class runtime calibration/equivalence or whole-cgroup memory
+  receipt was supplied here. Those remain generation/feasibility holds and
+  cannot be inferred from local scoring tests.
+- No generation sandbox/nonvisibility receipt, five-arm deterministic replay,
+  DeepCenter binding, E23 parity receipt, or base1 receipt was produced here.
+  The handoff requires their aggregate/ref gates to be true; fixture values
+  demonstrate schema behavior only.
+- Synthetic official fixtures validate metric direction/counts but are not
+  real eval12/eval24 results and must not be reported as candidate evidence.
