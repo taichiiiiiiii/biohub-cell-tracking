@@ -18,6 +18,7 @@ There is no score, label, candidate ranking, threshold fitting, or model
 inference in this census.  Counts may be used only to falsify candidate-volume
 and streaming-feasibility assumptions before a learned head is designed.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,8 +44,7 @@ from biohub.io import load_geff_graph
 SCHEMA_VERSION = "biohub.two_child_tuple_census.v2"
 CANDIDATE_VERSION = "frozen_encoder_two_child_feasibility_v1"
 FROZEN_RELATIVE_ROOT = Path(
-    "outputs/kaggle/e22_bidir030_eval36_raw/tracking_repo/"
-    "predictions/unknown/unet_transformer_val/split_0"
+    "outputs/kaggle/e22_bidir030_eval36_raw/tracking_repo/predictions/unknown/unet_transformer_val/split_0"
 )
 
 EVAL12 = (
@@ -192,13 +192,9 @@ def _open_directory_no_symlinks(path: Path, *, create: bool) -> int:
                 try:
                     next_descriptor = os.open(component, flags, dir_fd=descriptor)
                 except OSError as open_error:
-                    raise CensusError(
-                        f"output parent component is not a real directory: {absolute}"
-                    ) from open_error
+                    raise CensusError(f"output parent component is not a real directory: {absolute}") from open_error
             except OSError as error:
-                raise CensusError(
-                    f"symlink or non-directory path component is forbidden: {absolute}"
-                ) from error
+                raise CensusError(f"symlink or non-directory path component is forbidden: {absolute}") from error
             os.close(descriptor)
             descriptor = next_descriptor
     except BaseException:
@@ -225,10 +221,7 @@ def validate_frozen_input_root(repo_root: Path, input_root: Path) -> Path:
     input_abs = Path(os.path.abspath(input_root))
     expected = repo_abs / FROZEN_RELATIVE_ROOT
     if input_abs != expected:
-        raise CensusError(
-            "prohibited input root; expected exactly "
-            f"{FROZEN_RELATIVE_ROOT.as_posix()}, got {input_abs}"
-        )
+        raise CensusError(f"prohibited input root; expected exactly {FROZEN_RELATIVE_ROOT.as_posix()}, got {input_abs}")
     _require_no_symlink_components(repo_abs, input_abs)
     mode = input_abs.lstat().st_mode
     if not stat.S_ISDIR(mode):
@@ -252,10 +245,7 @@ def validate_output_path(repo_root: Path, output: Path) -> Path:
     if output_abs.is_relative_to(repo_abs):
         allowed = repo_abs / "outputs" / "local" / "tuple_census"
         if output_abs != allowed and not output_abs.is_relative_to(allowed):
-            raise CensusError(
-                "repository-local output must be under outputs/local/tuple_census: "
-                f"{output_abs}"
-            )
+            raise CensusError(f"repository-local output must be under outputs/local/tuple_census: {output_abs}")
     return output_abs
 
 
@@ -540,8 +530,7 @@ def build_report(
         "uses_network_or_kaggle": False,
     }
     lineage_rows = {
-        lineage: [row for row in rows if row.dataset.startswith(f"{lineage}_")]
-        for lineage in ("44b6", "6bba")
+        lineage: [row for row in rows if row.dataset.startswith(f"{lineage}_")] for lineage in ("44b6", "6bba")
     }
     if any(len(group) != 18 for group in lineage_rows.values()):
         raise CensusError("expected exactly 18 datasets from each lineage")
@@ -568,10 +557,7 @@ def build_report(
             "candidate_tuples": round(sum(row.candidate_tuples for row in rows) * 200 / 36, 6),
             "one_child_parents": round(sum(row.one_child_parents for row in rows) * 200 / 36, 6),
         },
-        "lineages": {
-            lineage: _summarise_group(group)
-            for lineage, group in lineage_rows.items()
-        },
+        "lineages": {lineage: _summarise_group(group) for lineage, group in lineage_rows.items()},
     }
 
 
@@ -583,9 +569,7 @@ def run_census(repo_root: Path) -> dict[str, object]:
     rows = [census_geff(path) for path in geff_roots]
     final_inventory = scan_tree(input_root, geff_roots)
     if final_inventory != inventory:
-        raise CensusError(
-            f"raw GEFF tree changed during census: before={inventory} after={final_inventory}"
-        )
+        raise CensusError(f"raw GEFF tree changed during census: before={inventory} after={final_inventory}")
     return build_report(inventory, rows)
 
 
@@ -630,18 +614,14 @@ def _linux_linkat_empty_path(source_descriptor: int, parent_descriptor: int, out
     if hasattr(errno, "EOPNOTSUPP"):
         unsupported.add(errno.EOPNOTSUPP)
     if error_number in unsupported:
-        raise CensusError(
-            f"linkat(AT_EMPTY_PATH) is unsupported for the pinned output directory: errno={error_number}"
-        )
+        raise CensusError(f"linkat(AT_EMPTY_PATH) is unsupported for the pinned output directory: errno={error_number}")
     raise CensusError(f"linkat(AT_EMPTY_PATH) failed: errno={error_number} {os.strerror(error_number)}")
 
 
 def _open_anonymous_staging(parent_descriptor: int) -> int:
     """Return a Linux O_TMPFILE FD with no attacker-addressable name."""
     if not sys.platform.startswith("linux"):
-        raise CensusError(
-            f"file publication is disabled on {sys.platform}; omit --output and use canonical stdout"
-        )
+        raise CensusError(f"file publication is disabled on {sys.platform}; omit --output and use canonical stdout")
     flags = os.O_RDWR
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
@@ -650,9 +630,7 @@ def _open_anonymous_staging(parent_descriptor: int) -> int:
     try:
         return os.open(".", flags | os.O_TMPFILE, 0o600, dir_fd=parent_descriptor)
     except OSError as error:
-        raise CensusError(
-            f"O_TMPFILE is unsupported for the pinned output directory: errno={error.errno}"
-        ) from error
+        raise CensusError(f"O_TMPFILE is unsupported for the pinned output directory: errno={error.errno}") from error
 
 
 def _publish_fd_noreplace(
@@ -676,9 +654,7 @@ def _publish_fd_noreplace(
     if sys.platform.startswith("linux"):
         _linux_linkat_empty_path(source_descriptor, parent_descriptor, output_name)
     else:
-        raise CensusError(
-            f"file publication is disabled on {sys.platform}; omit --output and use canonical stdout"
-        )
+        raise CensusError(f"file publication is disabled on {sys.platform}; omit --output and use canonical stdout")
 
     output_descriptor: int | None = None
     output_error: BaseException | None = None
@@ -717,9 +693,7 @@ def _write_output(payload: bytes, output: Path | None) -> None:
         sys.stdout.buffer.write(payload)
         return
     if not sys.platform.startswith("linux"):
-        raise CensusError(
-            f"file publication is disabled on {sys.platform}; omit --output and use canonical stdout"
-        )
+        raise CensusError(f"file publication is disabled on {sys.platform}; omit --output and use canonical stdout")
     output = Path(os.path.abspath(output))
     parent_descriptor = _open_output_parent(output.parent)
     source_descriptor: int | None = None
@@ -780,9 +754,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         if args.output is not None and not sys.platform.startswith("linux"):
-            raise CensusError(
-                f"file publication is disabled on {sys.platform}; omit --output and use canonical stdout"
-            )
+            raise CensusError(f"file publication is disabled on {sys.platform}; omit --output and use canonical stdout")
         output = None if args.output is None else validate_output_path(args.repo_root, args.output)
         report = run_census(args.repo_root)
         _write_output(_canonical_bytes(report), output)

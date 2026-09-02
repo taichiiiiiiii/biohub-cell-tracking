@@ -35,16 +35,16 @@ filesystem anchor with no-follow semantics.
 
 ```text
 PYTHONDONTWRITEBYTECODE=1 \
-PYTHONPATH=/Users/taichi/biohub-sol-tuple-census/src \
+PYTHONPATH=/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking/src \
 /Users/taichi/コンペティション/Kaggle/biohub-cell-tracking/.venv/bin/python \
 scripts/tuple_census.py \
   --repo-root /Users/taichi/コンペティション/Kaggle/biohub-cell-tracking
 ```
 
 Script SHA-256:
-`3816a12423e3a6a470bb897626e24dd7ac2e53a73c48c393c40d5071d4e4f449`.
+`f01199c51b04241591cabe59f677acf37af57536d108f0d6bffdb69c7a57aecc`.
 Canonical stdout JSON receipt: 11,223 bytes, SHA-256
-`39afcfdc6dd74012d80e01f5648ce450f2493aac9ad039c93b17d527e6b8f9cf`.
+`69af513f594c37e7a7e727cdbc30c852877e27121e412ddf2499300674ec6916`.
 The bytes were consumed directly by a streaming SHA-256/JSON verifier and were
 not redirected to a file. On Darwin, `--output` is disabled during CLI
 preflight, before census execution, path creation, open, unlink, or publication.

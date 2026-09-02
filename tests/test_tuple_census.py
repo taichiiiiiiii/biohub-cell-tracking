@@ -210,9 +210,7 @@ def test_canonical_stdout_cli_bytes_and_hash(
     payload = captured.out.encode()
     assert payload == b'{"a":[2,3],"z":1}\n'
     assert len(payload) == 18
-    assert hashlib.sha256(payload).hexdigest() == (
-        "9c24cd7614ce91d1a480097ac7530c8092a2a7b4b37c90f5364c4d29d15de0a6"
-    )
+    assert hashlib.sha256(payload).hexdigest() == ("9c24cd7614ce91d1a480097ac7530c8092a2a7b4b37c90f5364c4d29d15de0a6")
     assert captured.err == ""
 
 
