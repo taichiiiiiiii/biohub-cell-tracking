@@ -16,9 +16,13 @@ used-target conflict check, appending accepted edges after the originals.
 """
 from __future__ import annotations
 
+import math
+import struct
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from numbers import Integral, Real
+from typing import Literal
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -214,6 +218,28 @@ class TwinPlan:
     debug_records: tuple[TwinDebugRecord, ...]
 
 
+@dataclass(frozen=True)
+class TwinMutationSummary:
+    status: Literal["applied", "already_applied", "no_changes"]
+    accepted_count: int
+    nodes_before: int
+    nodes_after: int
+    edges_before: int
+    edges_after: int
+    edges_removed: int
+    edges_added: int
+    edge_symmetric_difference: int
+    isolated_donors: int
+
+
+class TwinMutationError(RuntimeError):
+    reason: str
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 _TWIN_COUNTER_KEYS = (
     "steal_twin_examined_frames",
     "steal_twin_p_pool",
@@ -274,14 +300,43 @@ _TWIN_DEEPCENTER_REASONS = (
     "deepcenter_threshold",
 )
 
+_TWIN_METADATA_MAX_DEPTH = 64
 
-def _freeze_twin_dtype(dtype: np.dtype) -> TwinFrozenDType:
-    metadata = _freeze_twin_value(dtype.metadata) if dtype.metadata is not None else None
+_TWIN_VALIDATION_REASONS = (
+    "missing_node_field",
+    "invalid_node_id",
+    "duplicate_node_id",
+    "invalid_node_time",
+    "nonfinite_node_coordinate",
+    "invalid_edge_endpoint",
+    "dangling_edge",
+    "duplicate_edge",
+    "nonconsecutive_edge",
+    "indegree",
+    "outdegree",
+    "nonfinite_edge_distance",
+)
+
+
+def _freeze_twin_dtype(
+    dtype: np.dtype,
+    *,
+    _depth: int = 0,
+    _active: set[int] | None = None,
+) -> TwinFrozenDType:
+    if _depth > _TWIN_METADATA_MAX_DEPTH:
+        raise TypeError("twin metadata exceeds maximum depth")
+    active = set() if _active is None else _active
+    metadata = (
+        _freeze_twin_value(dtype.metadata, _depth=_depth + 1, _active=active)
+        if dtype.metadata is not None
+        else None
+    )
     if metadata is not None and not isinstance(metadata, TwinFrozenMapping):
         raise TypeError("numpy dtype metadata must be a mapping")
     return TwinFrozenDType(
         dtype.str,
-        _freeze_twin_value(dtype.descr),
+        _freeze_twin_value(dtype.descr, _depth=_depth + 1, _active=active),
         metadata,
         int(dtype.itemsize),
         int(dtype.alignment),
@@ -292,15 +347,32 @@ def _freeze_twin_dtype(dtype: np.dtype) -> TwinFrozenDType:
     )
 
 
-def _freeze_twin_structured_scalar(value: np.void, dtype: np.dtype) -> TwinFrozenStructuredScalar:
+def _freeze_twin_structured_scalar(
+    value: np.void,
+    dtype: np.dtype,
+    *,
+    _depth: int = 0,
+    _active: set[int] | None = None,
+) -> TwinFrozenStructuredScalar:
+    if _depth > _TWIN_METADATA_MAX_DEPTH:
+        raise TypeError("twin metadata exceeds maximum depth")
     if dtype.names is None:
         raise TypeError("unstructured numpy void metadata is unsupported")
+    active = set() if _active is None else _active
     return TwinFrozenStructuredScalar(
-        tuple((name, _freeze_twin_value(value[name])) for name in dtype.names)
+        tuple(
+            (name, _freeze_twin_value(value[name], _depth=_depth + 1, _active=active))
+            for name in dtype.names
+        )
     )
 
 
-def _freeze_twin_value(value: object) -> object:
+def _freeze_twin_value(
+    value: object,
+    *,
+    _depth: int = 0,
+    _active: set[int] | None = None,
+) -> object:
     """Freeze supported edge metadata or reject it before a plan is returned.
 
     Supported values are standard immutable scalars, recursively frozen
@@ -308,8 +380,28 @@ def _freeze_twin_value(value: object) -> object:
     memoryviews. Arbitrary objects are rejected rather than retained behind a
     frozen dataclass or ambiguously deep-copied.
     """
+    if _depth > _TWIN_METADATA_MAX_DEPTH:
+        raise TypeError("twin metadata exceeds maximum depth")
+    active = set() if _active is None else _active
+    recursive = isinstance(
+        value,
+        (np.dtype, np.ndarray, np.void, Mapping, list, tuple, set, frozenset),
+    )
+    value_id = id(value)
+    if recursive:
+        if value_id in active:
+            raise TypeError("cyclic twin metadata")
+        active.add(value_id)
+    try:
+        return _freeze_twin_value_inner(value, _depth, active)
+    finally:
+        if recursive:
+            active.remove(value_id)
+
+
+def _freeze_twin_value_inner(value: object, depth: int, active: set[int]) -> object:
     if isinstance(value, np.dtype):
-        return _freeze_twin_dtype(value)
+        return _freeze_twin_dtype(value, _depth=depth, _active=active)
     if isinstance(value, np.ndarray):
         original_shape = tuple(value.shape)
         original_strides = tuple(value.strides)
@@ -317,17 +409,22 @@ def _freeze_twin_value(value: object) -> object:
         if value.dtype.hasobject:
             if value.dtype.names is not None:
                 content: bytes | tuple[object, ...] = tuple(
-                    _freeze_twin_structured_scalar(copied_array[index], value.dtype)
+                    _freeze_twin_structured_scalar(
+                        copied_array[index], value.dtype, _depth=depth + 1, _active=active
+                    )
                     for index in np.ndindex(original_shape)
                 )
             else:
                 content = tuple(
-                    _freeze_twin_value(copied_array[index]) for index in np.ndindex(original_shape)
+                    _freeze_twin_value(
+                        copied_array[index], _depth=depth + 1, _active=active
+                    )
+                    for index in np.ndindex(original_shape)
                 )
         else:
             content = copied_array.tobytes(order="C")
         return TwinFrozenArray(
-            _freeze_twin_dtype(value.dtype),
+            _freeze_twin_dtype(value.dtype, _depth=depth + 1, _active=active),
             original_shape,
             original_strides,
             bool(value.flags.c_contiguous),
@@ -351,25 +448,43 @@ def _freeze_twin_value(value: object) -> object:
         )
     if isinstance(value, Mapping):
         return TwinFrozenMapping(
-            tuple((_freeze_twin_value(key), _freeze_twin_value(item)) for key, item in value.items())
+            tuple(
+                (
+                    _freeze_twin_value(key, _depth=depth + 1, _active=active),
+                    _freeze_twin_value(item, _depth=depth + 1, _active=active),
+                )
+                for key, item in value.items()
+            )
         )
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze_twin_value(item) for item in value)
+        return tuple(
+            _freeze_twin_value(item, _depth=depth + 1, _active=active) for item in value
+        )
     if isinstance(value, (set, frozenset)):
-        return frozenset(_freeze_twin_value(item) for item in value)
+        return frozenset(
+            _freeze_twin_value(item, _depth=depth + 1, _active=active) for item in value
+        )
     if isinstance(value, np.void):
-        return _freeze_twin_structured_scalar(value, value.dtype)
+        return _freeze_twin_structured_scalar(value, value.dtype, _depth=depth, _active=active)
     if isinstance(value, np.generic):
         if value.dtype.hasobject:
             raise TypeError(f"unsupported numpy object scalar metadata: {value.dtype!r}")
-        return TwinFrozenNumpyScalar(_freeze_twin_dtype(value.dtype), value.tobytes())
+        return TwinFrozenNumpyScalar(
+            _freeze_twin_dtype(value.dtype, _depth=depth + 1, _active=active),
+            value.tobytes(),
+        )
     if value is None or type(value) in (bool, int, float, complex, str, bytes):
         return value
     raise TypeError(f"unsupported mutable edge metadata type: {type(value).__qualname__}")
 
 
 def _freeze_twin_edge_row(
-    row: Mapping[str, object], source_id: int, target_id: int
+    row: Mapping[str, object],
+    source_id: int,
+    target_id: int,
+    *,
+    _source_key: object | None = None,
+    _target_key: object | None = None,
 ) -> TwinFrozenMapping:
     """Freeze an edge row, canonicalizing its validated integer endpoints.
 
@@ -380,14 +495,27 @@ def _freeze_twin_edge_row(
     detaches mutable ``int`` subclasses without broadening the supported
     types for arbitrary edge metadata.
     """
+    active = {id(row)}
     frozen_items: list[tuple[object, object]] = []
-    for key, value in row.items():
-        if isinstance(key, str) and key == "source_id":
-            frozen_items.append((str(key), source_id))
-        elif isinstance(key, str) and key == "target_id":
-            frozen_items.append((str(key), target_id))
-        else:
-            frozen_items.append((_freeze_twin_value(key), _freeze_twin_value(value)))
+    try:
+        for key, value in row.items():
+            if _source_key is not None and key is _source_key:
+                frozen_items.append((str(key), source_id))
+            elif _target_key is not None and key is _target_key:
+                frozen_items.append((str(key), target_id))
+            elif _source_key is None and isinstance(key, str) and key == "source_id":
+                frozen_items.append((str(key), source_id))
+            elif _target_key is None and isinstance(key, str) and key == "target_id":
+                frozen_items.append((str(key), target_id))
+            else:
+                frozen_items.append(
+                    (
+                        _freeze_twin_value(key, _depth=1, _active=active),
+                        _freeze_twin_value(value, _depth=1, _active=active),
+                    )
+                )
+    finally:
+        active.remove(id(row))
     return TwinFrozenMapping(tuple(frozen_items))
 
 
@@ -818,6 +946,1051 @@ def plan_twin_only_v1(
         _frozen_twin_counters(counters),
         tuple(debug_records),
     )
+
+
+class _TwinMutationFault(Exception):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+
+def _twin_exact_tuple(value: object, *, length: int | None = None) -> bool:
+    return type(value) is tuple and (length is None or len(value) == length)
+
+
+def _twin_shape_product(shape: tuple[int, ...]) -> int:
+    result = 1
+    for size in shape:
+        result *= size
+    return result
+
+
+def _twin_frozen_token(value: object) -> tuple[object, ...]:
+    """Return a bit-exact, recursively hashable token for an R1 frozen value."""
+    try:
+        return _twin_frozen_token_inner(value, 0, set())
+    except TypeError:
+        raise
+    except Exception as exc:
+        raise TypeError("invalid frozen twin value") from exc
+
+
+def _twin_frozen_token_inner(
+    value: object,
+    depth: int,
+    active: set[int],
+) -> tuple[object, ...]:
+    if depth > _TWIN_METADATA_MAX_DEPTH:
+        raise TypeError("twin metadata exceeds maximum depth")
+    value_type = type(value)
+    if value is None:
+        return ("none",)
+    if value_type is bool:
+        return ("bool", value)
+    if value_type is int:
+        return ("int", value)
+    if value_type is float:
+        return ("float", struct.pack(">d", value))
+    if value_type is complex:
+        return ("complex", struct.pack(">d", value.real), struct.pack(">d", value.imag))
+    if value_type is str:
+        return ("str", value)
+    if value_type is bytes:
+        return ("bytes", value)
+
+    recursive_types = (
+        tuple,
+        frozenset,
+        TwinFrozenMapping,
+        TwinFrozenDType,
+        TwinFrozenStructuredScalar,
+        TwinFrozenNumpyScalar,
+        TwinFrozenArray,
+        TwinFrozenBuffer,
+    )
+    if value_type not in recursive_types:
+        raise TypeError("unsupported frozen twin value")
+    value_id = id(value)
+    if value_id in active:
+        raise TypeError("cyclic frozen twin value")
+    active.add(value_id)
+    try:
+        if value_type is tuple:
+            return (
+                "tuple",
+                tuple(_twin_frozen_token_inner(item, depth + 1, active) for item in value),
+            )
+        if value_type is frozenset:
+            counts = Counter(
+                _twin_frozen_token_inner(item, depth + 1, active) for item in value
+            )
+            return ("frozenset", frozenset((token, count) for token, count in counts.items()))
+        if value_type is TwinFrozenMapping:
+            if not _twin_exact_tuple(value.items_snapshot):
+                raise TypeError("invalid frozen mapping items")
+            items: list[tuple[tuple[object, ...], tuple[object, ...]]] = []
+            for pair in value.items_snapshot:
+                if not _twin_exact_tuple(pair, length=2):
+                    raise TypeError("invalid frozen mapping item")
+                items.append(
+                    (
+                        _twin_frozen_token_inner(pair[0], depth + 1, active),
+                        _twin_frozen_token_inner(pair[1], depth + 1, active),
+                    )
+                )
+            return ("mapping", tuple(items))
+        if value_type is TwinFrozenDType:
+            if (
+                type(value.string) is not str
+                or type(value.itemsize) is not int
+                or value.itemsize < 0
+                or type(value.alignment) is not int
+                or value.alignment < 0
+                or type(value.byteorder) is not str
+                or type(value.hasobject) is not bool
+                or type(value.aligned_struct) is not bool
+                or (value.metadata is not None and type(value.metadata) is not TwinFrozenMapping)
+            ):
+                raise TypeError("invalid frozen dtype fields")
+            if value.names is not None:
+                if (
+                    not _twin_exact_tuple(value.names)
+                    or any(type(name) is not str for name in value.names)
+                    or len(set(value.names)) != len(value.names)
+                ):
+                    raise TypeError("invalid frozen dtype names")
+            return (
+                "dtype",
+                value.string,
+                _twin_frozen_token_inner(value.descriptor, depth + 1, active),
+                None
+                if value.metadata is None
+                else _twin_frozen_token_inner(value.metadata, depth + 1, active),
+                value.itemsize,
+                value.alignment,
+                value.byteorder,
+                value.names,
+                value.hasobject,
+                value.aligned_struct,
+            )
+        if value_type is TwinFrozenStructuredScalar:
+            if not _twin_exact_tuple(value.fields):
+                raise TypeError("invalid structured scalar fields")
+            names: list[str] = []
+            fields: list[tuple[str, tuple[object, ...]]] = []
+            for pair in value.fields:
+                if not _twin_exact_tuple(pair, length=2) or type(pair[0]) is not str:
+                    raise TypeError("invalid structured scalar field")
+                names.append(pair[0])
+                fields.append(
+                    (pair[0], _twin_frozen_token_inner(pair[1], depth + 1, active))
+                )
+            if len(set(names)) != len(names):
+                raise TypeError("duplicate structured scalar field")
+            return ("structured_scalar", tuple(fields))
+        if value_type is TwinFrozenNumpyScalar:
+            if type(value.dtype) is not TwinFrozenDType or type(value.content) is not bytes:
+                raise TypeError("invalid frozen numpy scalar")
+            dtype_token = _twin_frozen_token_inner(value.dtype, depth + 1, active)
+            if value.dtype.hasobject or len(value.content) != value.dtype.itemsize:
+                raise TypeError("invalid frozen numpy scalar length")
+            return ("numpy_scalar", dtype_token, value.content)
+        if value_type is TwinFrozenArray:
+            if (
+                type(value.dtype) is not TwinFrozenDType
+                or not _twin_exact_tuple(value.shape)
+                or not _twin_exact_tuple(value.strides)
+                or any(type(size) is not int or size < 0 for size in value.shape)
+                or any(type(stride) is not int for stride in value.strides)
+                or len(value.shape) != len(value.strides)
+                or type(value.c_contiguous) is not bool
+                or type(value.f_contiguous) is not bool
+                or type(value.object_content) is not bool
+                or value.object_content is not value.dtype.hasobject
+            ):
+                raise TypeError("invalid frozen array fields")
+            dtype_token = _twin_frozen_token_inner(value.dtype, depth + 1, active)
+            count = _twin_shape_product(value.shape)
+            if value.object_content:
+                if not _twin_exact_tuple(value.content) or len(value.content) != count:
+                    raise TypeError("invalid frozen object array content")
+                content_token: object = tuple(
+                    _twin_frozen_token_inner(item, depth + 1, active)
+                    for item in value.content
+                )
+            else:
+                if type(value.content) is not bytes or len(value.content) != count * value.dtype.itemsize:
+                    raise TypeError("invalid frozen array byte content")
+                content_token = value.content
+            return (
+                "array",
+                dtype_token,
+                value.shape,
+                value.strides,
+                value.c_contiguous,
+                value.f_contiguous,
+                content_token,
+                value.object_content,
+            )
+        if (
+            type(value.kind) is not str
+            or value.kind not in ("bytearray", "memoryview")
+            or type(value.format) is not str
+            or type(value.itemsize) is not int
+            or value.itemsize <= 0
+            or not _twin_exact_tuple(value.shape)
+            or not _twin_exact_tuple(value.strides)
+            or any(type(size) is not int or size < 0 for size in value.shape)
+            or any(type(stride) is not int for stride in value.strides)
+            or (value.strides and len(value.strides) != len(value.shape))
+            or type(value.readonly) is not bool
+            or type(value.content) is not bytes
+            or len(value.content) != _twin_shape_product(value.shape) * value.itemsize
+        ):
+            raise TypeError("invalid frozen buffer fields")
+        if value.kind == "bytearray" and (
+            value.format != "B"
+            or value.itemsize != 1
+            or value.shape != (len(value.content),)
+            or value.strides != (1,)
+            or value.readonly is not False
+        ):
+            raise TypeError("invalid frozen bytearray")
+        return (
+            "buffer",
+            value.kind,
+            value.format,
+            value.itemsize,
+            value.shape,
+            value.strides,
+            value.readonly,
+            value.content,
+        )
+    finally:
+        active.remove(value_id)
+
+
+def _twin_float_token(value: float) -> bytes:
+    return struct.pack(">d", value)
+
+
+def _twin_plan_fault(reason: str) -> None:
+    raise _TwinMutationFault(reason)
+
+
+def _twin_edge_adjacency(
+    edge_pairs: set[tuple[int, int]],
+) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
+    outgoing_targets: dict[int, set[int]] = {}
+    incoming_sources: dict[int, set[int]] = {}
+    for source_id, target_id in edge_pairs:
+        outgoing_targets.setdefault(source_id, set()).add(target_id)
+        incoming_sources.setdefault(target_id, set()).add(source_id)
+    return outgoing_targets, incoming_sources
+
+
+def _validate_twin_plan_for_mutation(
+    plan: object,
+) -> tuple[
+    TwinPlan,
+    dict[str, int],
+    dict[int, TwinSnapshotNode],
+    list[tuple[TwinSnapshotEdge, tuple[object, ...]]],
+    tuple[tuple[object, ...], ...],
+]:
+    if type(plan) is not TwinPlan:
+        _twin_plan_fault("invalid_plan_type")
+    try:
+        validation_reason = plan.validation_reason
+    except Exception:
+        _twin_plan_fault("plan_acceptance")
+    if validation_reason is not None:
+        _twin_plan_fault("plan_validation_failed")
+    try:
+        plan_nodes = plan.nodes
+        plan_edges = plan.edges
+        plan_candidates = plan.candidates
+        plan_accepted = plan.accepted_candidates
+        plan_decisions = plan.decisions
+        plan_debug_records = plan.debug_records
+        plan_counters = plan.counters
+    except Exception:
+        _twin_plan_fault("plan_acceptance")
+    tuple_fields = (
+        plan_nodes,
+        plan_edges,
+        plan_candidates,
+        plan_accepted,
+        plan_decisions,
+        plan_debug_records,
+    )
+    if any(type(value) is not tuple for value in tuple_fields) or type(plan_counters) is not TwinFrozenMapping:
+        _twin_plan_fault("plan_acceptance")
+
+    try:
+        items = plan_counters.items_snapshot
+    except Exception:
+        _twin_plan_fault("plan_counter_schema")
+    if type(items) is not tuple or len(items) != len(_TWIN_COUNTER_KEYS):
+        _twin_plan_fault("plan_counter_schema")
+    counter_values: list[int] = []
+    for index, entry in enumerate(items):
+        if (
+            type(entry) is not tuple
+            or len(entry) != 2
+            or type(entry[0]) is not str
+            or entry[0] != _TWIN_COUNTER_KEYS[index]
+        ):
+            _twin_plan_fault("plan_counter_schema")
+        if type(entry[1]) is not int or entry[1] < 0:
+            _twin_plan_fault("plan_counter_value")
+        counter_values.append(entry[1])
+    counters = dict(zip(_TWIN_COUNTER_KEYS, counter_values, strict=True))
+    eligibility_keys = (
+        "distance_twin",
+        "ambiguous_p_nn",
+        "ambiguous_q_nn",
+        "not_mutual_parent_nn",
+        "distance_existing_child",
+        "distance_parent",
+        "distance_sister_low",
+        "distance_sister_high",
+        "time",
+        "missing_successor",
+        "shared_successor",
+        "divergence",
+        "synthetic",
+        "deepcenter_bundle",
+        "deepcenter_dataset",
+        "deepcenter_frame",
+        "deepcenter_heatmap",
+        "deepcenter_nonfinite",
+        "deepcenter_threshold",
+    )
+    accepted_count = counters["steal_twin_accepted"]
+    conservation = (
+        counters["steal_twin_enumerated"]
+        == sum(counters[f"steal_twin_rejected_{key}"] for key in eligibility_keys)
+        + counters["steal_twin_eligible"]
+        and counters["steal_twin_eligible"]
+        == accepted_count
+        + counters["steal_twin_rejected_conflict"]
+        + counters["steal_twin_rejected_frame_cap"]
+        + counters["steal_twin_rejected_video_cap"]
+        and counters["steal_twin_planned_edges_removed"] == accepted_count
+        and counters["steal_twin_planned_edges_added"] == accepted_count
+        and counters["steal_twin_edges_removed"] == 0
+        and counters["steal_twin_edges_added"] == 0
+        and counters["steal_twin_isolated_donors"] == accepted_count
+        and counters["steal_twin_debug_records_written"] == 0
+        and counters["steal_twin_debug_records_dropped"] == 0
+        and len(plan_candidates) == counters["steal_twin_eligible"]
+        and len(plan_accepted) == accepted_count
+        and accepted_count <= counters["steal_twin_examined_frames"]
+        and accepted_count <= 2
+    )
+    if not conservation:
+        _twin_plan_fault("plan_conservation")
+
+    by_id: dict[int, TwinSnapshotNode] = {}
+    previous_id: int | None = None
+    for node in plan_nodes:
+        if (
+            type(node) is not TwinSnapshotNode
+            or type(node.node_id) is not int
+            or type(node.t) is not int
+            or any(type(value) is not float or not math.isfinite(value) for value in (node.z, node.y, node.x))
+            or type(node.gap_synthetic) is not bool
+            or (previous_id is not None and node.node_id <= previous_id)
+        ):
+            _twin_plan_fault("plan_candidate")
+        previous_id = node.node_id
+        by_id[node.node_id] = node
+
+    edge_pairs: set[tuple[int, int]] = set()
+    positions: set[int] = set()
+    indegree: Counter[int] = Counter()
+    outdegree: Counter[int] = Counter()
+    edge_metadata_tokens: dict[tuple[int, int], tuple[object, ...]] = {}
+    previous_edge_key: tuple[int, int, int] | None = None
+    for edge in plan_edges:
+        if (
+            type(edge) is not TwinSnapshotEdge
+            or type(edge.source_id) is not int
+            or type(edge.target_id) is not int
+            or type(edge.input_position) is not int
+            or type(edge.metadata) is not TwinFrozenMapping
+        ):
+            _twin_plan_fault("plan_candidate")
+        try:
+            metadata_token = _twin_frozen_token(edge.metadata)
+        except Exception:
+            _twin_plan_fault("plan_candidate")
+        metadata_sources = [
+            item
+            for key, item in edge.metadata.items_snapshot
+            if type(key) is str and key == "source_id"
+        ]
+        metadata_targets = [
+            item
+            for key, item in edge.metadata.items_snapshot
+            if type(key) is str and key == "target_id"
+        ]
+        edge_key = (edge.source_id, edge.target_id, edge.input_position)
+        pair = edge_key[:2]
+        if (
+            (previous_edge_key is not None and edge_key <= previous_edge_key)
+            or pair in edge_pairs
+            or edge.input_position in positions
+            or edge.source_id not in by_id
+            or edge.target_id not in by_id
+            or by_id[edge.target_id].t != by_id[edge.source_id].t + 1
+            or len(metadata_sources) != 1
+            or type(metadata_sources[0]) is not int
+            or metadata_sources[0] != edge.source_id
+            or len(metadata_targets) != 1
+            or type(metadata_targets[0]) is not int
+            or metadata_targets[0] != edge.target_id
+        ):
+            _twin_plan_fault("plan_candidate")
+        previous_edge_key = edge_key
+        edge_pairs.add(pair)
+        positions.add(edge.input_position)
+        edge_metadata_tokens[pair] = metadata_token
+        outdegree[edge.source_id] += 1
+        indegree[edge.target_id] += 1
+    if positions != set(range(len(plan_edges))) or any(v > 1 for v in indegree.values()) or any(v > 2 for v in outdegree.values()):
+        _twin_plan_fault("plan_candidate")
+    outgoing_targets, incoming_sources = _twin_edge_adjacency(edge_pairs)
+
+    if len(plan_decisions) != len(plan_candidates):
+        _twin_plan_fault("plan_acceptance")
+    accepted_from_decisions: list[TwinCandidate] = []
+    rejected_counts = Counter()
+    for candidate, decision in zip(plan_candidates, plan_decisions, strict=True):
+        if type(candidate) is not TwinCandidate or type(decision) is not TwinResolutionDecision or decision.candidate is not candidate:
+            _twin_plan_fault("plan_acceptance")
+        if decision.accepted is True and decision.reason is None:
+            accepted_from_decisions.append(candidate)
+        elif decision.accepted is False and type(decision.reason) is str and decision.reason in ("conflict", "frame_cap", "video_cap"):
+            rejected_counts[decision.reason] += 1
+        else:
+            _twin_plan_fault("plan_acceptance")
+    if (
+        len(accepted_from_decisions) != accepted_count
+        or len(accepted_from_decisions) != len(plan_accepted)
+        or any(
+            left is not right
+            for left, right in zip(accepted_from_decisions, plan_accepted, strict=True)
+        )
+        or any(
+            rejected_counts[key] != counters[f"steal_twin_rejected_{key}"]
+            for key in ("conflict", "frame_cap", "video_cap")
+        )
+    ):
+        _twin_plan_fault("plan_acceptance")
+
+    candidate_metadata_tokens = tuple(
+        _validate_twin_candidate_structure(candidate) for candidate in plan_candidates
+    )
+    accepted_roles: set[int] = set()
+    accepted_removed: set[tuple[int, int]] = set()
+    accepted_planned: set[tuple[int, int]] = set()
+    previous_sort_key: tuple[float, float, float, int, int, int, int, int, int] | None = None
+    accepted_frames: set[int] = set()
+    accepted_metadata_tokens: list[tuple[object, ...]] = []
+    for candidate, candidate_metadata_token, decision in zip(
+        plan_candidates, candidate_metadata_tokens, plan_decisions, strict=True
+    ):
+        try:
+            roles = (candidate.p, candidate.q, candidate.a, candidate.b, candidate.a2, candidate.b2)
+            if len(set(roles)) != 6 or any(role not in by_id for role in roles):
+                _twin_plan_fault("plan_candidate")
+            if (
+                by_id[candidate.p].t != candidate.frame
+                or by_id[candidate.q].t != candidate.frame
+                or by_id[candidate.a].t != candidate.frame + 1
+                or by_id[candidate.b].t != candidate.frame + 1
+                or by_id[candidate.a2].t != candidate.frame + 2
+                or by_id[candidate.b2].t != candidate.frame + 2
+                or any(by_id[role].gap_synthetic for role in roles)
+            ):
+                _twin_plan_fault("plan_candidate")
+            distances = (
+                _twin_distance(by_id[candidate.p], by_id[candidate.q]),
+                _twin_distance(by_id[candidate.p], by_id[candidate.a]),
+                _twin_distance(by_id[candidate.p], by_id[candidate.b]),
+                _twin_distance(by_id[candidate.a], by_id[candidate.b]),
+                _twin_distance(by_id[candidate.a2], by_id[candidate.b2]),
+            )
+            stored = (candidate.d_pq, candidate.d_pa, candidate.d_pb, candidate.d_ab, candidate.d_a2b2)
+            if any(not math.isfinite(value) for value in distances) or any(
+                _twin_float_token(left) != _twin_float_token(right)
+                for left, right in zip(distances, stored, strict=True)
+            ):
+                _twin_plan_fault("plan_candidate")
+            growth = distances[4] - distances[3]
+            formula = (
+                candidate.d_pb + 0.15 * candidate.d_ab,
+                -candidate.divergence_growth,
+                candidate.d_pq,
+                *roles,
+            )
+            if (
+                _twin_float_token(growth) != _twin_float_token(candidate.divergence_growth)
+                or any(
+                    _twin_float_token(formula[i]) != _twin_float_token(candidate.sort_key[i])
+                    for i in range(3)
+                )
+                or formula[3:] != candidate.sort_key[3:]
+                or _twin_float_token(distances[2]) != _twin_float_token(candidate.planned_edge.distance_um)
+            ):
+                _twin_plan_fault("plan_candidate")
+            removed_token = edge_metadata_tokens.get((candidate.q, candidate.b))
+            if removed_token is None or removed_token != candidate_metadata_token:
+                _twin_plan_fault("plan_candidate")
+            required = ((candidate.p, candidate.a), (candidate.q, candidate.b), (candidate.a, candidate.a2), (candidate.b, candidate.b2))
+            if any(pair not in edge_pairs for pair in required) or (candidate.p, candidate.b) in edge_pairs:
+                _twin_plan_fault("plan_candidate")
+            if (
+                outgoing_targets.get(candidate.p, set()) != {candidate.a}
+                or outgoing_targets.get(candidate.q, set()) != {candidate.b}
+                or outgoing_targets.get(candidate.a, set()) != {candidate.a2}
+                or outgoing_targets.get(candidate.b, set()) != {candidate.b2}
+                or incoming_sources.get(candidate.q, set())
+            ):
+                _twin_plan_fault("plan_candidate")
+            if previous_sort_key is not None and candidate.sort_key < previous_sort_key:
+                _twin_plan_fault("plan_acceptance")
+            previous_sort_key = candidate.sort_key
+            if decision.accepted is True:
+                role_set = set(roles)
+                removed_pair = (candidate.q, candidate.b)
+                planned_pair = (candidate.p, candidate.b)
+                if role_set & accepted_roles or removed_pair in accepted_removed or planned_pair in accepted_planned:
+                    _twin_plan_fault("plan_candidate")
+                accepted_roles.update(role_set)
+                accepted_removed.add(removed_pair)
+                accepted_planned.add(planned_pair)
+                accepted_frames.add(candidate.frame)
+                accepted_metadata_tokens.append(candidate_metadata_token)
+        except _TwinMutationFault:
+            raise
+        except Exception:
+            _twin_plan_fault("plan_candidate")
+    if len(accepted_frames) != accepted_count:
+        _twin_plan_fault("plan_conservation")
+
+    if len(plan_debug_records) != len(plan_candidates):
+        _twin_plan_fault("plan_acceptance")
+    dataset_value: str | None = None
+    for index, (record, decision, candidate) in enumerate(
+        zip(plan_debug_records, plan_decisions, plan_candidates, strict=True)
+    ):
+        try:
+            if type(record) is not TwinDebugRecord or (record.dataset is not None and type(record.dataset) is not str):
+                _twin_plan_fault("plan_acceptance")
+            if index == 0:
+                dataset_value = record.dataset
+            elif record.dataset != dataset_value:
+                _twin_plan_fault("plan_acceptance")
+            expected_decision = "accepted" if decision.accepted else "rejected"
+            if (
+                type(record.decision) is not str
+                or record.decision != expected_decision
+                or (record.reason is not None and type(record.reason) is not str)
+                or record.reason != decision.reason
+            ):
+                _twin_plan_fault("plan_acceptance")
+            projected = (
+                (record.p, candidate.p), (record.q, candidate.q), (record.a, candidate.a),
+                (record.b, candidate.b), (record.a2, candidate.a2), (record.b2, candidate.b2),
+                (record.sort_key, candidate.sort_key), (record.d_pq, candidate.d_pq),
+                (record.d_pa, candidate.d_pa), (record.d_pb, candidate.d_pb),
+                (record.d_ab, candidate.d_ab), (record.d_a2b2, candidate.d_a2b2),
+                (record.divergence_growth, candidate.divergence_growth),
+                (record.raw_deepcenter_score, candidate.raw_deepcenter_score),
+                (record.deepcenter_decision, candidate.deepcenter_decision),
+                (record.removed_edge, candidate.removed_edge), (record.planned_edge, candidate.planned_edge),
+            )
+            if any(left is not right for left, right in projected):
+                _twin_plan_fault("plan_acceptance")
+            if type(record.deepcenter_threshold) is not float or _twin_float_token(record.deepcenter_threshold) != _twin_float_token(0.12):
+                _twin_plan_fault("plan_acceptance")
+        except _TwinMutationFault:
+            raise
+        except Exception:
+            _twin_plan_fault("plan_acceptance")
+    ordered_edges = sorted(
+        (
+            (edge, edge_metadata_tokens[(edge.source_id, edge.target_id)])
+            for edge in plan_edges
+        ),
+        key=lambda item: item[0].input_position,
+    )
+    return plan, counters, by_id, ordered_edges, tuple(accepted_metadata_tokens)
+
+
+def _validate_twin_candidate_structure(candidate: TwinCandidate) -> tuple[object, ...]:
+    roles = (candidate.frame, candidate.p, candidate.q, candidate.a, candidate.b, candidate.a2, candidate.b2)
+    floats = (
+        candidate.d_pq, candidate.d_pa, candidate.d_pb, candidate.d_ab,
+        candidate.d_a2b2, candidate.divergence_growth, candidate.raw_deepcenter_score,
+    )
+    if any(type(value) is not int for value in roles) or any(type(value) is not float or not math.isfinite(value) for value in floats):
+        _twin_plan_fault("plan_candidate")
+    if (
+        type(candidate.deepcenter_decision) is not TwinDeepCenterDecision
+        or candidate.deepcenter_decision.accepted is not True
+        or candidate.deepcenter_decision.reason is not None
+        or type(candidate.deepcenter_decision.raw_score) is not float
+        or not math.isfinite(candidate.deepcenter_decision.raw_score)
+        or _twin_float_token(candidate.deepcenter_decision.raw_score) != _twin_float_token(candidate.raw_deepcenter_score)
+        or type(candidate.sort_key) is not tuple
+        or len(candidate.sort_key) != 9
+        or any(type(value) is not float or not math.isfinite(value) for value in candidate.sort_key[:3])
+        or any(type(value) is not int for value in candidate.sort_key[3:])
+        or type(candidate.removed_edge) is not TwinEdgeRecord
+        or type(candidate.removed_edge.source_id) is not int
+        or type(candidate.removed_edge.target_id) is not int
+        or type(candidate.removed_edge.metadata) is not TwinFrozenMapping
+        or (candidate.removed_edge.source_id, candidate.removed_edge.target_id) != (candidate.q, candidate.b)
+        or type(candidate.planned_edge) is not TwinPlannedEdge
+        or type(candidate.planned_edge.source_id) is not int
+        or type(candidate.planned_edge.target_id) is not int
+        or type(candidate.planned_edge.distance_um) is not float
+        or not math.isfinite(candidate.planned_edge.distance_um)
+        or candidate.planned_edge.edge_prob is not None
+        or (candidate.planned_edge.source_id, candidate.planned_edge.target_id) != (candidate.p, candidate.b)
+    ):
+        _twin_plan_fault("plan_candidate")
+    try:
+        return _twin_frozen_token(candidate.removed_edge.metadata)
+    except Exception:
+        _twin_plan_fault("plan_candidate")
+
+
+@dataclass(frozen=True)
+class _TwinCurrentEdge:
+    source_id: int
+    target_id: int
+    metadata: TwinFrozenMapping
+    token: tuple[object, ...]
+
+
+def _normalize_twin_current_nodes(
+    nodes_by_id: object,
+    plan_nodes: dict[int, TwinSnapshotNode],
+) -> dict[int, TwinSnapshotNode]:
+    if type(nodes_by_id) is not dict:
+        _twin_plan_fault("node_mapping")
+    locations: list[tuple[int, dict[str, object], dict[str, str]]] = []
+    try:
+        for outer_key, row in nodes_by_id.items():
+            if type(outer_key) is not int or type(row) is not dict:
+                _twin_plan_fault("node_mapping")
+            found: dict[str, str] = {}
+            for key in row:
+                if type(key) is str and key in ("node_id", "t", "z", "y", "x", "gap_synthetic"):
+                    found[key] = key
+            if any(name not in found for name in ("node_id", "t", "z", "y", "x")):
+                _twin_plan_fault("node_mapping")
+            locations.append((outer_key, row, found))
+        if {item[0] for item in locations} != set(plan_nodes):
+            _twin_plan_fault("node_mapping")
+        normalized: dict[int, TwinSnapshotNode] = {}
+        for outer_key, row, found in locations:
+            node_id_value = row[found["node_id"]]
+            time_value = row[found["t"]]
+            coordinate_values = (row[found["z"]], row[found["y"]], row[found["x"]])
+            if (
+                type(node_id_value) is not int
+                or node_id_value != outer_key
+                or not _is_twin_integer(time_value)
+                or any(not _is_twin_finite_real(value) for value in coordinate_values)
+            ):
+                _twin_plan_fault("node_mapping")
+            gap = False
+            if "gap_synthetic" in found:
+                gap = bool(row[found["gap_synthetic"]] == 1)
+            current = TwinSnapshotNode(
+                outer_key,
+                int(time_value),
+                float(coordinate_values[0]),
+                float(coordinate_values[1]),
+                float(coordinate_values[2]),
+                gap,
+            )
+            expected = plan_nodes[outer_key]
+            if (
+                current.t != expected.t
+                or current.gap_synthetic is not expected.gap_synthetic
+                or any(
+                    _twin_float_token(left) != _twin_float_token(right)
+                    for left, right in zip(
+                        (current.z, current.y, current.x),
+                        (expected.z, expected.y, expected.x),
+                        strict=True,
+                    )
+                )
+            ):
+                _twin_plan_fault("node_mapping")
+            normalized[outer_key] = current
+        return normalized
+    except _TwinMutationFault:
+        raise
+    except Exception:
+        _twin_plan_fault("node_mapping")
+
+
+def _normalize_twin_current_edges(
+    current_edges: object,
+    nodes: dict[int, TwinSnapshotNode],
+    *,
+    failure_reason: str = "current_graph_invalid",
+) -> list[_TwinCurrentEdge]:
+    if type(current_edges) is not list:
+        _twin_plan_fault(failure_reason)
+    result: list[_TwinCurrentEdge] = []
+    pairs: set[tuple[int, int]] = set()
+    try:
+        for row in current_edges:
+            if type(row) is not dict:
+                _twin_plan_fault(failure_reason)
+            source_key: object | None = None
+            target_key: object | None = None
+            source_value: object = None
+            target_value: object = None
+            for key, value in row.items():
+                if isinstance(key, str):
+                    if key == "source_id":
+                        source_key = key
+                        source_value = value
+                    elif key == "target_id":
+                        target_key = key
+                        target_value = value
+            if source_key is None or target_key is None:
+                _twin_plan_fault(failure_reason)
+            if not _is_twin_integer(source_value) or not _is_twin_integer(target_value):
+                _twin_plan_fault(failure_reason)
+            source_id = int(source_value)
+            target_id = int(target_value)
+            pair = (source_id, target_id)
+            if (
+                pair in pairs
+                or source_id not in nodes
+                or target_id not in nodes
+                or nodes[target_id].t != nodes[source_id].t + 1
+            ):
+                _twin_plan_fault(failure_reason)
+            metadata = _freeze_twin_edge_row(
+                row,
+                source_id,
+                target_id,
+                _source_key=source_key,
+                _target_key=target_key,
+            )
+            token = _twin_frozen_token(metadata)
+            result.append(_TwinCurrentEdge(source_id, target_id, metadata, token))
+            pairs.add(pair)
+        return result
+    except _TwinMutationFault:
+        raise
+    except Exception:
+        _twin_plan_fault(failure_reason)
+
+
+def _twin_edge_semantic_token(
+    source_id: int,
+    target_id: int,
+    metadata: TwinFrozenMapping,
+) -> tuple[object, ...]:
+    return ("edge", source_id, target_id, _twin_frozen_token(metadata))
+
+
+def _twin_replacement_row(
+    candidate: TwinCandidate,
+    nodes: dict[int, TwinSnapshotNode],
+) -> dict[str, object]:
+    distance = _twin_distance(nodes[candidate.p], nodes[candidate.b])
+    return {
+        "source_id": candidate.p,
+        "target_id": candidate.b,
+        "distance_um": distance,
+        "edge_prob": None,
+    }
+
+
+def _twin_expected_replacement_token(
+    candidate: TwinCandidate,
+    nodes: dict[int, TwinSnapshotNode],
+) -> tuple[object, ...]:
+    distance = _twin_distance(nodes[candidate.p], nodes[candidate.b])
+    metadata_token = (
+        "mapping",
+        (
+            (("str", "source_id"), ("int", candidate.p)),
+            (("str", "target_id"), ("int", candidate.b)),
+            (("str", "distance_um"), ("float", _twin_float_token(distance))),
+            (("str", "edge_prob"), ("none",)),
+        ),
+    )
+    return ("edge", candidate.p, candidate.b, metadata_token)
+
+
+def _twin_degrees(edges: Sequence[_TwinCurrentEdge]) -> tuple[Counter[int], Counter[int]]:
+    indegree: Counter[int] = Counter()
+    outdegree: Counter[int] = Counter()
+    for edge in edges:
+        outdegree[edge.source_id] += 1
+        indegree[edge.target_id] += 1
+    return indegree, outdegree
+
+
+def _twin_summary(
+    status: Literal["applied", "already_applied", "no_changes"],
+    node_count: int,
+    edge_count: int,
+    accepted_count: int,
+) -> TwinMutationSummary:
+    applied = status == "applied"
+    return TwinMutationSummary(
+        status,
+        accepted_count,
+        node_count,
+        node_count,
+        edge_count,
+        edge_count,
+        accepted_count if applied else 0,
+        accepted_count if applied else 0,
+        2 * accepted_count if applied else 0,
+        accepted_count if applied else 0,
+    )
+
+
+def _snapshot_twin_node_mapping_shallow(
+    nodes_by_id: object,
+) -> tuple[
+    dict[int, dict[str, object]],
+    tuple[
+        tuple[
+            object,
+            object,
+            tuple[tuple[object, object], ...] | None,
+        ],
+        ...,
+    ],
+] | None:
+    """Capture only identities needed by the section-10 write-free proof."""
+    if type(nodes_by_id) is not dict:
+        return None
+    entries: list[
+        tuple[object, object, tuple[tuple[object, object], ...] | None]
+    ] = []
+    for key, row in nodes_by_id.items():
+        bindings = tuple(row.items()) if type(row) is dict else None
+        entries.append((key, row, bindings))
+    return nodes_by_id, tuple(entries)
+
+
+def _twin_node_mapping_matches_shallow_snapshot(
+    nodes_by_id: object,
+    snapshot: tuple[
+        dict[int, dict[str, object]],
+        tuple[
+            tuple[
+                object,
+                object,
+                tuple[tuple[object, object], ...] | None,
+            ],
+            ...,
+        ],
+    ]
+    | None,
+) -> bool:
+    if snapshot is None or type(nodes_by_id) is not dict or nodes_by_id is not snapshot[0]:
+        return False
+    current_entries = tuple(nodes_by_id.items())
+    expected_entries = snapshot[1]
+    if len(current_entries) != len(expected_entries):
+        return False
+    for (expected_key, expected_row, expected_bindings), (key, row) in zip(
+        expected_entries, current_entries, strict=True
+    ):
+        if key is not expected_key or row is not expected_row or type(row) is not dict:
+            return False
+        if expected_bindings is None:
+            return False
+        current_bindings = tuple(row.items())
+        if len(current_bindings) != len(expected_bindings):
+            return False
+        if any(
+            key is not expected_key or value is not expected_value
+            for (expected_key, expected_value), (key, value) in zip(
+                expected_bindings, current_bindings, strict=True
+            )
+        ):
+            return False
+    return True
+
+
+def apply_twin_only_v1_plan(
+    nodes_by_id: dict[int, dict[str, object]],
+    current_edges: list[dict[str, object]],
+    plan: TwinPlan,
+) -> tuple[list[dict[str, object]], TwinMutationSummary]:
+    """Atomically apply a validated R1 twin plan to its exact source graph."""
+    fallback_reason = "plan_candidate"
+    try:
+        node_mapping_snapshot = _snapshot_twin_node_mapping_shallow(nodes_by_id)
+        (
+            valid_plan,
+            _counters,
+            plan_nodes,
+            ordered_plan_edges,
+            accepted_metadata_tokens,
+        ) = _validate_twin_plan_for_mutation(plan)
+        fallback_reason = "node_mapping"
+        _normalize_twin_current_nodes(nodes_by_id, plan_nodes)
+        fallback_reason = "current_graph_invalid"
+        current = _normalize_twin_current_edges(current_edges, plan_nodes)
+        accepted = valid_plan.accepted_candidates
+        accepted_count = len(accepted)
+
+        pre_tokens = tuple(
+            ("edge", edge.source_id, edge.target_id, metadata_token)
+            for edge, metadata_token in ordered_plan_edges
+        )
+        current_tokens = tuple(
+            ("edge", edge.source_id, edge.target_id, edge.token)
+            for edge in current
+        )
+        remove_tokens = tuple(
+            ("edge", candidate.q, candidate.b, metadata_token)
+            for candidate, metadata_token in zip(
+                accepted, accepted_metadata_tokens, strict=True
+            )
+        )
+        replacement_tokens = tuple(
+            _twin_expected_replacement_token(candidate, plan_nodes)
+            for candidate in accepted
+        )
+
+        def state_for_mask(mask: int) -> tuple[tuple[object, ...], ...]:
+            removed = {
+                remove_tokens[index]
+                for index in range(accepted_count)
+                if mask & (1 << (2 * index))
+            }
+            state = [token for token in pre_tokens if token not in removed]
+            state.extend(
+                replacement_tokens[index]
+                for index in range(accepted_count)
+                if mask & (1 << (2 * index + 1))
+            )
+            return tuple(state)
+
+        full_mask = (1 << (2 * accepted_count)) - 1
+        post_tokens = state_for_mask(full_mask)
+        exact_pre = current_tokens == pre_tokens
+        exact_post = accepted_count > 0 and current_tokens == post_tokens
+        if accepted_count == 0:
+            if exact_pre:
+                return current_edges, _twin_summary("no_changes", len(nodes_by_id), len(current_edges), 0)
+            indegree, outdegree = _twin_degrees(current)
+            if any(value > 1 for value in indegree.values()) or any(value > 2 for value in outdegree.values()):
+                _twin_plan_fault("current_graph_invalid")
+            _twin_plan_fault("current_graph_mismatch")
+        if exact_post:
+            return current_edges, _twin_summary(
+                "already_applied", len(nodes_by_id), len(current_edges), accepted_count
+            )
+        if not exact_pre:
+            if any(current_tokens == state_for_mask(mask) for mask in range(1, full_mask)):
+                _twin_plan_fault("partial_application")
+            indegree, outdegree = _twin_degrees(current)
+            if any(value > 1 for value in indegree.values()) or any(value > 2 for value in outdegree.values()):
+                _twin_plan_fault("current_graph_invalid")
+            _twin_plan_fault("current_graph_mismatch")
+
+        fallback_reason = "post_invariant"
+        replacement_rows = tuple(
+            _twin_replacement_row(candidate, plan_nodes) for candidate in accepted
+        )
+        for candidate, row in zip(accepted, replacement_rows, strict=True):
+            expected_distance = _twin_distance(
+                plan_nodes[candidate.p], plan_nodes[candidate.b]
+            )
+            if (
+                type(row) is not dict
+                or tuple(row) != (
+                    "source_id",
+                    "target_id",
+                    "distance_um",
+                    "edge_prob",
+                )
+                or any(type(key) is not str for key in row)
+                or type(row["source_id"]) is not int
+                or row["source_id"] != candidate.p
+                or type(row["target_id"]) is not int
+                or row["target_id"] != candidate.b
+                or type(row["distance_um"]) is not float
+                or _twin_float_token(row["distance_um"])
+                != _twin_float_token(expected_distance)
+                or row["edge_prob"] is not None
+            ):
+                _twin_plan_fault("post_invariant")
+        replacement_current = _normalize_twin_current_edges(
+            list(replacement_rows), plan_nodes, failure_reason="post_invariant"
+        )
+
+        remove_token_set = set(remove_tokens)
+        survivors = [
+            (row, edge)
+            for row, edge, token in zip(current_edges, current, current_tokens, strict=True)
+            if token not in remove_token_set
+        ]
+        result = [row for row, _edge in survivors]
+        result.extend(replacement_rows)
+
+        # Prove the complete temporary graph before exposing it to the caller.
+        temporary = [edge for _row, edge in survivors]
+        temporary.extend(replacement_current)
+        temporary_tokens = tuple(("edge", edge.source_id, edge.target_id, edge.token) for edge in temporary)
+        before_pairs = {(edge.source_id, edge.target_id) for edge in current}
+        after_pairs = {(edge.source_id, edge.target_id) for edge in temporary}
+        indegree, outdegree = _twin_degrees(temporary)
+        surviving_count = len(current_edges) - accepted_count
+        if (
+            temporary_tokens != post_tokens
+            or len(result) != len(current_edges)
+            or len(before_pairs) != len(current_edges)
+            or len(after_pairs) != len(result)
+            or len(before_pairs ^ after_pairs) != 2 * accepted_count
+            or any(result[index] is not survivors[index][0] for index in range(surviving_count))
+            or any(value > 1 for value in indegree.values())
+            or any(value > 2 for value in outdegree.values())
+            or any(indegree[candidate.q] + outdegree[candidate.q] != 0 for candidate in accepted)
+        ):
+            _twin_plan_fault("post_invariant")
+        for index, row in enumerate(replacement_rows):
+            result_row = result[surviving_count + index]
+            if result_row is not row or tuple(result_row) != (
+                "source_id", "target_id", "distance_um", "edge_prob"
+            ):
+                _twin_plan_fault("post_invariant")
+        if not _twin_node_mapping_matches_shallow_snapshot(
+            nodes_by_id, node_mapping_snapshot
+        ):
+            _twin_plan_fault("post_invariant")
+        return result, _twin_summary(
+            "applied", len(nodes_by_id), len(current_edges), accepted_count
+        )
+    except _TwinMutationFault as exc:
+        raise TwinMutationError(exc.reason) from exc
+    except TwinMutationError:
+        raise
+    except Exception as exc:
+        raise TwinMutationError(fallback_reason) from exc
 
 
 def score_twin_deepcenter(

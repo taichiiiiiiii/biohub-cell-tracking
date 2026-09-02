@@ -30,6 +30,8 @@ from biohub.public_postproc.csv_out import SubmissionCsvWriter, write_run_stats
 from biohub.public_postproc.deepcenter import load_deepcenter_veto_detector
 from biohub.public_postproc.divisions import (
     _TWIN_COUNTER_KEYS,
+    _TWIN_METADATA_MAX_DEPTH,
+    _TWIN_VALIDATION_REASONS,
     TwinDebugRecord,
     TwinDeepCenterDecision,
     TwinEdgeRecord,
@@ -39,9 +41,11 @@ from biohub.public_postproc.divisions import (
     TwinFrozenMapping,
     TwinFrozenNumpyScalar,
     TwinFrozenStructuredScalar,
+    TwinPlan,
     TwinPlannedEdge,
     TwinSnapshotNode,
     add_safe_divisions_postlink,
+    apply_twin_only_v1_plan,
     plan_twin_only_v1,
     score_twin_deepcenter,
 )
@@ -56,6 +60,23 @@ from biohub.public_postproc.graph_ops import (
 )
 
 CHECKPOINT_MANIFEST_NAME = "manifest.json"
+
+_TWIN_R2_COUNTER_KEYS = (
+    "steal_twin_mutations_applied",
+    "steal_twin_pure_nodes",
+    "steal_twin_pure_edges",
+    "steal_twin_pure_fork_sources",
+    "steal_twin_pure_edge_symmetric_difference",
+    "steal_twin_geometry_edges_removed_observed",
+    "steal_twin_prune_nodes_removed_observed",
+    "steal_twin_prune_edges_removed_observed",
+    "steal_twin_short_nodes_removed_observed",
+    "steal_twin_short_edges_removed_observed",
+    "steal_twin_final_nodes",
+    "steal_twin_final_edges",
+    "steal_twin_final_fork_sources",
+    "steal_twin_linefit_coordinate_changed_nodes_observed",
+)
 
 
 def new_stats() -> dict[str, int]:
@@ -140,15 +161,33 @@ def new_stats() -> dict[str, int]:
         "linefit_skipped_nodes": 0,
     }
     stats.update(dict.fromkeys(_TWIN_COUNTER_KEYS, 0))
+    stats.update(dict.fromkeys(_TWIN_R2_COUNTER_KEYS, 0))
     return stats
 
 
 def _require_steal_twin_r1_dry_run(cfg: PostprocConfig) -> None:
-    if cfg.OUTPUT_STEAL_TWIN_REWIRE and not cfg.STEAL_TWIN_DRY_RUN:
-        raise RuntimeError(
-            "twin_only_v1 graph mutation is unavailable in ST-R1; "
-            "set BIOHUB_STEAL_TWIN_DRY_RUN=1 or implement ST-R2"
-        )
+    if not cfg.OUTPUT_STEAL_TWIN_REWIRE:
+        return
+    frozen = {
+        "STEAL_TWIN_MODE": "twin_only_v1",
+        "STEAL_TWIN_PARENT_MAX_UM": 8.0,
+        "STEAL_TWIN_EXISTING_CHILD_MAX_UM": 10.0,
+        "STEAL_TWIN_SISTER_MIN_UM": 5.5,
+        "STEAL_TWIN_SISTER_MAX_UM": 11.0,
+        "STEAL_TWIN_DIVERGE_UM": 2.25,
+        "STEAL_TWIN_TWIN_MAX_UM": 5.0,
+        "STEAL_TWIN_REQUIRE_TWO_SUCCESSORS": True,
+        "STEAL_TWIN_REJECT_SYNTHETIC": True,
+        "STEAL_TWIN_DEEPCENTER_VETO": True,
+        "STEAL_TWIN_FRAME_CAP_ABS": 1,
+        "STEAL_TWIN_VIDEO_CAP_ABS": 2,
+        "STEAL_TWIN_DEBUG_MAX_RECORDS": 200,
+    }
+    if any(
+        type(getattr(cfg, name)) is not type(expected) or getattr(cfg, name) != expected
+        for name, expected in frozen.items()
+    ):
+        raise RuntimeError("invalid twin_only_v1 mode/profile lock")
 
 
 def _twin_float_plain(value: float) -> float | dict[str, str]:
@@ -168,6 +207,12 @@ def _twin_float_plain(value: float) -> float | dict[str, str]:
 
 
 def _twin_frozen_value_plain(value: object) -> object:
+    return _twin_frozen_value_plain_inner(value, 0, set())
+
+
+def _twin_frozen_value_plain_inner(value: object, depth: int, active: set[int]) -> object:
+    if depth > _TWIN_METADATA_MAX_DEPTH:
+        raise TypeError("twin metadata exceeds maximum depth")
     value_type = type(value)
     if value is None or value_type in (bool, int, str):
         return value
@@ -181,13 +226,41 @@ def _twin_frozen_value_plain(value: object) -> object:
         }
     if value_type is bytes:
         return {"__twin_type__": "bytes", "hex": value.hex()}
+    recursive_types = (
+        tuple,
+        frozenset,
+        TwinFrozenMapping,
+        TwinFrozenDType,
+        TwinFrozenStructuredScalar,
+        TwinFrozenNumpyScalar,
+        TwinFrozenArray,
+        TwinFrozenBuffer,
+    )
+    if value_type not in recursive_types:
+        raise TypeError(f"unsupported frozen twin value type: {value_type.__qualname__}")
+    value_id = id(value)
+    if value_id in active:
+        raise TypeError("cyclic frozen twin value")
+    active.add(value_id)
+    try:
+        return _twin_frozen_value_plain_recursive(value, depth, active)
+    finally:
+        active.remove(value_id)
+
+
+def _twin_frozen_value_plain_recursive(value: object, depth: int, active: set[int]) -> object:
+    value_type = type(value)
     if value_type is tuple:
         return {
             "__twin_type__": "tuple",
-            "items": [_twin_frozen_value_plain(item) for item in value],
+            "items": [
+                _twin_frozen_value_plain_inner(item, depth + 1, active) for item in value
+            ],
         }
     if value_type is frozenset:
-        items = [_twin_frozen_value_plain(item) for item in value]
+        items = [
+            _twin_frozen_value_plain_inner(item, depth + 1, active) for item in value
+        ]
         items.sort(
             key=lambda item: json.dumps(
                 item,
@@ -201,7 +274,10 @@ def _twin_frozen_value_plain(value: object) -> object:
         return {
             "__twin_type__": "mapping",
             "items": [
-                [_twin_frozen_value_plain(key), _twin_frozen_value_plain(item)]
+                [
+                    _twin_frozen_value_plain_inner(key, depth + 1, active),
+                    _twin_frozen_value_plain_inner(item, depth + 1, active),
+                ]
                 for key, item in value.items_snapshot
             ],
         }
@@ -209,8 +285,12 @@ def _twin_frozen_value_plain(value: object) -> object:
         return {
             "__twin_type__": "numpy_dtype",
             "string": value.string,
-            "descriptor": _twin_frozen_value_plain(value.descriptor),
-            "metadata": _twin_frozen_value_plain(value.metadata),
+            "descriptor": _twin_frozen_value_plain_inner(value.descriptor, depth + 1, active),
+            "metadata": (
+                None
+                if value.metadata is None
+                else _twin_frozen_value_plain_inner(value.metadata, depth + 1, active)
+            ),
             "itemsize": value.itemsize,
             "alignment": value.alignment,
             "byteorder": value.byteorder,
@@ -222,19 +302,20 @@ def _twin_frozen_value_plain(value: object) -> object:
         return {
             "__twin_type__": "numpy_structured_scalar",
             "fields": [
-                [name, _twin_frozen_value_plain(item)] for name, item in value.fields
+                [name, _twin_frozen_value_plain_inner(item, depth + 1, active)]
+                for name, item in value.fields
             ],
         }
     if value_type is TwinFrozenNumpyScalar:
         return {
             "__twin_type__": "numpy_scalar",
-            "dtype": _twin_frozen_value_plain(value.dtype),
+            "dtype": _twin_frozen_value_plain_inner(value.dtype, depth + 1, active),
             "content": value.content.hex(),
         }
     if value_type is TwinFrozenArray:
         plain = {
             "__twin_type__": "numpy_array",
-            "dtype": _twin_frozen_value_plain(value.dtype),
+            "dtype": _twin_frozen_value_plain_inner(value.dtype, depth + 1, active),
             "shape": list(value.shape),
             "strides": list(value.strides),
             "c_contiguous": value.c_contiguous,
@@ -244,7 +325,13 @@ def _twin_frozen_value_plain(value: object) -> object:
         if type(value.content) is bytes:
             plain["content_hex"] = value.content.hex()
         elif type(value.content) is tuple:
-            plain["content"] = _twin_frozen_value_plain(value.content)
+            plain["content"] = {
+                "__twin_type__": "tuple",
+                "items": [
+                    _twin_frozen_value_plain_inner(item, depth + 1, active)
+                    for item in value.content
+                ],
+            }
         else:
             raise TypeError("unsupported TwinFrozenArray content type")
         return plain
@@ -502,6 +589,61 @@ class _TwinDebugCollector:
             raise
 
 
+def _validate_twin_plan_failure_envelope(plan: object) -> TwinPlan:
+    if type(plan) is not TwinPlan:
+        raise RuntimeError("invalid twin planner return type")
+    try:
+        reason = plan.validation_reason
+        snapshots = (
+            plan.nodes,
+            plan.edges,
+            plan.candidates,
+            plan.accepted_candidates,
+            plan.decisions,
+            plan.debug_records,
+        )
+        counters = plan.counters
+    except Exception as exc:
+        raise RuntimeError("invalid twin planner top-level fields") from exc
+    if any(type(value) is not tuple for value in snapshots):
+        raise RuntimeError("invalid twin planner top-level fields")
+    if type(counters) is not TwinFrozenMapping:
+        raise RuntimeError("invalid twin planner failure counters")
+    try:
+        items = counters.items_snapshot
+    except Exception as exc:
+        raise RuntimeError("invalid twin planner failure counters") from exc
+    if type(items) is not tuple or len(items) != len(_TWIN_COUNTER_KEYS):
+        raise RuntimeError("invalid twin planner failure counters")
+    values: list[int] = []
+    for index, entry in enumerate(items):
+        if (
+            type(entry) is not tuple
+            or len(entry) != 2
+            or type(entry[0]) is not str
+            or entry[0] != _TWIN_COUNTER_KEYS[index]
+            or type(entry[1]) is not int
+        ):
+            raise RuntimeError("invalid twin planner failure counters")
+        values.append(entry[1])
+    if reason is None:
+        return plan
+    if type(reason) is not str or reason not in _TWIN_VALIDATION_REASONS:
+        raise RuntimeError("invalid twin planner validation reason")
+    if any(
+        type(value) is not tuple or value
+        for value in snapshots
+    ):
+        raise RuntimeError("invalid twin planner failure snapshot")
+    expected_one = {
+        "steal_twin_validation_failed",
+        f"steal_twin_validation_{reason}",
+    }
+    if any(value != (1 if key in expected_one else 0) for key, value in zip(_TWIN_COUNTER_KEYS, values, strict=True)):
+        raise RuntimeError("invalid twin planner failure counters")
+    return plan
+
+
 def _run_steal_twin_r1_dry_run(
     cfg: PostprocConfig,
     dataset: str | None,
@@ -512,7 +654,7 @@ def _run_steal_twin_r1_dry_run(
     repair_frame_cache: dict[int, np.ndarray],
     deepcenter_heatmap_cache: dict[tuple[str, int], np.ndarray],
     twin_debug_collector: _TwinDebugCollector | None,
-) -> None:
+) -> TwinPlan:
     def score_callback(node: TwinSnapshotNode) -> TwinDeepCenterDecision:
         return score_twin_deepcenter(
             cfg,
@@ -531,6 +673,7 @@ def _run_steal_twin_r1_dry_run(
         tuple(edges),
         score_callback,
     )
+    plan = _validate_twin_plan_failure_envelope(plan)
     try:
         counter_keys = tuple(plan.counters)
         counter_values = tuple(plan.counters[key] for key in counter_keys)
@@ -556,6 +699,121 @@ def _run_steal_twin_r1_dry_run(
         written, dropped = twin_debug_collector.allocate(plan.debug_records)
         stats["steal_twin_debug_records_written"] = written
         stats["steal_twin_debug_records_dropped"] = dropped
+    return plan
+
+
+def _twin_fork_sources(edges: list[dict[str, object]]) -> int:
+    counts: dict[int, int] = {}
+    for edge in edges:
+        source_id = int(edge["source_id"])
+        counts[source_id] = counts.get(source_id, 0) + 1
+    return sum(value == 2 for value in counts.values())
+
+
+def _twin_observed_removal(before: int, after: int, stage: str) -> int:
+    removed = before - after
+    if removed < 0:
+        raise RuntimeError(f"{stage} increased twin graph topology")
+    return removed
+
+
+def _linefit_with_twin_r2_guard(
+    cfg: PostprocConfig,
+    nodes_by_id: dict[int, dict[str, object]],
+    edges: list[dict[str, object]],
+    stats: dict[str, int],
+    *,
+    enabled: bool,
+) -> dict[int, dict[str, object]]:
+    if not enabled:
+        return linefit_smooth_output_graph(cfg, nodes_by_id, edges, stats)
+
+    node_mapping_id = id(nodes_by_id)
+    node_snapshot: list[
+        tuple[
+            object,
+            dict[str, object],
+            tuple[tuple[object, object], ...],
+            tuple[bytes, bytes, bytes],
+        ]
+    ] = []
+    for outer_key, row in nodes_by_id.items():
+        if type(row) is not dict:
+            raise RuntimeError("invalid twin linefit node row")
+        items = tuple(row.items())
+        coordinate_values: dict[str, float] = {}
+        for key, value in items:
+            if type(key) is str and key in ("z", "y", "x"):
+                coordinate_values[key] = value
+        if set(coordinate_values) != {"z", "y", "x"}:
+            raise RuntimeError("invalid twin linefit coordinate schema")
+        coordinates = tuple(coordinate_values[name] for name in ("z", "y", "x"))
+        if any(type(value) is not float or not math.isfinite(value) for value in coordinates):
+            raise RuntimeError("invalid twin linefit pre-coordinate")
+        node_snapshot.append(
+            (
+                outer_key,
+                row,
+                items,
+                tuple(struct.pack(">d", value) for value in coordinates),
+            )
+        )
+    edge_list_id = id(edges)
+    edge_snapshot = [
+        (row, tuple(row.items()))
+        for row in edges
+        if type(row) is dict
+    ]
+    if len(edge_snapshot) != len(edges):
+        raise RuntimeError("invalid twin linefit edge row")
+
+    returned = linefit_smooth_output_graph(cfg, nodes_by_id, edges, stats)
+    if id(returned) != node_mapping_id or id(nodes_by_id) != node_mapping_id or id(edges) != edge_list_id:
+        raise RuntimeError("twin linefit replaced a graph container")
+    if len(nodes_by_id) != len(node_snapshot) or len(edges) != len(edge_snapshot):
+        raise RuntimeError("twin linefit changed graph topology")
+
+    changed = 0
+    for (expected_outer_key, expected_row, expected_items, before), (outer_key, row) in zip(
+        node_snapshot, nodes_by_id.items(), strict=True
+    ):
+        if outer_key is not expected_outer_key or row is not expected_row:
+            raise RuntimeError("twin linefit replaced or reordered a node")
+        current_items = tuple(row.items())
+        if len(current_items) != len(expected_items) or any(
+            current_key is not expected_key
+            for (current_key, _), (expected_key, _) in zip(
+                current_items, expected_items, strict=True
+            )
+        ):
+            raise RuntimeError("twin linefit changed node keys")
+        after_coordinates: dict[str, bytes] = {}
+        for (key, value), (_, expected_value) in zip(
+            current_items, expected_items, strict=True
+        ):
+            if type(key) is str and key in ("z", "y", "x"):
+                if type(value) is not float or not math.isfinite(value):
+                    raise RuntimeError("invalid twin linefit post-coordinate")
+                after_coordinates[key] = struct.pack(">d", value)
+            elif value is not expected_value:
+                raise RuntimeError("twin linefit changed a preserved node binding")
+        if tuple(after_coordinates[name] for name in ("z", "y", "x")) != before:
+            changed += 1
+    for (expected_row, expected_items), row in zip(edge_snapshot, edges, strict=True):
+        if row is not expected_row:
+            raise RuntimeError("twin linefit replaced or reordered an edge")
+        current_items = tuple(row.items())
+        if len(current_items) != len(expected_items):
+            raise RuntimeError("twin linefit changed edge keys")
+        for (key, value), (expected_key, expected_value) in zip(
+            current_items, expected_items, strict=True
+        ):
+            if key is not expected_key:
+                raise RuntimeError("twin linefit changed edge keys")
+            if value is not expected_value:
+                raise RuntimeError("twin linefit changed an edge binding")
+    stats["steal_twin_linefit_coordinate_changed_nodes_observed"] = changed
+    return returned
 
 
 def _twin_debug_path_identities(debug_path: Path) -> tuple[Path, Path]:
@@ -736,8 +994,9 @@ def filter_output_graph_pre_linefit(
         deepcenter_cache=deepcenter_heatmap_cache,
     )
 
+    twin_candidate_active = False
     if cfg.OUTPUT_STEAL_TWIN_REWIRE:
-        _run_steal_twin_r1_dry_run(
+        plan = _run_steal_twin_r1_dry_run(
             cfg,
             dataset,
             nodes_by_id,
@@ -748,7 +1007,34 @@ def filter_output_graph_pre_linefit(
             deepcenter_heatmap_cache,
             twin_debug_collector,
         )
+        if plan.validation_reason is None and not cfg.STEAL_TWIN_DRY_RUN:
+            edges, mutation = apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+            if mutation.status == "already_applied":
+                raise RuntimeError("pipeline received an already-applied twin plan")
+            accepted = len(plan.accepted_candidates)
+            if mutation.status not in ("applied", "no_changes"):
+                raise RuntimeError("invalid twin mutation status")
+            stats["steal_twin_edges_removed"] = mutation.edges_removed
+            stats["steal_twin_edges_added"] = mutation.edges_added
+            stats["steal_twin_mutations_applied"] = mutation.edges_removed
+            stats["steal_twin_pure_nodes"] = len(nodes_by_id)
+            stats["steal_twin_pure_edges"] = len(edges)
+            stats["steal_twin_pure_fork_sources"] = _twin_fork_sources(edges)
+            stats["steal_twin_pure_edge_symmetric_difference"] = mutation.edge_symmetric_difference
+            if not (
+                stats["steal_twin_planned_edges_removed"]
+                == stats["steal_twin_planned_edges_added"]
+                == stats["steal_twin_accepted"]
+                == accepted
+                == stats["steal_twin_edges_removed"]
+                == stats["steal_twin_edges_added"]
+                == stats["steal_twin_mutations_applied"]
+                and stats["steal_twin_pure_edge_symmetric_difference"] == 2 * accepted
+            ):
+                raise RuntimeError("twin mutation counter conservation failed")
+            twin_candidate_active = True
 
+    geometry_edges_before = len(edges)
     if cfg.OUTPUT_DIVISION_GEOMETRY_FILTER and edges:
         by_source: dict[int, list[dict[str, object]]] = {}
         for edge in edges:
@@ -782,7 +1068,13 @@ def filter_output_graph_pre_linefit(
             else:
                 filtered.extend(ranked)
         edges = filtered
+    if twin_candidate_active:
+        stats["steal_twin_geometry_edges_removed_observed"] = _twin_observed_removal(
+            geometry_edges_before, len(edges), "division geometry"
+        )
 
+    prune_nodes_before = len(nodes_by_id)
+    prune_edges_before = len(edges)
     if cfg.OUTPUT_PRUNE_ISOLATED:
         incident = {int(edge["source_id"]) for edge in edges} | {int(edge["target_id"]) for edge in edges}
         if incident:
@@ -790,8 +1082,27 @@ def filter_output_graph_pre_linefit(
             stats["pruned_isolated_nodes"] = len(nodes_by_id) - len(kept_nodes)
             nodes_by_id = kept_nodes
             edges = [edge for edge in edges if int(edge["source_id"]) in nodes_by_id and int(edge["target_id"]) in nodes_by_id]
+    if twin_candidate_active:
+        stats["steal_twin_prune_nodes_removed_observed"] = _twin_observed_removal(
+            prune_nodes_before, len(nodes_by_id), "isolated prune"
+        )
+        stats["steal_twin_prune_edges_removed_observed"] = _twin_observed_removal(
+            prune_edges_before, len(edges), "isolated prune"
+        )
 
+    short_nodes_before = len(nodes_by_id)
+    short_edges_before = len(edges)
     nodes_by_id, edges = filter_short_track_components(cfg, nodes_by_id, edges, stats)
+    if twin_candidate_active:
+        stats["steal_twin_short_nodes_removed_observed"] = _twin_observed_removal(
+            short_nodes_before, len(nodes_by_id), "short-track filter"
+        )
+        stats["steal_twin_short_edges_removed_observed"] = _twin_observed_removal(
+            short_edges_before, len(edges), "short-track filter"
+        )
+        stats["steal_twin_final_nodes"] = len(nodes_by_id)
+        stats["steal_twin_final_edges"] = len(edges)
+        stats["steal_twin_final_fork_sources"] = _twin_fork_sources(edges)
 
     return nodes_by_id, edges, stats
 
@@ -813,7 +1124,16 @@ def filter_output_graph(
         deepcenter_bundle=deepcenter_bundle,
         twin_debug_collector=twin_debug_collector,
     )
-    nodes_by_id = linefit_smooth_output_graph(cfg, nodes_by_id, edges, stats)
+    twin_candidate_active = (
+        stats["steal_twin_pure_nodes"] > 0 or stats["steal_twin_pure_edges"] > 0
+    )
+    nodes_by_id = _linefit_with_twin_r2_guard(
+        cfg,
+        nodes_by_id,
+        edges,
+        stats,
+        enabled=twin_candidate_active,
+    )
     return nodes_by_id, edges, stats
 
 
@@ -1080,7 +1400,17 @@ def run_relinefit(
             edges = payload["edges"]
             stats = dict(payload["stats"])  # copy: don't mutate the on-disk checkpoint's stats in memory
 
-            nodes_by_id = linefit_smooth_output_graph(cfg, nodes_by_id, edges, stats)
+            twin_candidate_active = (
+                stats.get("steal_twin_pure_nodes", 0) > 0
+                or stats.get("steal_twin_pure_edges", 0) > 0
+            )
+            nodes_by_id = _linefit_with_twin_r2_guard(
+                cfg,
+                nodes_by_id,
+                edges,
+                stats,
+                enabled=twin_candidate_active,
+            )
 
             writer.write_nodes(dataset, nodes_by_id)
             division_sources = writer.write_edges(dataset, nodes_by_id, edges)

@@ -3100,20 +3100,20 @@ def test_steal_twin_r1c_new_stats_appends_exact_frozen_counter_schema():
     stats = new_stats()
     keys = tuple(stats)
     twin_keys = divisions_module._TWIN_COUNTER_KEYS
-    assert keys[-len(twin_keys) :] == twin_keys
-    assert not any(key.startswith("steal_twin_") for key in keys[: -len(twin_keys)])
+    r2_keys = pipeline_module._TWIN_R2_COUNTER_KEYS
+    assert keys[-len(r2_keys) :] == r2_keys
+    assert keys[-len(r2_keys) - len(twin_keys) : -len(r2_keys)] == twin_keys
+    assert not any(key.startswith("steal_twin_") for key in keys[: -len(r2_keys) - len(twin_keys)])
     assert all(type(stats[key]) is int and stats[key] == 0 for key in twin_keys)
+    assert all(type(stats[key]) is int and stats[key] == 0 for key in r2_keys)
 
 
-def test_steal_twin_r1c_non_dry_guard_precedes_direct_graph_work(tmp_path: Path, monkeypatch):
-    cfg = build_config(test_dir=tmp_path, profile="e23_twin_only_v1")
+def test_steal_twin_r2_mode_lock_precedes_direct_graph_work(tmp_path: Path, monkeypatch):
+    cfg = replace(build_config(test_dir=tmp_path, profile="e23_twin_only_v1"), STEAL_TWIN_MODE="wrong")
     monkeypatch.setattr(pipeline_module, "new_stats", lambda: pytest.fail("new_stats called"))
     for function in (filter_output_graph_pre_linefit, filter_output_graph):
-        with pytest.raises(RuntimeError) as error:
+        with pytest.raises(RuntimeError, match="mode/profile lock"):
             function(cfg, {}, [])
-        message = str(error.value)
-        assert "ST-R1" in message and "ST-R2" in message
-        assert "BIOHUB_STEAL_TWIN_DRY_RUN=1" in message
 
 
 def test_steal_twin_r1c_direct_debug_collector_requirement_and_empty_path_inert(
@@ -4094,19 +4094,19 @@ def test_steal_twin_r1c_rejects_input_below_debug_target_before_both_runs(
         assert debug.is_dir()
 
 
-def test_steal_twin_r1c_run_entry_guards_precede_detector_and_outputs(tmp_path: Path, monkeypatch):
+def test_steal_twin_r2_run_entry_mode_guards_precede_detector_and_outputs(tmp_path: Path, monkeypatch):
     bundle = tmp_path / "bundle"
     bundle.mkdir()
     (bundle / "a.geff").mkdir()
-    cfg = build_config(test_dir=tmp_path, profile="e23_twin_only_v1")
+    cfg = replace(build_config(test_dir=tmp_path, profile="e23_twin_only_v1"), STEAL_TWIN_MODE="wrong")
     monkeypatch.setattr(
         pipeline_module,
         "load_deepcenter_veto_detector",
         lambda _cfg: pytest.fail("detector loaded"),
     )
-    with pytest.raises(RuntimeError, match="ST-R1"):
+    with pytest.raises(RuntimeError, match="mode/profile lock"):
         pipeline_module.run_postproc(bundle, tmp_path / "submission.csv", cfg)
-    with pytest.raises(RuntimeError, match="ST-R1"):
+    with pytest.raises(RuntimeError, match="mode/profile lock"):
         pipeline_module.save_prelinefit_checkpoint(bundle, tmp_path / "checkpoint", cfg)
     assert not (tmp_path / "submission.csv").exists()
     assert not (tmp_path / "checkpoint").exists()
@@ -4443,3 +4443,1913 @@ def test_steal_twin_r1c_run_relinefit_never_constructs_or_publishes_collector(
     result = pipeline_module.run_relinefit(checkpoint, tmp_path / "submission.csv", cfg)
     assert result["datasets"] == ["ds0"]
     assert not (tmp_path / "must-not-exist.jsonl").exists()
+
+
+# --------------------------------------------------------------------------
+# ST-R2: transactional twin-only mutation adapter
+# --------------------------------------------------------------------------
+
+
+def test_steal_twin_r2_applies_exact_row_and_is_directly_idempotent(tmp_path: Path):
+    node_rows, edges = _twin_motif()
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    edge_identities = [id(edge) for edge in edges]
+    node_identities = {node_id: id(row) for node_id, row in nodes_by_id.items()}
+
+    result, summary = divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+
+    assert summary == divisions_module.TwinMutationSummary(
+        "applied", 1, 7, 7, 5, 5, 1, 1, 2, 1
+    )
+    assert result is not edges
+    assert [(edge["source_id"], edge["target_id"]) for edge in result] == [
+        (0, 1), (1, 3), (3, 5), (4, 6), (1, 4)
+    ]
+    assert [id(edge) for edge in result[:-1]] == [
+        edge_identities[0], edge_identities[1], edge_identities[3], edge_identities[4]
+    ]
+    assert tuple(result[-1]) == ("source_id", "target_id", "distance_um", "edge_prob")
+    assert result[-1] == {
+        "source_id": 1,
+        "target_id": 4,
+        "distance_um": 6.0,
+        "edge_prob": None,
+    }
+    assert node_identities == {node_id: id(row) for node_id, row in nodes_by_id.items()}
+    assert all("gap_synthetic" not in row for row in nodes_by_id.values())
+
+    second, second_summary = divisions_module.apply_twin_only_v1_plan(nodes_by_id, result, plan)
+    assert second is result
+    assert second_summary == divisions_module.TwinMutationSummary(
+        "already_applied", 1, 7, 7, 5, 5, 0, 0, 0, 0
+    )
+
+
+@pytest.mark.parametrize("operation", ["remove", "add"])
+def test_steal_twin_r2_detects_exact_partial_application(tmp_path: Path, operation: str):
+    node_rows, edges = _twin_motif()
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    if operation == "remove":
+        partial = [edge for edge in edges if (edge["source_id"], edge["target_id"]) != (2, 4)]
+    else:
+        partial = [*edges, {"source_id": 1, "target_id": 4, "distance_um": 6.0, "edge_prob": None}]
+    with pytest.raises(divisions_module.TwinMutationError, match="partial_application") as error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, partial, plan)
+    assert error.value.reason == "partial_application"
+
+
+def test_steal_twin_r2_zero_acceptance_returns_same_list(tmp_path: Path):
+    plan = divisions_module.plan_twin_only_v1(
+        _steal_twin_r1a_cfg(tmp_path), "ds0", (), (), _twin_accept
+    )
+    edges: list[dict[str, object]] = []
+    result, summary = divisions_module.apply_twin_only_v1_plan({}, edges, plan)
+    assert result is edges
+    assert summary.status == "no_changes"
+    assert summary.accepted_count == summary.edges_removed == summary.edges_added == 0
+
+
+def test_steal_twin_r2_common_depth_boundary_and_plain_codec_parity():
+    depth64: object = 1
+    for _ in range(64):
+        depth64 = (depth64,)
+    frozen64 = divisions_module._freeze_twin_value(depth64)
+    first = pipeline_module._twin_frozen_value_plain(frozen64)
+    second = pipeline_module._twin_frozen_value_plain(frozen64)
+    assert first == second
+    assert divisions_module._twin_frozen_token(frozen64) == divisions_module._twin_frozen_token(
+        frozen64
+    )
+
+    depth65: object = (depth64,)
+    with pytest.raises(TypeError, match="maximum depth"):
+        divisions_module._freeze_twin_value(depth65)
+    forged65: object = frozen64
+    forged65 = (forged65,)
+    with pytest.raises(TypeError, match="maximum depth"):
+        pipeline_module._twin_frozen_value_plain(forged65)
+
+
+def test_steal_twin_r2_pipeline_mutates_once_and_populates_stage_telemetry(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _r1c_cfg(tmp_path, BIOHUB_STEAL_TWIN_DRY_RUN="0")
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *_args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    node_rows, edges = _twin_motif()
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    result_nodes, result_edges, stats = filter_output_graph_pre_linefit(
+        cfg, nodes_by_id, edges, dataset="ds0", deepcenter_bundle={}
+    )
+    assert result_nodes is nodes_by_id
+    assert [(edge["source_id"], edge["target_id"]) for edge in result_edges][-1] == (1, 4)
+    assert stats["steal_twin_accepted"] == 1
+    assert stats["steal_twin_edges_removed"] == stats["steal_twin_edges_added"] == 1
+    assert stats["steal_twin_mutations_applied"] == 1
+    assert stats["steal_twin_pure_nodes"] == stats["steal_twin_final_nodes"] == 7
+    assert stats["steal_twin_pure_edges"] == stats["steal_twin_final_edges"] == 5
+    assert stats["steal_twin_pure_edge_symmetric_difference"] == 2
+    assert stats["steal_twin_pure_fork_sources"] == stats["steal_twin_final_fork_sources"] == 1
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "invalid_plan_type",
+        "plan_validation_failed",
+        "plan_counter_schema",
+        "plan_counter_value",
+        "plan_conservation",
+        "plan_acceptance",
+        "plan_candidate",
+        "node_mapping",
+        "current_graph_invalid",
+        "partial_application",
+        "current_graph_mismatch",
+        "post_invariant",
+    ],
+)
+def test_steal_twin_r2_every_machine_reason_is_canonical(
+    tmp_path: Path, monkeypatch, reason: str
+):
+    node_rows, edges = _twin_motif()
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    call_nodes: object = nodes_by_id
+    call_edges: object = edges
+    call_plan: object = plan
+
+    if reason == "invalid_plan_type":
+        call_plan = object()
+    elif reason == "plan_validation_failed":
+        call_plan = divisions_module._invalid_twin_plan("dangling_edge")
+    elif reason in ("plan_counter_schema", "plan_counter_value", "plan_conservation"):
+        items = list(plan.counters.items_snapshot)
+        if reason == "plan_counter_schema":
+            items.pop()
+        elif reason == "plan_counter_value":
+            items[0] = (items[0][0], True)
+        else:
+            index = divisions_module._TWIN_COUNTER_KEYS.index("steal_twin_examined_frames")
+            items[index] = (items[index][0], 0)
+        call_plan = replace(plan, counters=divisions_module.TwinFrozenMapping(tuple(items)))
+    elif reason == "plan_acceptance":
+        bad_record = replace(plan.debug_records[0], decision="rejected")
+        call_plan = replace(plan, debug_records=(bad_record,))
+    elif reason == "plan_candidate":
+        bad_node = replace(plan.nodes[0], z=float("nan"))
+        call_plan = replace(plan, nodes=(bad_node, *plan.nodes[1:]))
+    elif reason == "node_mapping":
+        call_nodes = []
+    elif reason == "current_graph_invalid":
+        call_edges = ()
+    elif reason == "partial_application":
+        call_edges = [*edges, {"source_id": 1, "target_id": 4, "distance_um": 6.0, "edge_prob": None}]
+    elif reason == "current_graph_mismatch":
+        call_edges = [dict(edge) for edge in edges]
+        call_edges[0]["metadata_drift"] = 1
+    else:
+        real_replacement = divisions_module._twin_replacement_row
+
+        def bad_replacement(candidate, nodes):
+            row = real_replacement(candidate, nodes)
+            row["unexpected"] = 1
+            return row
+
+        monkeypatch.setattr(divisions_module, "_twin_replacement_row", bad_replacement)
+
+    before_nodes = _r2_recursive_identity_snapshot(call_nodes)
+    before_edges = _r2_recursive_identity_snapshot(call_edges)
+    before_plan = _r2_recursive_identity_snapshot(call_plan)
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(call_nodes, call_edges, call_plan)
+    assert error.value.reason == reason
+    assert str(error.value) == reason
+    assert _r2_recursive_identity_snapshot(call_nodes) == before_nodes
+    assert _r2_recursive_identity_snapshot(call_edges) == before_edges
+    assert _r2_recursive_identity_snapshot(call_plan) == before_plan
+
+
+@pytest.mark.parametrize("mask", range(1, 15))
+def test_steal_twin_r2_two_candidate_every_proper_operation_mask_is_partial(
+    tmp_path: Path, mask: int
+):
+    first_nodes, first_edges = _offset_twin_motif(id_offset=0, frame=0, space_um=0.0)
+    second_nodes, second_edges = _offset_twin_motif(id_offset=10, frame=10, space_um=30.0)
+    node_rows = [*first_nodes, *second_nodes]
+    edges = [*first_edges, *second_edges]
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    assert len(plan.accepted_candidates) == 2
+    partial = list(edges)
+    for index, candidate in enumerate(plan.accepted_candidates):
+        if mask & (1 << (2 * index)):
+            partial = [
+                edge
+                for edge in partial
+                if (edge["source_id"], edge["target_id"])
+                != (candidate.q, candidate.b)
+            ]
+    for index, candidate in enumerate(plan.accepted_candidates):
+        if mask & (1 << (2 * index + 1)):
+            partial.append(
+                {
+                    "source_id": candidate.p,
+                    "target_id": candidate.b,
+                    "distance_um": candidate.d_pb,
+                    "edge_prob": None,
+                }
+            )
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, partial, plan)
+    assert error.value.reason == "partial_application"
+
+
+def test_steal_twin_r2_frozenset_token_preserves_same_bit_nan_multiplicity():
+    bits = bytes.fromhex("7ff8000000000001")
+    first = struct.unpack(">d", bits)[0]
+    second = struct.unpack(">d", bits)[0]
+    assert first is not second and len(frozenset((first, second))) == 2
+    one = divisions_module._twin_frozen_token(frozenset((first,)))
+    two = divisions_module._twin_frozen_token(frozenset((first, second)))
+    assert one != two
+    assert (divisions_module._twin_frozen_token(frozenset((second, first)))) == two
+
+
+def _r2_frozen_dtype(descriptor: object, *, hasobject: bool = False):
+    return divisions_module.TwinFrozenDType(
+        "|O" if hasobject else "|V0",
+        descriptor,
+        None,
+        8 if hasobject else 0,
+        8 if hasobject else 1,
+        "|",
+        None,
+        hasobject,
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "family,wrapper",
+    [
+        ("tuple", lambda child: (child,)),
+        ("frozenset", lambda child: frozenset((child,))),
+        (
+            "mapping",
+            lambda child: divisions_module.TwinFrozenMapping((("child", child),)),
+        ),
+        ("dtype_descriptor", lambda child: _r2_frozen_dtype(child)),
+        (
+            "structured_scalar",
+            lambda child: divisions_module.TwinFrozenStructuredScalar((("field", child),)),
+        ),
+    ],
+)
+def test_steal_twin_r2_every_general_recursive_frozen_child_has_exact_depth_boundary(
+    family: str, wrapper: Callable[[object], object]
+):
+    del family
+    depth64: object = 1
+    for _ in range(64):
+        depth64 = wrapper(depth64)
+    divisions_module._twin_frozen_token(depth64)
+    pipeline_module._twin_frozen_value_plain(depth64)
+    depth65 = wrapper(depth64)
+    with pytest.raises(TypeError, match="maximum depth"):
+        divisions_module._twin_frozen_token(depth65)
+    with pytest.raises(TypeError, match="maximum depth"):
+        pipeline_module._twin_frozen_value_plain(depth65)
+
+
+def test_steal_twin_r2_dtype_metadata_numpy_scalar_and_array_dtype_depth_edges():
+    descriptor_depth62: object = 1
+    for _ in range(62):
+        descriptor_depth62 = (descriptor_depth62,)
+    dtype_at_63 = _r2_frozen_dtype(descriptor_depth62)
+    scalar_at_64 = divisions_module.TwinFrozenNumpyScalar(dtype_at_63, b"")
+    divisions_module._twin_frozen_token(scalar_at_64)
+    with pytest.raises(TypeError, match="maximum depth"):
+        divisions_module._twin_frozen_token((scalar_at_64,))
+
+    array_at_64 = divisions_module.TwinFrozenArray(
+        dtype_at_63, (), (), True, True, b"", False
+    )
+    divisions_module._twin_frozen_token(array_at_64)
+    with pytest.raises(TypeError, match="maximum depth"):
+        divisions_module._twin_frozen_token((array_at_64,))
+
+    metadata_chain: object = 1
+    for _ in range(62):
+        metadata_chain = (metadata_chain,)
+    dtype_metadata_at_64 = replace(
+        _r2_frozen_dtype(()),
+        metadata=divisions_module.TwinFrozenMapping((("child", metadata_chain),)),
+    )
+    divisions_module._twin_frozen_token(dtype_metadata_at_64)
+    with pytest.raises(TypeError, match="maximum depth"):
+        divisions_module._twin_frozen_token((dtype_metadata_at_64,))
+
+    object_array_depth64: object = 1
+    for _ in range(63):
+        object_array_depth64 = divisions_module.TwinFrozenArray(
+            _r2_frozen_dtype((), hasobject=True),
+            (1,),
+            (8,),
+            True,
+            True,
+            (object_array_depth64,),
+            True,
+        )
+    divisions_module._twin_frozen_token(object_array_depth64)
+    object_array_depth65 = divisions_module.TwinFrozenArray(
+        _r2_frozen_dtype((), hasobject=True),
+        (1,),
+        (8,),
+        True,
+        True,
+        (object_array_depth64,),
+        True,
+    )
+    with pytest.raises(TypeError, match="maximum depth"):
+        divisions_module._twin_frozen_token(object_array_depth65)
+
+
+def test_steal_twin_r2_cycles_are_owned_by_raw_freezer_and_frozen_tokenizer():
+    raw: dict[str, object] = {}
+    raw["self"] = raw
+    with pytest.raises(TypeError, match="cyclic"):
+        divisions_module._freeze_twin_value(raw)
+
+    frozen = divisions_module.TwinFrozenMapping(())
+    object.__setattr__(frozen, "items_snapshot", (("self", frozen),))
+    with pytest.raises(TypeError, match="cyclic"):
+        divisions_module._twin_frozen_token(frozen)
+    with pytest.raises(TypeError, match="cyclic"):
+        pipeline_module._twin_frozen_value_plain(frozen)
+
+
+@pytest.mark.parametrize(
+    "forgery",
+    [
+        "wrong_type",
+        "empty_reason",
+        "integer_reason",
+        "string_subclass_reason",
+        "unknown_reason",
+        "nonempty_snapshot",
+        "malformed_counter_entry",
+        "wrong_reason_counter",
+    ],
+)
+def test_steal_twin_r2_adapter_rejects_noncanonical_failure_envelope_before_merge(
+    tmp_path: Path, monkeypatch, forgery: str
+):
+    failed: object = divisions_module._invalid_twin_plan("missing_node_field")
+    if forgery == "wrong_type":
+        failed = object()
+    elif forgery == "empty_reason":
+        failed = replace(failed, validation_reason="")
+    elif forgery == "integer_reason":
+        failed = replace(failed, validation_reason=1)
+    elif forgery == "string_subclass_reason":
+        class Reason(str):
+            pass
+
+        failed = replace(failed, validation_reason=Reason("missing_node_field"))
+    elif forgery == "unknown_reason":
+        failed = replace(failed, validation_reason="unknown")
+    elif forgery == "nonempty_snapshot":
+        failed = replace(failed, nodes=(divisions_module.TwinSnapshotNode(1, 0, 0.0, 0.0, 0.0, False),))
+    else:
+        items = list(failed.counters.items_snapshot)
+        if forgery == "malformed_counter_entry":
+            items[0] = [items[0][0], items[0][1]]
+        else:
+            index = divisions_module._TWIN_COUNTER_KEYS.index(
+                "steal_twin_validation_missing_node_field"
+            )
+            items[index] = (items[index][0], 0)
+        failed = replace(failed, counters=divisions_module.TwinFrozenMapping(tuple(items)))
+    monkeypatch.setattr(pipeline_module, "plan_twin_only_v1", lambda *_args: failed)
+    stats = new_stats()
+    baseline = dict(stats)
+
+    class ForbiddenCollector:
+        def allocate(self, _records):
+            pytest.fail("collector allocated")
+
+    with pytest.raises(RuntimeError):
+        pipeline_module._run_steal_twin_r1_dry_run(
+            _r1c_cfg(tmp_path, tmp_path / "debug.jsonl"),
+            "ds0",
+            {},
+            [],
+            stats,
+            None,
+            {},
+            {},
+            ForbiddenCollector(),
+        )
+    assert stats == baseline
+
+
+def test_steal_twin_r2_linefit_counts_signed_zero_and_preserves_shallow_identity(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _r1c_cfg(tmp_path)
+    nodes = {1: {"node_id": 1, "t": 0, "z": -0.0, "y": 0.0, "x": 0.0, "extra": object()}}
+    edges: list[dict[str, object]] = []
+    stats = new_stats()
+    row = nodes[1]
+    extra = row["extra"]
+
+    def signed_zero(_cfg, current_nodes, current_edges, _stats):
+        assert current_nodes is nodes and current_edges is edges
+        current_nodes[1]["z"] = 0.0
+        return current_nodes
+
+    monkeypatch.setattr(pipeline_module, "linefit_smooth_output_graph", signed_zero)
+    returned = pipeline_module._linefit_with_twin_r2_guard(
+        cfg, nodes, edges, stats, enabled=True
+    )
+    assert returned is nodes and nodes[1] is row and nodes[1]["extra"] is extra
+    assert stats["steal_twin_linefit_coordinate_changed_nodes_observed"] == 1
+
+
+def test_steal_twin_r2_invalid_pre_linefit_coordinate_fails_before_call(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _r1c_cfg(tmp_path)
+    nodes = {1: {"node_id": 1, "t": 0, "z": np.float64(0), "y": 0.0, "x": 0.0}}
+    monkeypatch.setattr(
+        pipeline_module,
+        "linefit_smooth_output_graph",
+        lambda *_args: pytest.fail("linefit called"),
+    )
+    with pytest.raises(RuntimeError, match="pre-coordinate"):
+        pipeline_module._linefit_with_twin_r2_guard(
+            cfg, nodes, [], new_stats(), enabled=True
+        )
+
+
+@pytest.mark.parametrize("dry_run", ["0", "1"])
+def test_steal_twin_r2_canonical_failure_skips_mutation_and_keeps_r2_zero(
+    tmp_path: Path, monkeypatch, dry_run: str
+):
+    cfg = _r1c_cfg(tmp_path, BIOHUB_STEAL_TWIN_DRY_RUN=dry_run)
+    failed = divisions_module._invalid_twin_plan("missing_node_field")
+    monkeypatch.setattr(pipeline_module, "plan_twin_only_v1", lambda *_args: failed)
+    monkeypatch.setattr(
+        pipeline_module,
+        "apply_twin_only_v1_plan",
+        lambda *_args: pytest.fail("mutator called for failure plan"),
+    )
+    nodes = {1: _twin_node(1, 0, 0.0)}
+    returned_nodes, returned_edges, stats = filter_output_graph_pre_linefit(
+        cfg, nodes, [], dataset="ds0"
+    )
+    assert returned_nodes is nodes and returned_edges == []
+    assert stats["steal_twin_validation_failed"] == 1
+    assert stats["steal_twin_validation_missing_node_field"] == 1
+    assert all(stats[key] == 0 for key in pipeline_module._TWIN_R2_COUNTER_KEYS)
+
+
+def test_steal_twin_r2_mixed_optional_gap_shape_matches_without_insertion(tmp_path: Path):
+    node_rows, edges = _twin_motif()
+    node_rows[0]["gap_synthetic"] = False
+    node_rows.append(_twin_node(20, 9, 40.0, gap_synthetic=True))
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    key_orders = {node_id: tuple(row) for node_id, row in nodes_by_id.items()}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    result, summary = divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+    assert summary.status == "applied" and result[-1]["source_id"] == 1
+    assert nodes_by_id[0]["gap_synthetic"] is False
+    assert nodes_by_id[20]["gap_synthetic"] is True
+    assert "gap_synthetic" not in nodes_by_id[1]
+    assert key_orders == {node_id: tuple(row) for node_id, row in nodes_by_id.items()}
+
+
+def test_steal_twin_r2_candidate_pipeline_order_is_plan_allocate_mutate_short(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _r1c_cfg(
+        tmp_path,
+        tmp_path / "debug.jsonl",
+        BIOHUB_STEAL_TWIN_DRY_RUN="0",
+    )
+    events: list[str] = []
+    real_planner = pipeline_module.plan_twin_only_v1
+    real_mutator = pipeline_module.apply_twin_only_v1_plan
+
+    def planner(*args):
+        events.append("plan")
+        return real_planner(*args)
+
+    class Collector:
+        def allocate(self, records):
+            events.append("allocate")
+            return len(records), 0
+
+    def mutate(nodes, edges, plan):
+        events.append("mutate")
+        return real_mutator(nodes, edges, plan)
+
+    def short(_cfg, nodes, edges, _stats):
+        events.append("short")
+        assert (edges[-1]["source_id"], edges[-1]["target_id"]) == (1, 4)
+        return nodes, edges
+
+    monkeypatch.setattr(pipeline_module, "plan_twin_only_v1", planner)
+    monkeypatch.setattr(pipeline_module, "apply_twin_only_v1_plan", mutate)
+    monkeypatch.setattr(pipeline_module, "filter_short_track_components", short)
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *_args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    node_rows, edges = _twin_motif()
+    filter_output_graph_pre_linefit(
+        cfg,
+        {int(row["node_id"]): row for row in node_rows},
+        edges,
+        dataset="ds0",
+        deepcenter_bundle={},
+        twin_debug_collector=Collector(),
+    )
+    assert events == ["plan", "allocate", "mutate", "short"]
+
+
+def test_steal_twin_r2_pipeline_rejects_direct_idempotence_status_before_downstream(
+    tmp_path: Path, monkeypatch
+):
+    cfg = _r1c_cfg(tmp_path, BIOHUB_STEAL_TWIN_DRY_RUN="0")
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *_args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+
+    def already(nodes, edges, plan):
+        return edges, divisions_module.TwinMutationSummary(
+            "already_applied",
+            len(plan.accepted_candidates),
+            len(nodes),
+            len(nodes),
+            len(edges),
+            len(edges),
+            0,
+            0,
+            0,
+            0,
+        )
+
+    monkeypatch.setattr(pipeline_module, "apply_twin_only_v1_plan", already)
+    monkeypatch.setattr(
+        pipeline_module,
+        "filter_short_track_components",
+        lambda *_args: pytest.fail("downstream short-track called"),
+    )
+    node_rows, edges = _twin_motif()
+    with pytest.raises(RuntimeError, match="already-applied"):
+        filter_output_graph_pre_linefit(
+            cfg,
+            {int(row["node_id"]): row for row in node_rows},
+            edges,
+            dataset="ds0",
+            deepcenter_bundle={},
+        )
+
+
+def test_steal_twin_r2_relinefit_updates_stats_copy_without_touching_checkpoint(
+    tmp_path: Path, monkeypatch
+):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "manifest.json").write_text(json.dumps({"datasets": ["ds0"]}))
+    stats = new_stats()
+    stats["steal_twin_pure_nodes"] = 1
+    stats["steal_twin_final_nodes"] = 1
+    payload = {
+        "dataset": "ds0",
+        "raw_node_count": 1,
+        "nodes_by_id": {1: {"node_id": 1, "t": 0, "z": -0.0, "y": 0.0, "x": 0.0}},
+        "edges": [],
+        "stats": stats,
+    }
+    checkpoint_path = checkpoint / "ds0.pkl"
+    with checkpoint_path.open("wb") as handle:
+        pickle.dump(payload, handle)
+
+    def linefit(_cfg, nodes, _edges, _stats):
+        nodes[1]["z"] = 0.0
+        return nodes
+
+    monkeypatch.setattr(pipeline_module, "linefit_smooth_output_graph", linefit)
+    result = pipeline_module.run_relinefit(
+        checkpoint,
+        tmp_path / "submission.csv",
+        _r1c_cfg(tmp_path),
+    )
+    assert int(
+        result["run_stats"].iloc[0][
+            "steal_twin_linefit_coordinate_changed_nodes_observed"
+        ]
+    ) == 1
+    with checkpoint_path.open("rb") as handle:
+        original = pickle.load(handle)
+    assert original["stats"]["steal_twin_linefit_coordinate_changed_nodes_observed"] == 0
+    assert struct.pack(">d", original["nodes_by_id"][1]["z"]) == struct.pack(">d", -0.0)
+
+
+def test_steal_twin_r2_tokenizes_each_metadata_occurrence_once(
+    tmp_path: Path, monkeypatch
+):
+    node_rows, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    real_token = divisions_module._twin_frozen_token
+    roots: list[int] = []
+
+    def counted_token(value):
+        roots.append(id(value))
+        return real_token(value)
+
+    monkeypatch.setattr(divisions_module, "_twin_frozen_token", counted_token)
+    result, summary = divisions_module.apply_twin_only_v1_plan(
+        {int(row["node_id"]): row for row in node_rows}, edges, plan
+    )
+    assert summary.status == "applied" and len(result) == len(edges)
+    assert len(roots) == 2 * len(edges) + len(plan.candidates) + len(plan.accepted_candidates)
+
+
+def test_steal_twin_r2_builds_edge_adjacency_once_with_one_linear_traversal(
+    tmp_path: Path, monkeypatch
+):
+    node_rows, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    real_adjacency = divisions_module._twin_edge_adjacency
+    calls = 0
+    traversed = 0
+
+    class CountedPairs:
+        def __init__(self, pairs):
+            self.pairs = pairs
+
+        def __iter__(self):
+            nonlocal traversed
+            for pair in self.pairs:
+                traversed += 1
+                yield pair
+
+    def counted_adjacency(pairs):
+        nonlocal calls
+        calls += 1
+        return real_adjacency(CountedPairs(pairs))
+
+    monkeypatch.setattr(divisions_module, "_twin_edge_adjacency", counted_adjacency)
+    divisions_module.apply_twin_only_v1_plan(
+        {int(row["node_id"]): row for row in node_rows}, edges, plan
+    )
+    assert calls == 1
+    assert traversed == len(plan.edges)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_key",
+        "extra_key",
+        "reordered_keys",
+        "key_subclass",
+        "source_value",
+        "source_type",
+        "target_value",
+        "target_type",
+        "distance_value",
+        "distance_type",
+        "edge_prob",
+    ],
+)
+def test_steal_twin_r2_post_proof_rejects_each_replacement_corruption(
+    tmp_path: Path, monkeypatch, corruption: str
+):
+    node_rows, edges = _twin_motif()
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    real_replacement = divisions_module._twin_replacement_row
+
+    class Key(str):
+        pass
+
+    def corrupt(candidate, nodes):
+        row = real_replacement(candidate, nodes)
+        if corruption == "missing_key":
+            row.pop("edge_prob")
+        elif corruption == "extra_key":
+            row["extra"] = None
+        elif corruption == "reordered_keys":
+            row = {
+                "target_id": row["target_id"],
+                "source_id": row["source_id"],
+                "distance_um": row["distance_um"],
+                "edge_prob": row["edge_prob"],
+            }
+        elif corruption == "key_subclass":
+            row = {
+                Key("source_id"): row["source_id"],
+                "target_id": row["target_id"],
+                "distance_um": row["distance_um"],
+                "edge_prob": row["edge_prob"],
+            }
+        elif corruption == "source_value":
+            row["source_id"] = candidate.q
+        elif corruption == "source_type":
+            row["source_id"] = np.int64(candidate.p)
+        elif corruption == "target_value":
+            row["target_id"] = candidate.a
+        elif corruption == "target_type":
+            row["target_id"] = np.int64(candidate.b)
+        elif corruption == "distance_value":
+            row["distance_um"] = 999.0
+        elif corruption == "distance_type":
+            row["distance_um"] = np.float64(row["distance_um"])
+        else:
+            row["edge_prob"] = 0.5
+        return row
+
+    monkeypatch.setattr(divisions_module, "_twin_replacement_row", corrupt)
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+    assert error.value.reason == "post_invariant"
+
+
+def test_steal_twin_r2_current_edge_lookup_accepts_r1b_string_subclass_keys(
+    tmp_path: Path,
+):
+    class Key(str):
+        pass
+
+    node_rows, original_edges = _twin_motif()
+    edges = [
+        {
+            Key("source_id"): edge["source_id"],
+            Key("target_id"): edge["target_id"],
+            **{
+                key: value
+                for key, value in edge.items()
+                if key not in ("source_id", "target_id")
+            },
+        }
+        for edge in original_edges
+    ]
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    result, summary = divisions_module.apply_twin_only_v1_plan(
+        {int(row["node_id"]): row for row in node_rows}, edges, plan
+    )
+    assert summary.status == "applied"
+    assert (result[-1]["source_id"], result[-1]["target_id"]) == (1, 4)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "validation_reason",
+        "nodes",
+        "edges",
+        "candidates",
+        "accepted_candidates",
+        "decisions",
+        "debug_records",
+    ],
+)
+def test_steal_twin_r2_missing_top_level_plan_field_is_plan_acceptance(
+    tmp_path: Path, field: str
+):
+    node_rows, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    object.__delattr__(plan, field)
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(
+            {int(row["node_id"]): row for row in node_rows}, edges, plan
+        )
+    assert error.value.reason == "plan_acceptance"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "nodes",
+        "edges",
+        "candidates",
+        "accepted_candidates",
+        "decisions",
+        "debug_records",
+        "counters",
+    ],
+)
+def test_steal_twin_r2_forged_top_level_plan_field_is_plan_acceptance(
+    tmp_path: Path, field: str
+):
+    node_rows, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    forged = replace(plan, **{field: object()})
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(
+            {int(row["node_id"]): row for row in node_rows}, edges, forged
+        )
+    assert error.value.reason == "plan_acceptance"
+
+
+@pytest.mark.parametrize("validation_reason", ["", 1, object()])
+def test_steal_twin_r2_forged_non_none_validation_reason_keeps_step_5_1_precedence(
+    tmp_path: Path, validation_reason: object
+):
+    node_rows, edges = _twin_motif()
+    plan = replace(_twin_plan(tmp_path, node_rows, edges), validation_reason=validation_reason)
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(
+            {int(row["node_id"]): row for row in node_rows}, edges, plan
+        )
+    assert error.value.reason == "plan_validation_failed"
+
+
+@pytest.mark.parametrize("storage", ["missing", "forged"])
+def test_steal_twin_r2_bad_counter_storage_is_plan_counter_schema(
+    tmp_path: Path, storage: str
+):
+    node_rows, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    if storage == "missing":
+        object.__delattr__(plan.counters, "items_snapshot")
+    else:
+        object.__setattr__(plan.counters, "items_snapshot", object())
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(
+            {int(row["node_id"]): row for row in node_rows}, edges, plan
+        )
+    assert error.value.reason == "plan_counter_schema"
+
+
+def test_steal_twin_r2_self_referential_structured_scalar_has_owned_cycle_errors(
+    tmp_path: Path,
+):
+    container = np.empty((), dtype=[("self", object)])
+    scalar = container[()]
+    container["self"][()] = scalar
+    with pytest.raises(TypeError, match="cyclic"):
+        divisions_module._freeze_twin_value(scalar)
+
+    node_rows, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    current = [dict(edge) for edge in edges]
+    current[0]["structured_cycle"] = scalar
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(
+            {int(row["node_id"]): row for row in node_rows}, current, plan
+        )
+    assert error.value.reason == "current_graph_invalid"
+
+
+@pytest.mark.parametrize(
+    ("field", "mutation"),
+    [
+        ("validation_reason", "missing"),
+        ("validation_reason", "malformed"),
+        ("nodes", "missing"),
+        ("nodes", "malformed"),
+        ("edges", "missing"),
+        ("edges", "malformed"),
+        ("candidates", "missing"),
+        ("candidates", "malformed"),
+        ("accepted_candidates", "missing"),
+        ("accepted_candidates", "malformed"),
+        ("decisions", "missing"),
+        ("decisions", "malformed"),
+        ("debug_records", "missing"),
+        ("debug_records", "malformed"),
+        ("counters", "missing"),
+        ("counters", "malformed"),
+        ("items_snapshot", "missing"),
+        ("items_snapshot", "malformed"),
+    ],
+)
+def test_steal_twin_r2_adapter_owns_every_top_level_envelope_failure_before_merge(
+    tmp_path: Path, monkeypatch, field: str, mutation: str
+):
+    node_rows, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    owner: object = plan.counters if field == "items_snapshot" else plan
+    if mutation == "missing":
+        object.__delattr__(owner, field)
+    else:
+        object.__setattr__(owner, field, object())
+    monkeypatch.setattr(pipeline_module, "plan_twin_only_v1", lambda *_args: plan)
+    stats = new_stats()
+    baseline = dict(stats)
+
+    class ForbiddenCollector:
+        def allocate(self, _records):
+            pytest.fail("collector allocated for malformed planner envelope")
+
+    with pytest.raises(RuntimeError):
+        pipeline_module._run_steal_twin_r1_dry_run(
+            _r1c_cfg(tmp_path, tmp_path / "debug.jsonl"),
+            "ds0",
+            {int(row["node_id"]): row for row in node_rows},
+            edges,
+            stats,
+            None,
+            {},
+            {},
+            ForbiddenCollector(),
+        )
+    assert stats == baseline
+
+
+@pytest.mark.parametrize(
+    ("dtype_hasobject", "object_content", "content"),
+    [
+        (True, False, b"12345678"),
+        (False, True, (1,)),
+    ],
+)
+def test_steal_twin_r2_array_object_content_must_exactly_match_dtype(
+    tmp_path: Path,
+    dtype_hasobject: bool,
+    object_content: bool,
+    content: object,
+):
+    node_rows, edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    malformed = divisions_module.TwinFrozenArray(
+        _r2_frozen_dtype((), hasobject=dtype_hasobject),
+        (1,),
+        (8,),
+        True,
+        True,
+        content,
+        object_content,
+    )
+    first_edge = plan.edges[0]
+    forged_metadata = divisions_module.TwinFrozenMapping(
+        (*first_edge.metadata.items_snapshot, ("malformed_array", malformed))
+    )
+    forged_plan = replace(
+        plan,
+        edges=(replace(first_edge, metadata=forged_metadata), *plan.edges[1:]),
+    )
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(
+            {int(row["node_id"]): row for row in node_rows}, edges, forged_plan
+        )
+    assert error.value.reason == "plan_candidate"
+
+
+def test_steal_twin_r2_plain_codec_retains_legacy_buffer_shape_without_token_precheck(
+    monkeypatch,
+):
+    class HexOnce:
+        calls = 0
+
+        def hex(self):
+            self.calls += 1
+            if self.calls > 1:
+                raise AssertionError("buffer content encoded more than once")
+            return "6162"
+
+    content = HexOnce()
+    buffer = divisions_module.TwinFrozenBuffer(
+        "memoryview", "B", 1, (2,), (1,), 1, content
+    )
+    value: object = buffer
+    for _ in range(64):
+        value = (value,)
+
+    def legacy_plain(item: object) -> object:
+        if type(item) is tuple:
+            return {
+                "__twin_type__": "tuple",
+                "items": [legacy_plain(child) for child in item],
+            }
+        assert type(item) is divisions_module.TwinFrozenBuffer
+        return {
+            "__twin_type__": "buffer",
+            "kind": item.kind,
+            "format": item.format,
+            "itemsize": item.itemsize,
+            "shape": list(item.shape),
+            "strides": list(item.strides),
+            "readonly": item.readonly,
+            "content_hex": "6162",
+        }
+
+    expected = legacy_plain(value)
+    monkeypatch.setattr(
+        divisions_module,
+        "_twin_frozen_token",
+        lambda _value: pytest.fail("R1c plain codec called the R2 tokenizer"),
+    )
+    actual = pipeline_module._twin_frozen_value_plain(value)
+    assert content.calls == 1
+    assert actual == expected
+    expected_bytes = json.dumps(
+        expected, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
+    actual_bytes = json.dumps(
+        actual, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
+    assert actual_bytes == expected_bytes
+    leaf = actual
+    for _ in range(64):
+        leaf = leaf["items"][0]
+    assert type(leaf["readonly"]) is int and leaf["readonly"] == 1
+
+
+def test_steal_twin_r2_current_endpoint_keys_are_discovered_once_without_retry(
+    tmp_path: Path,
+):
+    class CountingKey(str):
+        __hash__ = str.__hash__
+
+        def __new__(cls, value: str, allowed: int):
+            instance = super().__new__(cls, value)
+            instance.allowed = allowed
+            instance.comparisons = 0
+            return instance
+
+        def __eq__(self, other):
+            self.comparisons += 1
+            if self.comparisons > self.allowed:
+                raise AssertionError("endpoint key comparison retried")
+            return super().__eq__(other)
+
+    node_rows, original_edges = _twin_motif()
+    plan = _twin_plan(tmp_path, node_rows, original_edges)
+    keys: list[CountingKey] = []
+    current: list[dict[str, object]] = []
+    for edge in original_edges:
+        source_key = CountingKey("source_id", 1)
+        target_key = CountingKey("target_id", 2)
+        keys.extend((source_key, target_key))
+        current.append(
+            {
+                source_key: edge["source_id"],
+                target_key: edge["target_id"],
+                **{
+                    key: value
+                    for key, value in edge.items()
+                    if key not in ("source_id", "target_id")
+                },
+            }
+        )
+    result, summary = divisions_module.apply_twin_only_v1_plan(
+        {int(row["node_id"]): row for row in node_rows}, current, plan
+    )
+    assert summary.status == "applied" and len(result) == len(current)
+    assert [key.comparisons for key in keys] == [1, 2] * len(original_edges)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "mapping_identity",
+        "outer_key_identity",
+        "outer_key_order",
+        "row_identity",
+        "row_key_identity",
+        "row_key_order",
+        "binding_identity",
+    ],
+)
+def test_steal_twin_r2_post_proof_rechecks_every_shallow_node_identity(
+    tmp_path: Path, monkeypatch, corruption: str
+):
+    node_rows, edges = _offset_twin_motif(id_offset=1000, frame=0, space_um=0.0)
+    sentinel = object()
+    node_rows[0]["extra"] = sentinel
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+
+    if corruption == "mapping_identity":
+        real_snapshot = divisions_module._snapshot_twin_node_mapping_shallow
+
+        def foreign_mapping_snapshot(nodes):
+            snapshot = real_snapshot(nodes)
+            assert snapshot is not None
+            return dict(nodes), snapshot[1]
+
+        monkeypatch.setattr(
+            divisions_module,
+            "_snapshot_twin_node_mapping_shallow",
+            foreign_mapping_snapshot,
+        )
+    else:
+        real_replacement = divisions_module._twin_replacement_row
+
+        def mutate_nodes(candidate, nodes):
+            result = real_replacement(candidate, nodes)
+            first_key = next(iter(nodes_by_id))
+            first_row = nodes_by_id[first_key]
+            if corruption == "outer_key_identity":
+                entries = list(nodes_by_id.items())
+                nodes_by_id.clear()
+                for key, row in entries:
+                    replacement_key = int(str(key))
+                    assert replacement_key is not key
+                    nodes_by_id[replacement_key] = row
+            elif corruption == "outer_key_order":
+                nodes_by_id[first_key] = nodes_by_id.pop(first_key)
+            elif corruption == "row_identity":
+                nodes_by_id[first_key] = dict(first_row)
+            elif corruption == "row_key_identity":
+                bindings = list(first_row.items())
+                old_key = next(key for key in first_row if key == "extra")
+                replacement_key = bytes("extra", "ascii").decode("ascii")
+                assert replacement_key == old_key and replacement_key is not old_key
+                first_row.clear()
+                for key, value in bindings:
+                    first_row[replacement_key if key is old_key else key] = value
+            elif corruption == "row_key_order":
+                first_row["node_id"] = first_row.pop("node_id")
+            else:
+                first_row["extra"] = object()
+            return result
+
+        monkeypatch.setattr(divisions_module, "_twin_replacement_row", mutate_nodes)
+
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+    assert error.value.reason == "post_invariant"
+
+
+def test_steal_twin_r2_two_candidate_apply_uses_acceptance_append_order_not_donor_positions(
+    tmp_path: Path,
+):
+    first_nodes, first_edges = _offset_twin_motif(id_offset=0, frame=0, space_um=0.0)
+    second_nodes, second_edges = _offset_twin_motif(
+        id_offset=10, frame=10, space_um=30.0
+    )
+    node_rows = [*first_nodes, *second_nodes]
+    # Put candidate two's donor before candidate one's donor.  Acceptance order
+    # remains the planner's complete sort order and is the append order.
+    edges = [
+        second_edges[2],
+        first_edges[0],
+        second_edges[0],
+        first_edges[1],
+        second_edges[1],
+        first_edges[3],
+        second_edges[3],
+        first_edges[4],
+        second_edges[4],
+        first_edges[2],
+    ]
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    assert [(candidate.p, candidate.b) for candidate in plan.accepted_candidates] == [
+        (1, 4),
+        (11, 14),
+    ]
+    survivor_ids = [
+        id(edge)
+        for edge in edges
+        if (edge["source_id"], edge["target_id"]) not in {(2, 4), (12, 14)}
+    ]
+    node_items = tuple(nodes_by_id.items())
+
+    result, summary = divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+
+    assert summary == divisions_module.TwinMutationSummary(
+        "applied", 2, 14, 14, 10, 10, 2, 2, 4, 2
+    )
+    assert [id(row) for row in result[:-2]] == survivor_ids
+    assert [(row["source_id"], row["target_id"]) for row in result[-2:]] == [
+        (1, 4),
+        (11, 14),
+    ]
+    assert [tuple(row.items()) for row in result[-2:]] == [
+        (
+            ("source_id", 1),
+            ("target_id", 4),
+            ("distance_um", plan.accepted_candidates[0].d_pb),
+            ("edge_prob", None),
+        ),
+        (
+            ("source_id", 11),
+            ("target_id", 14),
+            ("distance_um", plan.accepted_candidates[1].d_pb),
+            ("edge_prob", None),
+        ),
+    ]
+    assert all(
+        key is expected_key and row is expected_row
+        for (key, row), (expected_key, expected_row) in zip(
+            nodes_by_id.items(), node_items, strict=True
+        )
+    )
+
+
+def test_steal_twin_r2_donor_matches_every_supported_r1b_metadata_family_and_preserves_input(
+    tmp_path: Path,
+):
+    node_rows, edges = _twin_motif()
+    donor = edges[2]
+    payload_nan = struct.unpack(">d", bytes.fromhex("7ff8000000000001"))[0]
+    dtype = np.dtype("i4", metadata={"unit": "synthetic"})
+    structured = np.array((7, 1.5), dtype=[("count", "i2"), ("score", "f4")])[()]
+    array = np.arange(6, dtype=np.int16).reshape(2, 3)
+    object_array = np.empty(2, dtype=object)
+    object_array[:] = [{"nested": [1, 2]}, (payload_nan, -0.0)]
+    nested_list = [bytearray(b"ab"), memoryview(b"cd"), array, object_array]
+    donor.update(
+        {
+            ("tuple", 1): {3: "integer-key", b"bytes-key": complex(-0.0, float("inf"))},
+            "specials": [payload_nan, -0.0, complex(float("nan"), -0.0)],
+            "bytes": b"raw",
+            "buffers_arrays": nested_list,
+            "frozenset": frozenset((payload_nan, struct.unpack(">d", bytes.fromhex("7ff8000000000001"))[0])),
+            "dtype": dtype,
+            "structured": structured,
+            "numpy_scalar": np.float32(-0.0),
+        }
+    )
+    donor_items = tuple(donor.items())
+    nested_identities = (id(nested_list), id(array), id(object_array), id(object_array[0]))
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+
+    result, summary = divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+
+    assert summary.status == "applied"
+    assert all(row is not donor for row in result)
+    assert all(
+        key is expected_key and value is expected_value
+        for (key, value), (expected_key, expected_value) in zip(
+            donor.items(), donor_items, strict=True
+        )
+    )
+    assert nested_identities == (
+        id(donor["buffers_arrays"]),
+        id(donor["buffers_arrays"][2]),
+        id(donor["buffers_arrays"][3]),
+        id(donor["buffers_arrays"][3][0]),
+    )
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["node_extra", "surviving_edge_endpoint", "surviving_edge_extra"],
+)
+def test_steal_twin_r2_full_candidate_linefit_never_rehashes_arbitrary_extra_key(
+    tmp_path: Path, monkeypatch, location: str
+):
+    class HashOnce(str):
+        def __new__(cls, label: str):
+            instance = super().__new__(cls, label)
+            instance.calls = 0
+            return instance
+
+        def __hash__(self):
+            self.calls += 1
+            if self.calls > 1:
+                raise AssertionError("arbitrary extra key was hashed again")
+            return str.__hash__(self)
+
+    node_rows, edges = _twin_motif()
+    key = HashOnce(
+        "source_id" if location == "surviving_edge_endpoint" else "opaque-extra"
+    )
+    if location == "node_extra":
+        node_rows[0][key] = object()
+    elif location == "surviving_edge_endpoint":
+        source = edges[0].pop("source_id")
+        edges[0] = {key: source, **edges[0]}
+    else:
+        original_short_filter = pipeline_module.filter_short_track_components
+
+        def add_surviving_edge_extra(*args, **kwargs):
+            current_nodes, current_edges = original_short_filter(*args, **kwargs)
+            current_edges[0][key] = object()
+            return current_nodes, current_edges
+
+        monkeypatch.setattr(
+            pipeline_module, "filter_short_track_components", add_surviving_edge_extra
+        )
+    assert key.calls == (0 if location == "surviving_edge_extra" else 1)
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    linefit_calls = 0
+
+    def linefit(_cfg, current_nodes, current_edges, _stats):
+        nonlocal linefit_calls
+        linefit_calls += 1
+        assert current_nodes is nodes_by_id
+        assert current_edges[-1]["source_id"] == 1
+        if location == "surviving_edge_extra":
+            assert any(
+                current_key is key
+                for current_edge in current_edges
+                for current_key, _ in current_edge.items()
+            )
+            assert key.calls == 1
+        return current_nodes
+
+    monkeypatch.setattr(pipeline_module, "linefit_smooth_output_graph", linefit)
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *_args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    _, result_edges, stats = filter_output_graph(
+        _r1c_cfg(tmp_path, BIOHUB_STEAL_TWIN_DRY_RUN="0"),
+        nodes_by_id,
+        edges,
+        dataset="ds0",
+        deepcenter_bundle={},
+    )
+    assert linefit_calls == 1 and stats["steal_twin_mutations_applied"] == 1
+    assert result_edges[-1]["target_id"] == 4
+    assert key.calls == 1
+
+
+def _r2_snapshot_edge(source_id: int, target_id: int, input_position: int):
+    metadata = divisions_module._freeze_twin_edge_row(
+        {"source_id": source_id, "target_id": target_id}, source_id, target_id
+    )
+    return divisions_module.TwinSnapshotEdge(
+        source_id, target_id, input_position, metadata
+    )
+
+
+@pytest.mark.parametrize("fault", ["duplicate", "dangling", "nonconsecutive", "indegree", "outdegree"])
+def test_steal_twin_r2_plan_and_current_graph_fault_taxonomy(
+    tmp_path: Path, fault: str
+):
+    node_rows, edges = _twin_motif()
+    node_rows.append(_twin_node(7, 1, 20.0))
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+
+    additions: list[tuple[int, int]]
+    if fault == "duplicate":
+        additions = [(0, 1)]
+    elif fault == "dangling":
+        additions = [(999, 3)]
+    elif fault == "nonconsecutive":
+        additions = [(0, 3)]
+    elif fault == "indegree":
+        additions = [(2, 3)]
+    else:
+        additions = [(1, 4), (1, 7)]
+
+    forged_edges = [*plan.edges]
+    for pair in additions:
+        forged_edges.append(_r2_snapshot_edge(*pair, len(forged_edges)))
+    forged_plan = replace(
+        plan,
+        edges=tuple(sorted(forged_edges, key=lambda edge: (edge.source_id, edge.target_id, edge.input_position))),
+    )
+    with pytest.raises(divisions_module.TwinMutationError) as plan_error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, forged_plan)
+    assert plan_error.value.reason == "plan_candidate"
+
+    current = [*edges, *({"source_id": source, "target_id": target} for source, target in additions)]
+    with pytest.raises(divisions_module.TwinMutationError) as current_error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, current, plan)
+    assert current_error.value.reason == "current_graph_invalid"
+
+
+def test_steal_twin_r2_zero_acceptance_drift_precedence_and_pipeline_stage_counters(
+    tmp_path: Path,
+):
+    node_rows, edges = _twin_motif()
+    node_rows.append(_twin_node(7, 1, 20.0))
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    def reject(_node):
+        return divisions_module.TwinDeepCenterDecision(
+            False, 0.0, "deepcenter_threshold"
+        )
+    plan = _twin_plan(tmp_path, node_rows, edges, reject)
+    assert not plan.accepted_candidates
+    same, summary = divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+    assert same is edges and summary.status == "no_changes"
+
+    degree_invalid = [
+        *edges,
+        {"source_id": 1, "target_id": 4},
+        {"source_id": 1, "target_id": 7},
+    ]
+    with pytest.raises(divisions_module.TwinMutationError) as degree_error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, degree_invalid, plan)
+    assert degree_error.value.reason == "current_graph_invalid"
+    drift = [dict(edge) for edge in edges]
+    drift[0]["metadata_drift"] = True
+    with pytest.raises(divisions_module.TwinMutationError) as drift_error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, drift, plan)
+    assert drift_error.value.reason == "current_graph_mismatch"
+
+    one_node = {1: _twin_node(1, 0, 0.0)}
+    returned_nodes, returned_edges, stats = filter_output_graph_pre_linefit(
+        _r1c_cfg(tmp_path, BIOHUB_STEAL_TWIN_DRY_RUN="0"), one_node, [], dataset="ds0"
+    )
+    assert returned_nodes is one_node and returned_edges == []
+    assert stats["steal_twin_mutations_applied"] == 0
+    assert stats["steal_twin_pure_nodes"] == stats["steal_twin_final_nodes"] == 1
+    assert stats["steal_twin_pure_edges"] == stats["steal_twin_final_edges"] == 0
+    assert all(
+        stats[key] == 0
+        for key in (
+            "steal_twin_pure_edge_symmetric_difference",
+            "steal_twin_geometry_edges_removed_observed",
+            "steal_twin_prune_nodes_removed_observed",
+            "steal_twin_prune_edges_removed_observed",
+            "steal_twin_short_nodes_removed_observed",
+            "steal_twin_short_edges_removed_observed",
+        )
+    )
+
+
+def _r2_raw_depth_boundary_value(family: str, *, too_deep: bool) -> object:
+    if family in ("tuple", "frozenset", "mapping"):
+        value: object = 1
+        count = 63
+        for _ in range(count + int(too_deep)):
+            if family == "tuple":
+                value = (value,)
+            elif family == "frozenset":
+                value = frozenset((value,))
+            else:
+                value = {"child": value}
+        return value
+    elif family == "dtype_metadata":
+        value = np.dtype("i1", metadata={"child": 1})
+        count = 60
+    elif family == "structured_scalar":
+        value = np.array((1,), dtype=[("child", "i1")])[()]
+        count = 58
+    elif family == "numpy_scalar":
+        value = np.int8(1)
+        count = 59
+    elif family == "array":
+        value = np.array([1], dtype=np.int8)
+        count = 59
+    else:
+        object_array = np.empty(1, dtype=object)
+        object_array[0] = 1
+        value = object_array
+        count = 59
+    for _ in range(count + int(too_deep)):
+        value = (value,)
+    return value
+
+
+@pytest.mark.parametrize(
+    "family",
+    [
+        "tuple",
+        "frozenset",
+        "mapping",
+        "dtype_metadata",
+        "structured_scalar",
+        "numpy_scalar",
+        "array",
+        "object_array",
+    ],
+)
+def test_steal_twin_r2_plan_current_and_retained_codec_share_each_depth_64_65_boundary(
+    tmp_path: Path, family: str
+):
+    node_rows, edges = _twin_motif()
+    depth64 = _r2_raw_depth_boundary_value(family, too_deep=False)
+    edges[0]["depth"] = depth64
+    nodes_by_id = {int(row["node_id"]): row for row in node_rows}
+    plan = _twin_plan(tmp_path, node_rows, edges)
+    assert plan.validation_reason is None
+    result, summary = divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, plan)
+    assert summary.status == "applied" and len(result) == len(edges)
+
+    frozen_edge = next(
+        edge for edge in plan.edges if (edge.source_id, edge.target_id) == (0, 1)
+    )
+    first_plain = pipeline_module._twin_frozen_value_plain(frozen_edge.metadata)
+    assert first_plain == pipeline_module._twin_frozen_value_plain(frozen_edge.metadata)
+    depth65_metadata = divisions_module.TwinFrozenMapping(
+        tuple(
+            (key, (value,) if type(key) is str and key == "depth" else value)
+            for key, value in frozen_edge.metadata.items_snapshot
+        )
+    )
+    forged_edges = tuple(
+        replace(edge, metadata=depth65_metadata) if edge is frozen_edge else edge
+        for edge in plan.edges
+    )
+    forged_plan = replace(plan, edges=forged_edges)
+    with pytest.raises(divisions_module.TwinMutationError) as plan_error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, edges, forged_plan)
+    assert plan_error.value.reason == "plan_candidate"
+    with pytest.raises(TypeError, match="maximum depth"):
+        pipeline_module._twin_frozen_value_plain(depth65_metadata)
+
+    current65 = [dict(edge) for edge in edges]
+    current65[0]["depth"] = _r2_raw_depth_boundary_value(family, too_deep=True)
+    with pytest.raises(divisions_module.TwinMutationError) as current_error:
+        divisions_module.apply_twin_only_v1_plan(nodes_by_id, current65, plan)
+    assert current_error.value.reason == "current_graph_invalid"
+    with pytest.raises(TypeError, match="maximum depth"):
+        divisions_module._freeze_twin_edge_row(current65[0], 0, 1)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "returned_mapping",
+        "node_mapping_size",
+        "node_order",
+        "node_row",
+        "node_key_identity",
+        "node_key_order",
+        "node_binding",
+        "invalid_post_coordinate_wrong_type",
+        "invalid_post_coordinate_nan",
+        "invalid_post_coordinate_inf",
+        "edge_list_size",
+        "edge_order",
+        "edge_row",
+        "edge_key_identity",
+        "edge_key_order",
+        "edge_binding",
+    ],
+)
+def test_steal_twin_r2_linefit_rejects_complete_shallow_corruption_matrix_before_counter(
+    tmp_path: Path, monkeypatch, corruption: str
+):
+    node_extra_key = "node_preserved_binding_long_name"
+    edge_extra_key = "edge_preserved_binding_long_name"
+    nodes = {
+        1: {
+            "node_id": 1,
+            "t": 0,
+            "z": 0.0,
+            "y": 0.0,
+            "x": 0.0,
+            node_extra_key: object(),
+        },
+        2: {"node_id": 2, "t": 1, "z": 1.0, "y": 0.0, "x": 0.0},
+        3: {"node_id": 3, "t": 2, "z": 2.0, "y": 0.0, "x": 0.0},
+    }
+    edges = [
+        {"source_id": 1, "target_id": 2, edge_extra_key: object()},
+        {"source_id": 2, "target_id": 3},
+    ]
+    stats = new_stats()
+
+    def corrupt(_cfg, current_nodes, current_edges, _stats):
+        if corruption == "returned_mapping":
+            return dict(current_nodes)
+        if corruption == "node_mapping_size":
+            current_nodes[4] = {
+                "node_id": 4,
+                "t": 3,
+                "z": 3.0,
+                "y": 0.0,
+                "x": 0.0,
+            }
+        elif corruption == "node_order":
+            first = current_nodes.pop(1)
+            current_nodes[1] = first
+        elif corruption == "node_row":
+            current_nodes[1] = dict(current_nodes[1])
+        elif corruption == "node_key_identity":
+            row = current_nodes[1]
+            items = tuple(row.items())
+            replacement = node_extra_key.encode().decode()
+            assert replacement == node_extra_key and replacement is not node_extra_key
+            row.clear()
+            row.update(
+                (replacement if key is node_extra_key else key, value)
+                for key, value in items
+            )
+        elif corruption == "node_key_order":
+            row = current_nodes[1]
+            row["node_id"] = row.pop("node_id")
+        elif corruption == "node_binding":
+            current_nodes[1][node_extra_key] = object()
+        elif corruption == "invalid_post_coordinate_wrong_type":
+            current_nodes[1]["z"] = np.float64(1.0)
+        elif corruption == "invalid_post_coordinate_nan":
+            current_nodes[1]["z"] = float("nan")
+        elif corruption == "invalid_post_coordinate_inf":
+            current_nodes[1]["z"] = float("inf")
+        elif corruption == "edge_list_size":
+            current_edges.append({"source_id": 1, "target_id": 3})
+        elif corruption == "edge_order":
+            current_edges.reverse()
+        elif corruption == "edge_row":
+            current_edges[0] = dict(current_edges[0])
+        elif corruption == "edge_key_identity":
+            row = current_edges[0]
+            items = tuple(row.items())
+            replacement = edge_extra_key.encode().decode()
+            assert replacement == edge_extra_key and replacement is not edge_extra_key
+            row.clear()
+            row.update(
+                (replacement if key is edge_extra_key else key, value)
+                for key, value in items
+            )
+        elif corruption == "edge_key_order":
+            row = current_edges[0]
+            row["source_id"] = row.pop("source_id")
+        else:
+            current_edges[0][edge_extra_key] = object()
+        return current_nodes
+
+    monkeypatch.setattr(pipeline_module, "linefit_smooth_output_graph", corrupt)
+    with pytest.raises(RuntimeError):
+        pipeline_module._linefit_with_twin_r2_guard(
+            _r1c_cfg(tmp_path), nodes, edges, stats, enabled=True
+        )
+    assert stats["steal_twin_linefit_coordinate_changed_nodes_observed"] == 0
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected"),
+    [
+        ("geometry", (0, 1)),
+        ("prune", (1, 0)),
+        ("short", (1, 1)),
+    ],
+)
+def test_steal_twin_r2_downstream_observations_are_independent_immediate_deltas(
+    tmp_path: Path, monkeypatch, stage: str, expected: tuple[int, int]
+):
+    overrides = {"BIOHUB_STEAL_TWIN_DRY_RUN": "0"}
+    if stage == "geometry":
+        overrides.update(
+            BIOHUB_OUTPUT_DIVISION_GEOMETRY_FILTER="1",
+            BIOHUB_DIV_PARENT_MAX_UM="5.0",
+        )
+    elif stage == "prune":
+        overrides["BIOHUB_OUTPUT_PRUNE_ISOLATED"] = "1"
+    else:
+        def short(_cfg, current_nodes, current_edges, _stats):
+            return (
+                {key: row for key, row in current_nodes.items() if key != 2},
+                list(current_edges[:-1]),
+            )
+
+        monkeypatch.setattr(pipeline_module, "filter_short_track_components", short)
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *_args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    node_rows, edges = _twin_motif()
+    _, _, stats = filter_output_graph_pre_linefit(
+        _r1c_cfg(tmp_path, **overrides),
+        {int(row["node_id"]): row for row in node_rows},
+        edges,
+        dataset="ds0",
+        deepcenter_bundle={},
+    )
+    observed = {
+        "geometry": (
+            0,
+            stats["steal_twin_geometry_edges_removed_observed"],
+        ),
+        "prune": (
+            stats["steal_twin_prune_nodes_removed_observed"],
+            stats["steal_twin_prune_edges_removed_observed"],
+        ),
+        "short": (
+            stats["steal_twin_short_nodes_removed_observed"],
+            stats["steal_twin_short_edges_removed_observed"],
+        ),
+    }
+    assert observed[stage] == expected
+    assert all(value == (0, 0) for name, value in observed.items() if name != stage)
+
+
+@pytest.mark.parametrize(
+    "stage", ["division geometry", "isolated prune", "short-track filter"]
+)
+def test_steal_twin_r2_each_downstream_stage_rejects_topology_increase(stage: str):
+    with pytest.raises(RuntimeError, match="increased twin graph topology"):
+        pipeline_module._twin_observed_removal(3, 4, stage)
+
+
+def test_steal_twin_r2_short_topology_increase_aborts_before_observation_assignment(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *_args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+
+    def increase(_cfg, current_nodes, current_edges, _stats):
+        grown_nodes = dict(current_nodes)
+        grown_nodes[99] = _twin_node(99, 3, 99.0)
+        return grown_nodes, [*current_edges, {"source_id": 6, "target_id": 99}]
+
+    monkeypatch.setattr(pipeline_module, "filter_short_track_components", increase)
+    node_rows, edges = _twin_motif()
+    with pytest.raises(RuntimeError, match="short-track filter increased"):
+        filter_output_graph_pre_linefit(
+            _r1c_cfg(tmp_path, BIOHUB_STEAL_TWIN_DRY_RUN="0"),
+            {int(row["node_id"]): row for row in node_rows},
+            edges,
+            dataset="ds0",
+            deepcenter_bundle={},
+        )
+
+
+def _r2_recursive_identity_snapshot(value: object, active: set[int] | None = None):
+    """Test-only identity/order snapshot for the supported in-memory fixtures."""
+    active = set() if active is None else active
+    value_id = id(value)
+    if value_id in active:
+        return ("cycle", value_id)
+    if type(value) in (dict, list, tuple) or hasattr(type(value), "__dataclass_fields__"):
+        active.add(value_id)
+        try:
+            if type(value) is dict:
+                return (
+                    "dict",
+                    value_id,
+                    tuple(
+                        (
+                            id(key),
+                            _r2_recursive_identity_snapshot(key, active),
+                            id(item),
+                            _r2_recursive_identity_snapshot(item, active),
+                        )
+                        for key, item in value.items()
+                    ),
+                )
+            if type(value) in (list, tuple):
+                return (
+                    type(value).__name__,
+                    value_id,
+                    tuple(_r2_recursive_identity_snapshot(item, active) for item in value),
+                )
+            return (
+                type(value).__name__,
+                value_id,
+                tuple(
+                    (
+                        name,
+                        id(getattr(value, name)),
+                        _r2_recursive_identity_snapshot(getattr(value, name), active),
+                    )
+                    for name in type(value).__dataclass_fields__
+                    if hasattr(value, name)
+                ),
+            )
+        finally:
+            active.remove(value_id)
+    if isinstance(value, np.ndarray):
+        if value.dtype.hasobject:
+            content = tuple(
+                _r2_recursive_identity_snapshot(value[index], active)
+                for index in np.ndindex(value.shape)
+            )
+        else:
+            content = value.tobytes()
+        return ("ndarray", value_id, value.dtype.str, value.shape, value.strides, content)
+    if isinstance(value, (bytearray, memoryview)):
+        return (type(value).__name__, value_id, bytes(value))
+    return (type(value).__name__, value_id)
+
+
+@pytest.mark.parametrize(
+    "entrypoint", ["direct_prelinefit", "direct_full", "run", "checkpoint"]
+)
+def test_steal_twin_r2_mutator_failure_agrees_across_entrypoints_and_prevents_publication(
+    tmp_path: Path, monkeypatch, entrypoint: str
+):
+    cfg = _r1c_cfg(tmp_path, BIOHUB_STEAL_TWIN_DRY_RUN="0")
+    node_rows, edges = _twin_motif()
+    calls = 0
+
+    def fail_mutator(*_args):
+        nonlocal calls
+        calls += 1
+        raise divisions_module.TwinMutationError("post_invariant")
+
+    monkeypatch.setattr(pipeline_module, "apply_twin_only_v1_plan", fail_mutator)
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *_args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "linefit_smooth_output_graph",
+        lambda *_args: pytest.fail("linefit called after mutator failure"),
+    )
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "ds0.geff").mkdir()
+    monkeypatch.setattr(
+        pipeline_module,
+        "_load_geff_as_dicts",
+        lambda _path: (
+            {int(row["node_id"]): dict(row) for row in node_rows},
+            [dict(edge) for edge in edges],
+        ),
+    )
+    monkeypatch.setattr(pipeline_module, "load_deepcenter_veto_detector", lambda _cfg: {})
+
+    with pytest.raises(divisions_module.TwinMutationError) as error:
+        if entrypoint == "direct_prelinefit":
+            filter_output_graph_pre_linefit(
+                cfg,
+                {int(row["node_id"]): row for row in node_rows},
+                edges,
+                dataset="ds0",
+                deepcenter_bundle={},
+            )
+        elif entrypoint == "direct_full":
+            filter_output_graph(
+                cfg,
+                {int(row["node_id"]): row for row in node_rows},
+                edges,
+                dataset="ds0",
+                deepcenter_bundle={},
+            )
+        elif entrypoint == "run":
+            pipeline_module.run_postproc(bundle, tmp_path / "submission.csv", cfg)
+        else:
+            pipeline_module.save_prelinefit_checkpoint(
+                bundle, tmp_path / "checkpoint", cfg
+            )
+    assert error.value.reason == "post_invariant" and calls == 1
+    assert not (tmp_path / "run_stats.csv").exists()
+    submission = tmp_path / "submission.csv"
+    if submission.exists():
+        assert len(submission.read_text().splitlines()) <= 1
+    checkpoint = tmp_path / "checkpoint"
+    if checkpoint.exists():
+        assert not list(checkpoint.glob("*.pkl"))
+        assert not (checkpoint / pipeline_module.CHECKPOINT_MANIFEST_NAME).exists()
+
+
+@pytest.mark.parametrize("entrypoint", ["run", "checkpoint"])
+def test_steal_twin_r2_collector_failure_precedes_mutation_and_current_dataset_publication(
+    tmp_path: Path, monkeypatch, entrypoint: str
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "ds0.geff").mkdir()
+    node_rows, edges = _twin_motif()
+    debug = tmp_path / "debug.jsonl"
+    cfg = _r1c_cfg(
+        tmp_path,
+        debug,
+        BIOHUB_STEAL_TWIN_DRY_RUN="0",
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_load_geff_as_dicts",
+        lambda _path: (
+            {int(row["node_id"]): dict(row) for row in node_rows},
+            [dict(edge) for edge in edges],
+        ),
+    )
+    monkeypatch.setattr(pipeline_module, "load_deepcenter_veto_detector", lambda _cfg: {})
+    monkeypatch.setattr(
+        pipeline_module,
+        "score_twin_deepcenter",
+        lambda *_args: divisions_module.TwinDeepCenterDecision(True, 0.2, None),
+    )
+    monkeypatch.setattr(
+        pipeline_module._TwinDebugCollector,
+        "allocate",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("collector allocation")),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "apply_twin_only_v1_plan",
+        lambda *_args: pytest.fail("mutation ran after collector failure"),
+    )
+
+    with pytest.raises(RuntimeError, match="collector allocation"):
+        if entrypoint == "run":
+            pipeline_module.run_postproc(bundle, tmp_path / "submission.csv", cfg)
+        else:
+            pipeline_module.save_prelinefit_checkpoint(
+                bundle, tmp_path / "checkpoint", cfg
+            )
+    assert not debug.exists() and not (tmp_path / "run_stats.csv").exists()
+    submission = tmp_path / "submission.csv"
+    if submission.exists():
+        assert len(submission.read_text().splitlines()) <= 1
+    checkpoint = tmp_path / "checkpoint"
+    if checkpoint.exists():
+        assert not list(checkpoint.glob("*.pkl"))
+        assert not (checkpoint / pipeline_module.CHECKPOINT_MANIFEST_NAME).exists()
