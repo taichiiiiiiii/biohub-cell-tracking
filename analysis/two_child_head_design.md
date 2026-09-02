@@ -573,10 +573,10 @@ selectorは最小validation weighted BCE（earliest tie）のまま、bundle adv
 次へ固定する。
 
 ```text
-pooled untouched weighted_BCE(candidate) / weighted_BCE(comparator) <= 0.98
+pooled bce_ratio_gate_v1(candidate, comparator, 0.98, strict_advancement) = PASS
 video-macro AP delta                                             >= 0.000
-44b6 weighted-BCE ratio                                         <= 1.02
-6bba weighted-BCE ratio                                         <= 1.02
+44b6 bce_ratio_gate_v1(candidate, comparator, 1.02, noninferiority) = PASS
+6bba bce_ratio_gate_v1(candidate, comparator, 1.02, noninferiority) = PASS
 44b6 video-macro AP delta                                       >= -0.02
 6bba video-macro AP delta                                       >= -0.02
 calibrated Brier delta                                           <= 0.000
@@ -586,6 +586,141 @@ weighted BCEはtemperature適用前raw logitsのuntouched outer predictionから
 primary advancementとする。AP/Brierとlineage条件を直交non-inferiorityとする。train loss、
 inner selector、outer bundle comparatorのfieldを共有しない。legacy stackでは同じ値をdiagnosticとして
 出してもadvancement PASSを名乗れない。
+
+BCE ratio判定は除算値ではなく `bce_ratio_gate_v1(candidate_bce,
+comparator_bce, rho, mode)` で行う。入力BCEはsection 4.1の同一ID/weight/literal denominatorから
+CPU float64で再計算したfinite nonnegative値だけとし、分母weight `>0`を別に証明する。
+negative、nonfinite、分母0、ID/weight mismatchはmetric failureでありratioを返さない。
+per-example BCEはreference CPU float64の
+`max(logit,0)-logit*y+log1p(exp(-abs(logit)))` で計算し、`example_id` 昇順の
+Python `math.fsum` でweighted numerator/denominatorを集約する。
+
+```text
+if comparator_bce > 0:
+    boundary := float64(rho) * comparator_bce
+    require finite(boundary), else metric failure
+    pass := candidate_bce <= boundary
+    reported_ratio := candidate_bce / comparator_bce       # reporting only
+elif comparator_bce == 0 and mode == "strict_advancement":
+    pass := false
+    reported_ratio := null
+    reason := "ZERO_COMPARATOR_NO_STRICT_ADVANCEMENT"
+elif comparator_bce == 0 and mode == "noninferiority":
+    pass := (candidate_bce == 0)
+    reported_ratio := null
+    reason := "EQUAL_PERFECT_ZERO" if pass else "WORSE_THAN_PERFECT_ZERO"
+```
+
+pooled `rho=0.98` は `mode="strict_advancement"`、lineage別 `rho=1.02` は
+`mode="noninferiority"` とする。従ってcomparator BCEが0ならcandidate BCEも0であっても
+pooled improvementは主張できずG3はNO-GO。lineage noninferiorityだけはexact 0/0の同率を
+PASSにできる。`-0.0`はserialization前に`+0.0`へcanonicalizeし、「0」はweighted
+numeratorも0であることをreceiptで要求する。best validation lossが0でもcheckpoint選択は
+`training_loss_gate.md` どおり有効だが、それがこのOOF strict-advancement ruleを緩和しない。
+Brierはratioではなくsection 4.1の同一分母で `candidate-comparator<=0.0` を直接判定する。
+両Brier 0はnoninferiority PASSだが、pooled BCEのzero-comparator NO-GOを打ち消さない。
+
+`bce_ratio_gate_v1` は `rho` のfloat64 hex、candidate/comparator numerator/denominator/BCE hex、
+mode、branch、boolean、reasonをreceiptに保存する。必須boundary testは
+`b=0,c=0` の両mode、`b=0,c>0`、`b>0,c=rho*b`のinclusive PASS、その値の
+`nextafter(rho*b,+inf)` FAIL、negative/nonfinite/weight-denominator-0 FAIL、zero branchでdivisionが
+実行されないこと、`rho*b` overflowがmetric failureになることである。
+branch/rho/mode/reference-BCE/aggregation/boundary literalは `bce_ratio_spec_v1.json` として学習前に
+freezeし、実行後の `bce_ratio_gate_receipt_v1.json` がそのSHAとsealed OOF対のSHAをbindする。
+
+### 7.1 Frozen G3 AP / confidence-bound metric
+
+G3のAPとprecisionは `classification_metric_spec_v1.json` とそのSHAをCV root manifestに
+学習前からpinし、全outer prediction seal後に一回だけ実行する。specは少なくとも
+split/label/example-weight/deployment-universe SHA、expected OOF schema、以下のalgorithm literal、
+RNG、実装source SHA、Python/NumPy/SciPy versionを持つ。candidate/comparator OOFの実SHAは
+全outer seal後にreceiptが対でbindする。このmetricはepoch、temperature、threshold、
+model、splitの選択へフィードバックしない。
+
+AP入力は各videoがouter-valだったときのuntouched rowのうち、
+`label_recall_envelope_v1` の `direct_fork_positive` または `certified_negative` だけである。
+ignoreは分母から除く。scoreはtemperature適用前 `raw_logit_float64`、weightはsection 4.1の
+literal `w_eval_i`をcandidate/comparatorで共有する。両armのexample ID、label、weight、video/fold/
+lineageが完全一致しなければfailする。
+以下のweighted sum/平均はすべてPython `math.fsum`を使う。exampleは `example_id` 昇順、
+videoは `(dataset,video_id)` 昇順、bootstrapはindex matrixの抽出順の後にunit内video ID昇順とし、
+集約順までmetric specに固定する。
+
+各video/armでscoreを数値降順、serialized rowをtie内 `example_id` 昇順で並べる。
+numeric equalなscore（`-0.0` は `+0.0`へcanonicalize）は一つのtie groupとし、TP/FPを
+group全体分加算してからprecision/recallを更新する。これによりID tie orderをAPに
+影響させない。`W_pos=sum(w_eval_i*y_i)`、`W_neg=sum(w_eval_i*(1-y_i))`、
+降順のdistinct score group `j` 通過後を `TP_j,FP_j`とし、次のnon-interpolated
+weighted step APだけを使う。trapezoid、11-point、precision-envelope補間は使わない。
+
+```text
+R_0 = 0
+R_j = TP_j / W_pos
+P_j = TP_j / (TP_j + FP_j)
+AP_video = sum_j ((R_j - R_(j-1)) * P_j)
+```
+
+`W_pos==0` または `W_neg==0` のvideoは `ONE_CLASS_UNDEFINED`とし、両armのAP/macro/
+bootstrapから同じように除外する。除外video/reasonはreceiptに全件保存する。
+eligible video set `V_AP`は両arm共通で、`|V_AP|==0`、いずれかのlineageのeligible video `<2`、
+またはarm間のeligible set不一致はG3 metric failure。video-macro APは
+`sum_{v in V_AP} AP_v / |V_AP|`の非加重video平均、paired mean deltaは
+`sum_v(AP_candidate_v-AP_comparator_v)/|V_AP|`。lineage別AP deltaは対象lineageのeligible
+videoだけを同じ非加重分母で平均する。
+
+AP deltaの95% one-sided lower confidence boundはpaired stratified grouped-video bootstrapで固定する。
+sampling unitは `outer_split_v1` のatomic recording-family/stem groupで、family metadataがない場合だけ
+一group=一videoである。これより細いvideo/tuple/fork/frameを独立resampleしない。各unitの
+stratumはgroup内videoのlineage setで `44b6_only / 6bba_only / mixed` のどれかとする。
+一unitが複数outer foldに現れる、またはOOF以外のrowを含む場合はleakageとしてfailする。
+各replicateはstratumごとにeligible videoを1本以上持つ元unit数と同数のunitをreplacementありで
+抽出し、抽出unitが持つeligible videoすべてのpaired AP deltaの非加重video平均を取る。
+重複抽出unit内のvideoはunitととも重複して数える。非空stratumのunit数 `<2` は
+bootstrap gate failureである。
+RNGはNumPy `PCG64DXSM`、AP用literal seed `2026090201`、replicates `B=10000`。全bootstrap
+group-index matrixとSHAをreceiptに保存する。lower boundはbootstrap deltaを数値昇順に並べた
+`sorted_delta[ceil(0.05*B)-1] = sorted_delta[499]`（0-based）、すなわちNumPy quantile
+`q=0.05, method="inverted_cdf"` とする。BCa、basic、normal近似、中間補間は使わない。
+乱数抽出は `Generator(PCG64DXSM(seed))` を1個作り、replicate-major、stratum順
+`44b6_only,6bba_only,mixed` で、各stratumのunit ID昇順listに対し
+`rng.integers(0,n,size=n,dtype=np.uint64,endpoint=False)` を一回呼ぶ。非空stratumだけ呼び、
+呼出し順とdtypeをAP/precision共通にする。
+
+selected-threshold precisionはexact `deployment_universe_v1` で各outer foldの `T_k,tau_k`を使った
+`ScoredTwinPlanV1.accepted_records` のうち、direct positive/certified negativeのみを対象とする。
+ignoreはsuccessにもfailureにも数えない。各videoの
+`S_v=sum(w_eval_i*y_i)`、`F_v=sum(w_eval_i*(1-y_i))`、point precisionは
+`sum_v S_v / sum_v(S_v+F_v)`。許容されたaccepted record全体で分母が0なら
+`NO_CERTIFIED_ACCEPTED_RECORDS` としてG3 FAIL。
+
+precisionの95% one-sided lower confidence boundは、全remaining outer-val videoを `V_precision`とし、
+AP one-class除外に関わらず全件を対応するouter-split atomic groupに入れる。
+NumPy `PCG64DXSM`、precision用literal seed `2026090202`、`B=10000`で、上記3stratum内に
+元unit数と同数をreplacementありで抽出した別のgroup-index matrixを作りSHAを保存する。
+ここでも非空stratumのunit数 `<2` はbootstrap gate failureとする。
+各replicateで抽出unit内videoの
+`sum S_v / sum(S_v+F_v)` を再計算し、
+replicate分母0はprecision `0.0` とする（dropしない）。lower boundは同じ
+`sorted_precision[499]` / `method="inverted_cdf"` とする。これがG3の唯一の
+precision lower-bound methodで、tuple-level binomial/Wilson/Clopper--Pearsonはgroup/video内相関を無視するため
+使わない。
+
+G3の「一動画依存でない」感度は、`V_AP` の各video `v` を一度だけ除き、
+残るvideoでpaired mean AP deltaと両lineage AP deltaを同じ `math.fsum`/分母で再計算する
+leave-one-video-out tableとする。どの`v`でもpaired mean `>=0.05`、存在する各lineage
+delta `>=0.0` を要求し、除外後に全体またはいずれかのlineage分母が0ならFAIL。
+bootstrapをleave-one-outごとに再fitせず、このpoint sensitivity tableだけを既存の一動画依存gateに使う。
+
+`g3_metric_receipt_v1.json` はmetric-spec SHA、candidate/comparator sealed OOF SHA、
+eligible/excluded video、videoごとの
+`W_pos,W_neg,AP_candidate,AP_comparator,delta,S_v,F_v`、macro/lineage分母、
+AP/precision別のseed/index-matrix/replicate配列SHA、両lower bound、全gate booleanを
+float64 hex付きで保存し、leave-one-video-out tableとそのSHAもbindする。
+boundary比較はround表示値でなく内部finite float64に対し、section 7のbundle
+video-macro AP delta `>=0.0`、G3 paired mean `>=0.05`、AP lower bound `>0.0`（strict）、
+G3の各lineage AP delta `>=0.0`、precision lower bound `>=0.80` をそれぞれ文字通り適用する。
+exact boundary、その `nextafter(-inf/+inf)`、
+score tie、one-class、empty accepted、bootstrap replicate分母0のunit testを必須とする。
 
 ## 8. Nested OOF、calibration、threshold lock
 
@@ -641,7 +776,7 @@ gt_fork_group,in_deployment_universe,planner_record_id,E_k,T_k,tau_k,upstream_ch
 - pooled と video-macro PR-AUC / ROC-AUC、fold/lineage 別値;
 - weighted BCE、Brier、adaptive ECE (bin merge rule を事前固定)、reliability counts;
 - GT fork 単位 recall（同じ fork の重複 tuple を一件として扱う）;
-- precision-recall と false-positive stratum、動画対応 bootstrap CI;
+- precision-recall と false-positive stratum、section 7.1のfrozen grouped-video-bootstrap receipt;
 - calibrated probability の fold drift と temperature;
 - exact deployment universeだけを production graphへ適用した per-video official raw counts と aggregate。
 
@@ -788,10 +923,11 @@ local combined metricからpublic scoreへの移送性も仮定しない。す�
 ### G3 OOF discrimination / calibration
 
 - section 7のweighted-BCE comparator margin、Brier、両lineage non-inferiorityを全て満たす;
-- geometry-only symmetric MLP に対し video-macro AP の paired mean delta `>=+0.05` かつ
-  video bootstrap 95% lower bound `>0`;
+- geometry-only symmetric MLP に対しsection 7.1のweighted step/video-macro APのpaired mean delta
+  `>=+0.05` かつstratified paired grouped-video bootstrap 95% lower bound `>0`;
 - calibrated weighted BCE と Brier が uncalibrated より非劣化、adaptive ECE `<=0.05`;
-- selected threshold で certified OOF precision の one-sided 95% lower bound `>=0.80`、
+- selected thresholdのaccepted deployment recordsでsection 7.1のweighted certified OOF precisionの
+  one-sided stratified grouped-video-bootstrap 95% lower bound `>=0.80`、
   GT-fork recall `>=0.25`、true positive GT forks `>=20`;
 - 両 lineage の AP delta `>=0`。一動画だけを除くと成立しない場合は NO-GO。
 
@@ -1018,6 +1154,9 @@ root CV manifest は最低限次を pin する。
 - outer/inner fold assignment、seed (`20260902` rootからrun/fold/epochへhash派生);
 - `split_inputs_v1`、literal example-weight/denominator table、matching receipt、minimal oracle receiptと
   sealed-detail opaque commitment;
+- `classification_metric_spec_v1`、`g3_metric_receipt_v1`、`bce_ratio_spec_v1`、
+  `bce_ratio_gate_receipt_v1`、bootstrap index/
+  replicate-array SHA;
 - model/loss/optimizer/scheduler、PyTorch/CUDA/cuDNN/NumPy、GPU、determinism flags;
 - 全 command、allowlisted env、network-disabled receipt、open-file receipt;
 - fold history/checkpoint、OOF rows/calibrator/threshold table、official rows、final refit参照;
@@ -1138,7 +1277,8 @@ radius/K/cap変更、broader orphan/steal mutationはv1 ablationに入れない�
 11. upstream-independent GT-fork census/split builderとfrozen `outer_split_v1.json`;
 12. exact `ScoredTwinPlanV1` resolver/validator/mutator APIと両counterfactual edit function;
 13. pre-training cap-compatible official oracle、sealed detail publisher、strict minimal receipt parser;
-14. CPU/RAM/I/O/process-tree measurementとatomic publication harness。
+14. CPU/RAM/I/O/process-tree measurementとatomic publication harness;
+15. frozen G3 metric/BCE-ratio implementation、receipt writer、boundary/zero/tie/bootstrap tests。
 
 一つでも欠ければ feature抽出・学習・公式metric読出しを開始しない。
 
@@ -1242,7 +1382,8 @@ uv run python scripts/train_two_child_head.py \
 # Code-quality gates; official remains unmodified
 uv run --frozen --extra dev pytest -q tests/test_two_child_head.py \
   tests/test_two_child_counterfactuals.py tests/test_scored_twin_plan.py \
-  tests/test_training_history.py tests/test_public_postproc.py
+  tests/test_two_child_metrics.py tests/test_training_history.py \
+  tests/test_public_postproc.py
 uv run --frozen --extra dev ruff check src scripts tests
 git diff --check
 git status --short
