@@ -386,8 +386,22 @@ v5（960 hardnegs 追加・n=4,418）: fold AUC [0.859, 0.819, 0.804, 0.808]（h
 - 検出閾値レバーはクローズ。上流で残るのは**モデル側のみ**: (a) 融合重み掃引（bidir 0.2・secondary 0.15/0.475、作者調整済で期待値小）、(b) **第 3 シード学習→3-way アンサンブル**（dual-seed の LB +0.011 が実証する唯一の再現済みレバー）、(c) 検出 TTA 拡張。
 
 ### E16 調査（2026-08-25 03:00）— チェックポイント換装は「実質パーク」
-1. **事実**: 現行 primary = support pack **v10 = 400ep**（sha 12f6881e 完全一致で確認）・secondary = seed314159 **v2 = ep400**。市中の `350ep snapshot`（shehailrs, v9 由来）と `ep255 pinned`（phuongncn, 07-23 作成= ep400 公開**後**）は**他者が意図的にピンした巻き戻し版**＝「400ep は過学習で 350/255 が良い」派の存在証拠。ただし効果量の公開実績なし（najunghwan の 350ep 系譜 LB 0.915-6 は別部品込みで分離不能・我々の 0.919 より下）。
-2. **★計器の限界を確定**: 学習 split は `train:[]`＝**eval-12/24/36 も公開 test 4 本も全て学習データ内**。∴ **ローカル評価はチェックポイント比較に使えない**（長期学習ほど記憶で有利に見える）。ローカルが有効なのは「同一重みでのパイプライン A/B」のみ（E9〜E15 は全て無傷）。チェックポイント選抜の計器は **LB プローブのみ**。
+1. **事実（2026-09-05 recovery で訂正）**: 当時 `400ep` と呼んだ
+   現行 primary `12f6881e...` は実際には `edge_predictor_best.pth` で、
+   best epoch は不明。secondary `9bac2fa0...` も `edge_predictor_best.pth` で、
+   exact 400-row history 上の best epoch は **381**。epoch 400 は別物の
+   secondary `checkpoint_last.pth` (`ee6c1237...`) で deployment されていない。
+   市中の `350ep snapshot`（shehailrs, v9 由来）と `ep255 pinned`
+   （phuongncn, 07-23 作成= ep400 公開**後**）が別版を pin したことは
+   歴史事実として残すが、それだけで `12f...`/`9bac...` の epoch や
+   過学習を推定しない。効果量の公開実績もない（najunghwan の
+   350ep 系譜 LB 0.915-6 は別部品込みで分離不能・我々の 0.919 より下）。
+2. **★計器の限界を確定（2026-09-05 根拠更新）**: secondary の実 split は
+   train 199 本に validation/test 40 本が全て含まれ、その 40 本は `44b6`
+   のみ。primary は complete split/history が未回収で exposure を除外できない。
+   ∴ **ローカル評価はチェックポイント間の汎化比較に使えない**。
+   「同一重みでのパイプライン A/B」の差分計器としての E9〜E15 の結論は
+   この訂正で変わらないが、training/generalization PASS には読み替えない。
 3. **判断**: 巻き戻し換装は情報量の薄い賭け（±0.005 程度・根拠は他者のピン行動のみ）。**パーク**し、LB 枠は E17 系の検証を優先。将来余枠で ep255 secondary 1 本だけ試す選択肢は残す。
 
 ### E17 事前登録: 公開 22 特徴 association ranker の base2 移植（2026-08-25 03:05・調査開始前）
@@ -409,55 +423,101 @@ v5（960 hardnegs 追加・n=4,418）: fold AUC [0.859, 0.819, 0.804, 0.808]（h
 - 探索系実験はここで打ち切り。以後は学習系（E19 feasibility →）へ。
 
 ### E19 事前登録: 学習の実現可能性プローブ（2026-08-25 06:20・実行中）
-1. **目的**: 探索系全滅（E9〜E18）を受け、残る 2 路線（第 3 シード学習・division-aware fine-tune）の**コスト計測**。`train_unet_transformer.py` を full-train splits（195 本）+ 400ep warm start（missing=0 を assert・発火確認込み）で **150 iter だけ**回し、sec/iter・warmup コスト・warm start の loss 連続性を測る。
+1. **目的（checkpoint 呼称を訂正）**: 探索系全滅（E9〜E18）を受け、残る 2 路線
+   （第 3 シード学習・division-aware fine-tune）の**コスト計測**。
+   `train_unet_transformer.py` を full-train splits（199 本）+ legacy primary best
+   (`12f...`, best epoch 不明) warm start（missing=0 を assert・発火確認込み）で
+   **150 iter だけ**回し、sec/iter・warmup コスト・probe 中の loss を測る。
 2. **読み出し**: sec/iter → 1 epoch の GPU 時間 → fine-tune +20〜50ep / スクラッチ 400ep の週次クォータ（T4 30h/週）内実現可能性。判定バーなし（計測）。
 3. kernel = `taichiiiii/biohub-train-probe` v1（T4×2・pack wheels オフライン install）。
 
 ### E19 判定（2026-08-25 09:55・読み出し完了）
 - v1: batch16 OOM（T4 14.5GB）→ v2: 自作パッチの構文事故（コメントがカンマを飲んだ・ast.parse 省略が原因）→ v3 成功。
-- **実測**: **3.3 s/iter**（batch 8・T4×2 DataParallel・UNet 分割）。warm start（400ep）は missing=0 で完全被覆・**loss 連続性完璧**（edge 0.0001 / det 0.0022 / acc 1.000 = 収束状態から再開。acc 1.0 は学習データ記憶の傍証でもある）。データパイプライン warmup+2 本 eval 込みで 150 iter = 11 分。
+- **実測（loss 解釈を訂正）**: **3.3 s/iter**（batch 8・T4×2
+  DataParallel・UNet 分割）。legacy primary best warm start は missing=0 で
+  key coverage を確認し、probe 中の in-sample readout は edge 0.0001 / det 0.0022 /
+  acc 1.000 だった。primary の complete history がないため loss continuity、収束、
+  best epoch、training gate PASS をこの probe から推定しない。データパイプライン
+  warmup+2 本 eval 込みで 150 iter = 11 分。
 - **換算**: フル epoch（199 本 ×99 窓 /8 ≈ 2,460 iter）≈ **2.3 h/epoch** ⇒ スクラッチ 400ep ≈ 900 GPU 時間 = **クォータ外（不可能）**・第 3 シードも同様。**fine-tune は可能**: max_iters サブサンプリングで 12h カーネル ≈ 1.3 万 iter ≈ 5.3 実効 epoch。
-- **結論**: モデル側で実行可能な唯一の路線 = **400ep からの目的別 fine-tune**（少 iter・低 lr）。
+- **結論（当時の呼称を訂正）**: モデル側で実行可能な唯一の路線 =
+  **legacy primary best (`12f...`, best epoch 不明) からの目的別 fine-tune**
+  （少 iter・低 lr）。
 
 ### E20 事前登録: division オーバーサンプリング fine-tune（2026-08-25 10:00・実装前）
-1. **機序**: divisions は全リンクの 1/853（#733973）で視覚的にも曖昧＝学習中の露出不足。モデル構造は division を表現可能（C1→P と C2→P の両立は softmax per-target で可能）で、失敗は「C2 の質量が隣接トラック Q に行く」学習済み識別誤り。**division 含有フレーム窓の重点サンプリング**で露出を ~40 倍化し、収束済みモデルを低 lr で微調整する。
-2. **実装**: train スクリプトへのパッチ = WeightedRandomSampler（GT out-deg-2 親を含む窓に重み K、division 露出 ≈30%）・lr 1e-5・warm start 400ep・**eval-12 の 12 本を学習リストから除外**（fine-tune 差分に対する準クリーン計器を確保）・総 ~4,000 iter（≈4.5h カーネル）。
-3. **計器の論理**: base(400ep) は eval-12 を記憶済み＝比較は fine-tune に**不利側**のバイアス。その上で div TP が増えれば汎化的な division 改善の実証になる（保守的検定）。
+1. **機序（当時仮説）**: divisions は全リンクの 1/853（#733973）で視覚的にも
+   曖昧＝学習中の露出不足。モデル構造は division を表現可能と仮定し、
+   **division 含有フレーム窓の重点サンプリング**で露出を ~40 倍化し、
+   legacy model を低 lr で微調整する。legacy primary の収束自体は未確認。
+2. **実装**: train スクリプトへのパッチ = WeightedRandomSampler（GT out-deg-2 親を含む窓に重み K、division 露出 ≈30%）・lr 1e-5・legacy primary best (`12f...`, best epoch 不明) warm start・**eval-12 の 12 本を gradient 学習リストから除外**・総 ~4,000 iter（≈4.5h カーネル）。これは clean/held-out 計器を意味しない。
+3. **計器の論理（撤回）**: eval-12 は fine-tune の gradient 学習リストから
+   除外したが、legacy upstream checkpoint の exposure は除外できない。
+   さらに `div_finetune.py` は eval-12 先頭2本
+   (`44b6_12dfb391`, `44b6_267148e4`) を epoch-end `test_loader` に入れ、
+   `acc * recall` の best-checkpoint selection に使った。よって当時の
+   「ft に不利側」「汎化的改善」という方向・汎化解釈を撤回する。
 4. **判定規則（読み出し前に固定）**: fine-tune 重みで eval-12 raw を再生成（eval_train_raw の weights 差替え）→ 132 postproc → 公式採点。**div TP ≥ 4（基準 2）かつ adj_edge_J 低下 ≤ 0.003** → base2 カーネル統合 + LB 照会 1 回。div TP ≤ 3 または edge 崩れ → 棄却（lr/K の再掃引はしない=1 発勝負、過適合ガード）。
 
-### E20 判定（2026-08-25 18:40・読み出し完了）— division 仮説は棄却・**edge 項に予想外の大幅利得**
-- 学習完走: 8×500 iter・div 窓 133/17,543・露出 18%（K=28）・warm start missing=0・held-out recall 0.9750→0.9768。
-- **登録バー（div TP ≥ 4）: 不成立**（div TP=2 のまま、FP 23→24）。division 露出 344 回/窓でも第 2 子は学習されず＝**「division は表現でなくデータの問題」仮説も棄却**。1/853 の稀少さは oversampling では越えられない。
-- **未登録の副発見: edge 項 +0.0097**（adj 0.9076→**0.9173**、総合 0.9125→**0.9221**）。node_recall +0.0011・n_pred −9%（検出が締まる）・edge FP は 12 動画中 10 で減少。**median Δ+0.0124・10/12 動画が正・最悪 −0.0038**＝利得は広く分布（E5/E15 型の n=1 集中ではない）。
-- **機序（事後解釈）**: division 含有窓 = 細胞密集・分裂近傍の**困難窓**。重点サンプリングは意図せず edge 項に対する **hard-example fine-tune** になった — E10 センサスの最大レバー（誤リンク帯）をちょうど叩いている。
-- **計器の位置づけ**: eval-12 は fine-tune 学習から**除外済み**＝この Δ は held-out 計測。base(400ep) は eval-12 を記憶している側なので、比較バイアスはむしろ ft に不利。
+### E20 判定（2026-08-25 18:40・読み出し完了）— division 仮説は棄却・**gradient-excluded local monitoring 差分**
+- 学習完走: 8×500 iter・div 窓 133/17,543・露出 18%（K=28）・warm start
+  missing=0。eval-12 先頭2本の model-selection readout は recall
+  0.9750→0.9768で、held-out ではない。
+- **登録バー（div TP ≥ 4）: 不成立**（div TP=2 のまま）。
+- **未登録の local observation**: 総合 score は 0.9125→**0.9221**
+  （**+0.0096**、adj edge 0.9076→0.9173 = +0.0097）。eval-12 は
+  gradient train からは除外され、node_recall +0.0011、n_pred −9%、edge FP は
+  12 動画中10本で減少、median Δ+0.0124、10/12 が正、worst −0.0038 だった。
+  ただし exposure/selection 汚染により効果の方向や汎化性は主張しない。
+- **機序解釈の撤回**: 「hard-example fine-tune が誤リンク帯を因果的に
+  改善した」という断定はしない。観測した local category shift としてのみ残す。
+- **計器の位置づけ**:
+  `LEGACY_UPSTREAM_EXPOSURE_UNKNOWN / MODEL_SELECTION_CONTAMINATED_LOCAL_MONITORING`。
+  held-out、generalization、promotion-grade の計測ではない。
 
 ### E20 機序確認（2026-08-25 22:40・census 再実行）
 ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウント完全一致）。base→ft のカテゴリ変化:
 **both_linked_elsewhere 131→119（−12）・parent_no_detection 90→83（−7）・child_no_detection 37→31（−6）・FP 計 410→375（−35）・TP 7228→7251（+23）**。track_end/start 系は不変（±0）。
-∴ 利得は **E10 で「モデル束縛」と診断した 2 カテゴリ（誤リンク・検出欠落）に限定して発生**＝hard-example fine-tune 機序の直接裏付け。E9〜E13 が事後手術で動かせなかった帯が、モデル更新でのみ動いた。
+これは誤リンク・検出欠落 category の local count shift である。
+exposure/selection 汚染のため hard-example 機序の直接裏付け、因果効果、
+改善方向の証拠とする従来解釈を撤回する。
 
 ### E20-b 事前登録: LB 照会（2026-08-25 18:45・提出前）
-1. **検証系の制約**: eval-24/36 は fine-tune の学習集合に含まれ検証不能。**唯一のクリーン検証 = LB**。
+1. **検証系の制約（訂正）**: eval-24/36 は fine-tune の学習集合に
+   含まれ、eval-12 も legacy exposure 不明かつ先頭2本が checkpoint selection に
+   使われた。ローカルに clean/generalization 計器はなかった。
 2. **逸脱の明記**: 従来ガード「最悪 ≥ −0.002」を −0.0038 が超過。ただしガードの目的（n=1 集中利得の排除）は median +0.0124・10/12 正で満たされており、逸脱を記録の上で LB 照会に進む。
 3. **提出物**: base2 v4 = base2 dual-seed カーネル + primary を div-ft 重み（sha 60748375）に差替え。変更はこの 1 点のみ。
-4. **判定規則（提出前に固定）**: 予測 LB = 0.919 + Δ×50%（E15-b の半減則）≈ **0.924**。**LB ≥ 0.921 で採用**（新提出基準に昇格・fine-tune 路線を増強へ）。**LB ≤ 0.919 で棄却**（held-out ローカル→LB の転移失敗として記録・モデル変更のローカル計器は死と結論）。0.920 は判定不能（表示分解能）として再現 1 回。
+4. **判定規則（当時の事前登録、計器解釈は撤回）**: 予測 LB =
+   0.919 + Δ×50%（E15-b の半減則）≈ **0.924**。**LB ≥ 0.921 で採用**、
+   **LB ≤ 0.919 で棄却**、0.920 は判定不能とした。local Δ を
+   held-out/generalization 値と見なした部分は撤回する。
 5. **結果（2026-08-30読戻し）**: submission ref 55754051、LB **0.906**。
 6. **判定**: 事前棄却バー≤0.919により**棄却**。base2 0.919から−0.013。
-7. **学び**: eval-12 held-out +0.0096はhiddenへ転移せず、hard-window fine-tuneは
-   ドメイン依存の検出/リンク分布を変えた。同型のE21 secondary fine-tuneは凍結する。
+7. **学び（訂正）**: gradient-excluded local monitoring の +0.0096 と
+   LB 0.906 は一致しなかった。local は
+   `LEGACY_UPSTREAM_EXPOSURE_UNKNOWN / MODEL_SELECTION_CONTAMINATED_LOCAL_MONITORING`
+   のため「改善が hidden で反転」「ドメイン依存分布へ変化」と方向・
+   機序を断定しない。LB gate 未達により同型の E21 は凍結する。
 
 ### E21 事前登録: secondary seed への同型 fine-tune（2026-08-25・user 承認「E21 secondary-ft も並行」・実行前）
-1. **仮説**: E20 の hard-window fine-tune（div 窓 K=28 oversample・lr 1e-5・8×500 iter・eval-12 除外）は primary で edge +0.0097 を出した。同型を secondary（seed314159 ep400）に適用すれば、両シード ft の dual-seed でさらに利得が乗る。
+1. **仮説（checkpoint/計器役割を訂正）**: E20 の hard-window fine-tune
+   （div 窓 K=28 oversample・lr 1e-5・8×500 iter）は selection-contaminated local
+   monitoring で adj edge +0.0097 を示した。同型を secondary（seed314159
+   `edge_predictor_best`, exact best epoch 381）に適用する当時仮説だったが、
+   この local 値に利得方向や汎化性は与えない。
 2. **実装**: `notebooks/div_finetune_secondary/`（primary 版との差分 = warm start を seed314159 重みに・method 名 `unet_transformer_divft_sec` のみ。eval-12 除外はそのまま継承）。~4.5 GPU-h。
 3. **判定規則（読み出し前に固定）**: 完走後、eval-12 を両 ft（primary-ft + secondary-ft）の dual-seed で再評価し、ft-primary のみ（0.9221）との動画対応 paired Δ を測る。**mean Δ ≥ +0.002 かつ median > 0 かつ 12 本中 ≥8 が正 → LB probe 候補に昇格**。未達なら secondary-ft は棄却（primary-ft のみ維持）。
-4. **状態（2026-08-30）**: E20-bがhiddenで0.906まで崩れたため、同型仮説は
-   追加GPUを使わず**凍結**。再開にはE20-bのドメインシフト機序を説明する新証拠が必要。
+4. **状態（2026-08-30、2026-09-05 解釈訂正）**: E20-b は LB gate 未達のため、
+   同型仮説は追加 GPU を使わず**凍結**。再開には exposure/selection を除外した
+   clean 計器の新証拠が必要で、domain-shift 機序は推定しない。
 
 ### E22 事前登録: bidirectional weight 0.20→0.30 掃引（2026-08-25・user 承認・実行前）
 1. **動機**: 日次監視 08-25 = 公開 NB `evgendvorkin/biohub-0-923-lb`（LB 0.923 主張）の最有力差分が bidir weight 0.30。我々のカーネル内コメントにも「0.20 は 0.915 参照値のまま未調整」。DeepCenter epoch2 veto は我々も既に同構成＝差分から消えた。
 2. **実装**: eval_train_raw v11 = 変更 3 点のみ（bidir 0.30 を全 4 参照サイト・VALIDATOR_N_PER_TYPE=18（eval-36）・cell4 ft override を `BIOHUB_FT_PRIMARY` ゲート化して base 重みで実行）。~3-4 GPU-h・LB 照会なし。
-3. **A/B の正当性**: 両腕とも base(400ep) 重み＝same-weights pipeline A/B なので eval-36 汚染問題は該当しない。ベースライン(0.20) = e7/val12_post + e8/val24_post の公式 per-video スコア。
+3. **A/B の正当性**: 両腕とも exact same recovered best-weight pair
+   (primary `12f...` / secondary `9bac...`) なので eval-36 汚染問題は
+   差分には該当しない。ただし eval-36 自体は学習汎化の証拠ではない。
+   ベースライン(0.20) = e7/val12_post + e8/val24_post の公式 per-video スコア。
 4. **判定規則（読み出し前に固定）**: 動画対応 paired Δ（n=36）で **mean ≥ +0.002 かつ median > 0 かつ ≥22/36 が非負 → 0.30 を base2 系譜に採用**（LB 照会は E20-b 判定後に事前登録の上で 1 回）。未達なら 0.20 維持。div 項の変化は参考記録のみ（判定に使わない）。
 
 ### E22 判定（2026-08-25・読み出し完了）= バー不成立 → 0.20 維持
@@ -600,6 +660,57 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
     content-bindし、
     current-HEAD E23/Base1 strict receiptを作る。提出はまだ行わない。
 
+### Checkpoint recovery / loss audit（2026-09-05 JST）
+
+1. **回収元と E22 runtime identity**: ignored recovery root
+   `outputs/kaggle/st_r3_checkpoint_recovery/` にある checkpoint の dataset mapping は、
+   primary = dataset `10999845` / source version `17804310` /
+   `pilkwang/biohub-tracking-support-pack-50ep-v1`、secondary = dataset `11184174` /
+   source version `18187037` /
+   `pilkwang/biohub-temporal-unet3d-seed314159-v1`。この ID/slug 対応は ignored
+   Kaggle metadata `rishabh_v2_public_view_model.json` (353,191 bytes,
+   SHA-256 `cb224d82c51b5a5549a153fb6901596f7b6099bbcbc248255daacaa8e63eefdb`) と
+   `stephen_v1_public_view_model.json` (360,262 bytes,
+   SHA-256 `a0ce74081933df05bed1bb5b1ecf71c4af0004c150c1d48b5596cbb8f5195ee6`)
+   でも確認できる。これらは recovery 取得 receipt ではない。
+   E22 runtime receipt
+   `outputs/kaggle/e22_bidir030_eval36_reference/bidirectional_production_runtime_integrity.json`
+   が pin する推論 path/SHA-256 は、primary/secondary とも
+   `edge_predictor_best.pth` であり、回収 inference-input bytes の実測
+   SHA-256 と完全一致した。ただし recovery root 内には取得 command/API
+   log、取得日時 receipt、version-listing response とその hash は保存されていない。
+   それらの acquisition provenance は**未取得**で、filesystem timestamp を代用しない。
+2. **Primary exact inventory**: recovered inference input = 8,363,159 bytes /
+   `12f6881ee3620a831697ca098ff8f48e687a24225f4e048b538deec3562fe771`。
+   unpinned local observation `checkpoint_last.pth` = 25,069,651 bytes /
+   `8294faafd646274e4f81e5a96d407a295d7ef2c7b47e2c50ac42931a543aec60`。
+   last payload は epoch 402 を示す一方、artifact name は
+   `biohub-tracking-support-pack-400ep-snapshot-v1`、回収元 slug は
+   `biohub-tracking-support-pack-50ep-v1`、payload method は
+   `unet_transformer_5090_50ep_v1` である。complete history がないため
+   `12f...` の best epoch、loss trend、training gate PASS は不明/不可。
+3. **Secondary exact inventory and loss readout**: recovered inference input = 8,363,159 bytes /
+   `9bac2fa0dadc4a6fc1899e0caf187f4b553e0a7cd90ba1261a68b35ffe9e305f`。
+   diagnostic last = 25,070,547 bytes /
+   `ee6c123717c9f99945888b502c6301c5d769bf9647bcb0b96f0016037df42d8c`
+   (epoch 400)。`history.csv` は 89,559 bytes /
+   `dfc4fd06d0c32b31bb1a35944fda1457c7585134e2596583e611c41880960ba2`
+   で epoch 1〜400 の exact 400 rows。edge/detection/validation loss は
+   first→last で 96.1% / 87.3% / 70.3% 低下したが非単調。
+   best validation score は `0.9779747766406395` @ epoch 381、final
+   `0.9753886946244954` は best より `0.0025860820161440756` 低い。
+4. **Validation の限界**: secondary `split_manifest.json` の test 40 本は
+   train 199 本の部分集で、全て `44b6`。したがってこの loss/score は
+   `LEGACY_IN_SAMPLE_MONITORING_ONLY`。generalization、held-out、両 lineage coverage、
+   retrospective training-gate PASS の根拠には使わない。
+5. **判定**: **recovered inference-input bytes ↔ E22 runtime path/hash identity** のみ
+   **SHIP**。strict load、re-run output parity、checkpoint-to-raw causal proof、
+   primary/secondary `checkpoint_last` の deployment、primary の epoch/loss 推定、
+   secondary の汎化主張、両 run の遡及 training PASS は **HOLD**。primary
+   `checkpoint_last` は `UNPINNED_LOCAL_OBSERVATION` である。
+   この audit は回収済み local artifact の read-only 検証と文書訂正のみで、
+   Kaggle submission も GPU 実行も行っていない。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
@@ -619,13 +730,14 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
 | 08-24 | base1 v1 | E2 | 0.8890 | 0.9125 | (待) | **0.908** | ✓ アンカー確立 |
 | 08-24 | base2 v3 | E3 | 0.8907 | — | — | **0.919** | ✓ 順序整合（ローカル Δ+0.0017 → LB Δ+0.011＝表示3桁で6倍。dual-seed は hidden でさらに効く） |
 | 08-24 | base1 v1 | E4 | 0.8890 | 0.9125 | (待) | **0.908** | ✓ **再実行雑音 = 表示分解能未満（E2 と同値）** |
-| 08-24 | base2 v4 | **E20-b** | — | **0.9221**（held-out） | 計測不能（ft 学習集合） | **0.906** | ✗ 予測0.924に反し棄却バー≤0.919。ローカル改善がhiddenで反転 |
+| 08-24 | base2 v4 | **E20-b** | — | **0.9221**（gradient-excluded / selection-contaminated local monitoring） | 計測不能（ft 学習集合） | **0.906** | ✗ 棄却バー≤0.919。localとLBは不一致だが方向・機序は推定不可 |
 | 08-25 | pub923-repro v1 | **E23** | — | — | — | **0.924** | ✓ 採用バー≥0.921。新基準へ昇格 |
 | 08-24 | base1 v2 | E5 | 0.8931 | — | — | **0.907** | ★予告どおり不転移: local +0.0041 が LB **−0.001**。linefit w1.0 棄却・後処理は base1 既定を維持。**「ローカルの n=1 集中効果は LB に転移しない」の直接実証**＝相関プロトコルの動画別寄与分布チェックが機能した |
 
 **08-30 17:30 JST時点の読み**: (i) **提出基準はE23（LB 0.924）**。
-(ii) E20-bはローカル→hiddenの符号が反転し、モデルfine-tuneのローカル計器は
-単独では採用判断に使えない。(iii) 2,869チームのgold圏proxyは15位0.945。
+(ii) E20-b の selection-contaminated local monitoring と LB は不一致で、
+方向・機序の比較はできない。モデル fine-tune のローカル計器は単独では
+採用判断に使えない。(iii) 2,869チームのgold圏proxyは15位0.945。
 変動余裕込みの目標0.947まで+0.023、首位0.962まで+0.038。
 
 既知の相関リスク（対処不能・記録のみ）: hidden が train と同じ 2 胚由来か新規胚かは未公表。新規胚ならドメインシフトが支配し、ローカル相関の上限そのものが下がる。

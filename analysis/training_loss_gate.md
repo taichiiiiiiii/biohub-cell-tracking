@@ -1,6 +1,6 @@
 # 新規学習 run の train / validation loss gate
 
-Updated: 2026-08-30 (Asia/Tokyo)
+Updated: 2026-09-05 (Asia/Tokyo)
 
 本書は、今後このリポジトリで作る全ての新規学習 run に対する binding な
 fail-closed 契約である。推論、後処理、既存 checkpoint の単純な再利用には適用しない。
@@ -11,10 +11,31 @@ fail-closed 契約である。推論、後処理、既存 checkpoint の単純�
 
 ## 遡及適用しない範囲と既知事実
 
-- E23 primary (`12f6881e...`, epoch 400) と secondary (`9bac2fa0...`,
-  epoch 400) は、現 checkout に完全な学習履歴がない。推論時の checkpoint hash と
-  epoch は確認済みだが、本 gate を遡及的に PASS した扱いにも、過学習した扱いにも
-  しない。状態は `LEGACY_HISTORY_UNVERIFIED` とする。
+- 回収した E22 inference-input bytes は primary `edge_predictor_best.pth`
+  (8,363,159 bytes, `12f6881e...`)、secondary `edge_predictor_best.pth`
+  (8,363,159 bytes, `9bac2fa0...`) であり、E22 runtime receipt の path/hash に一致する。
+  これは strict load、re-run output parity、checkpoint-to-raw causal proof を示さない。
+  両者を epoch 400 checkpoint と
+  同一視しない。secondary だけは回収した exact 400-row history から
+  best epoch 381、best validation score `0.9779747766406395` と確認できる。
+  `checkpoint_last.pth` は別物で epoch 400 / 25,070,547 bytes /
+  `ee6c1237...`、deployment 対象外である。secondary history では
+  edge/detection/validation loss は first→last でそれぞれ 96.1% / 87.3% /
+  70.3% 低下したが単調ではなく、final score は best より
+  `0.0025860820161440756` 低い。さらに validation `test` 40 本は
+  train 199 本の部分集で、`44b6` のみである。よって記録は
+  `LEGACY_IN_SAMPLE_MONITORING_ONLY`、generalization/training gate は PASS 不可とする。
+- Primary は complete history がなく、`12f6881e...` の best epoch は不明。
+  別物の `checkpoint_last.pth` (25,069,651 bytes, `8294faaf...`) は
+  `UNPINNED_LOCAL_OBSERVATION` である。その
+  payload 上 epoch 402 だが、artifact 名は `400ep`、runtime の source slug/method
+  呼称は `50ep` で矛盾する。loss trend、best epoch、training gate PASS を
+  主張せず、`LEGACY_HISTORY_UNVERIFIED` のままとする。
+- E20 eval-12 は fine-tune gradient train からは除外されたが、legacy upstream
+  exposure を除外できず、先頭2本は epoch-end best-checkpoint selection に
+  使われた。従って `LEGACY_UPSTREAM_EXPOSURE_UNKNOWN /
+  MODEL_SELECTION_CONTAMINATED_LOCAL_MONITORING` であり、held-out/generalization
+  または training gate PASS と呼ばない。
 - DeepCenter (`8040999a...`) は別モデル・別学習 run である。保存済み履歴から
   epoch 2 の train/val loss が `0.01233046198 / 0.04500306242` で最良、epoch 100 が
   `0.00795250949 / 0.24764877340` と確認できる。これは「train loss が下がっても

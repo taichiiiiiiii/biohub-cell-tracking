@@ -1,6 +1,6 @@
 # Biohub gold-loop protocol
 
-Updated: 2026-09-03 (Asia/Tokyo)
+Updated: 2026-09-05 (Asia/Tokyo)
 
 This file is the shared operating brief for SOL reviewers, native subagents,
 and the external Qwen implementation worker. Read it before changing an
@@ -54,9 +54,14 @@ final submission decision.
 
 - Binding training gate: every new or warm-start training run must pass
   [`analysis/training_loss_gate.md`](training_loss_gate.md) before official
-  metric evaluation; E23 primary/secondary remain `LEGACY_HISTORY_UNVERIFIED`
-  and cannot receive retrospective PASS, while current post-processing-only
-  work is outside this gate.
+  metric evaluation. Recovered E22/E23 inference-input bytes match the runtime
+  paths/hashes and may be used for that identity check only. Primary remains
+  `LEGACY_HISTORY_UNVERIFIED`; secondary is
+  `LEGACY_IN_SAMPLE_MONITORING_ONLY` because its validation 40 is a 44b6-only
+  subset of train 199. Neither receives retrospective training/generalization
+  PASS. E20 eval-12 is `LEGACY_UPSTREAM_EXPOSURE_UNKNOWN /
+  MODEL_SELECTION_CONTAMINATED_LOCAL_MONITORING`, not held-out evidence.
+  Current post-processing-only work is outside this gate.
 
 1. Establish exact parity with the submitted E23 notebook.
 2. Run official local scoring and paired per-video diagnostics.
@@ -110,6 +115,19 @@ Parity is accepted only when the notebook reference and local port agree on:
 
 ## Experiment assets
 
+- Current E22/E23 inference-input bytes are the recovered `edge_predictor_best.pth`
+  files: primary 8,363,159 bytes / SHA256 `12f6881e...`, secondary 8,363,159
+  bytes / SHA256 `9bac2fa0...`. The E22 runtime integrity receipt pins these
+  exact hashes and paths. Only secondary has an exact history-backed best epoch
+  (381); do not label either deployed file epoch 400. The recovered
+  `checkpoint_last.pth` files are diagnostic/non-deployment assets: primary
+  25,069,651 bytes / `8294faaf...` reports epoch 402 amid `400ep` artifact and
+  `50ep` source-name conflicts; secondary 25,070,547 bytes / `ee6c1237...` is
+  epoch 400. The primary last file is an `UNPINNED_LOCAL_OBSERVATION`.
+  **Recovered inference-input bytes ↔ E22 runtime path/hash identity** alone is
+  **SHIP**. Strict load, re-run output parity, checkpoint-to-raw causal proof,
+  retrospective training/generalization PASS, and use of either
+  `checkpoint_last` are **HOLD**.
 - E22/E23 bidirectional-weight `0.30` raw predictions are available in the
   primary checkout at
   `outputs/kaggle/e22_bidir030_eval36_raw/tracking_repo/predictions/unknown/unet_transformer_val/split_0`.
