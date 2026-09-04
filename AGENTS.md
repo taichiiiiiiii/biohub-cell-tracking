@@ -35,17 +35,13 @@ Use the minimum useful specialists. Read-heavy specification, literature, and re
   `printf '%s\n' "$TASK" | .codex/bin/qwen-implement /absolute/linked/worktree`.
   Do not use native `spawn_agent` for Qwen implementation. Codex 0.151.0 does
   not propagate a custom `model_provider` into native child roles.
-- While an actual Qwen canary fails with HTTP 429, implementation is
-  temporarily delegated to native `gpt-5.6-sol` subagents instead. Use
-  `medium` effort for bounded changes and `high` for ambiguous or high-risk
-  implementation. Keep the same isolated-worktree, scope, test, and parent
-  review gates. Do not repeatedly probe Qwen; return implementation to Qwen
-  only after a later canary succeeds.
-- The external worker uses `qwen3.7-max` with machine-local
-  `qwen_token_plan`. Use `medium` reasoning for bounded implementation phases;
-  raise effort only when the task's ambiguity or review risk justifies it.
-  Never copy provider credentials into this repository.
-- Give each worker a clean linked worktree on a non-protected branch. At most two
-  Qwen workers may run concurrently, and their files must not overlap.
+- The external worker uses local `qwen3.8:27b` Q4_K_M through Ollama, addressed
+  by the local `qwen38-27b` alias and a dedicated minimal Codex home. It uses
+  low reasoning plus `/no_think` for bounded implementation and requires no
+  cloud-model credential.
+- Give each worker a clean linked worktree on a non-protected branch. Multiple
+  independent callers may queue work, but `/Users/taichi/.local/bin/qwen38-queue`
+  permits only one physical Qwen inference at a time on this 48 GB Mac. Assigned
+  files must not overlap.
 - Parallelize independent read-only work, but do not let multiple agents edit the same files or run heavy experiments concurrently.
 - Before adopting Qwen-authored changes, the SOL parent agent must reread the complete diff and rerun the relevant pytest and ruff checks itself.

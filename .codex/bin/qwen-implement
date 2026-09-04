@@ -1,16 +1,17 @@
 #!/bin/sh
 # External Qwen implementation worker for Biohub.
 #
-# This launcher is policy and launch validation, not a security boundary. Codex
-# still loads machine-local configuration and authentication. The repository
-# stores only the provider ID; credentials remain outside this repository.
+# This launcher is policy and launch validation, not a security boundary. The
+# local worker uses a dedicated minimal Codex home and an Ollama model; no cloud
+# provider credential is needed. A machine-wide queue serializes inference.
 
 set -eu
 
 PROG="qwen-implement"
-MODEL="qwen3.7-max"
-PROVIDER="qwen_token_plan"
-REASONING="medium"
+MODEL="qwen38-27b"
+PROVIDER="ollama"
+REASONING="low"
+LOCAL_QUEUE="/Users/taichi/.local/bin/qwen38-queue"
 MAX_TASK_BYTES=1048576
 PROTECTED_BRANCHES="main master develop"
 POLICY_BASENAME="biohub_implementer.instructions.md"
@@ -84,6 +85,7 @@ esac
 for tool in git codex mktemp cat tr wc iconv rm grep; do
     command -v "$tool" >/dev/null 2>&1 || die "required command not found: $tool"
 done
+[ -x "$LOCAL_QUEUE" ] || die "shared local Qwen queue is missing or not executable: $LOCAL_QUEUE"
 
 # Inherited git plumbing must not redirect any launch gate.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM 2>/dev/null || true
@@ -173,12 +175,13 @@ is_blank "$task_file" && die "task is empty or whitespace-only"
 
 prompt_file="$(mktemp "${TMPDIR:-/tmp}/biohub-qwen-prompt.XXXXXX")" || die "cannot create prompt file"
 chmod 600 "$prompt_file"
-cat "$policy_file" > "$prompt_file" || die "cannot copy fixed policy"
+printf '/no_think\n' > "$prompt_file" || die "cannot write local thinking-mode directive"
+cat "$policy_file" >> "$prompt_file" || die "cannot copy fixed policy"
 printf '\n\n--- BOUNDED TASK (verbatim) ---\n\n' >> "$prompt_file" || die "cannot append task separator"
 cat "$task_file" >> "$prompt_file" || die "cannot append task"
 
 set +e
-codex exec --ephemeral --strict-config -C "$target" --model "$MODEL" --sandbox workspace-write --json --disable multi_agent --disable multi_agent_v2 -c "model_provider=\"$PROVIDER\"" -c "model_reasoning_effort=\"$REASONING\"" -c 'approval_policy="never"' -c 'sandbox_workspace_write.network_access=false' -c 'agents.enabled=false' -c 'agents.max_concurrent_threads_per_session=1' -c 'agents.max_depth=0' < "$prompt_file"
+"$LOCAL_QUEUE" codex exec --ephemeral --strict-config -C "$target" --model "$MODEL" --sandbox workspace-write --json --disable multi_agent --disable multi_agent_v2 -c "model_provider=\"$PROVIDER\"" -c "model_reasoning_effort=\"$REASONING\"" -c 'approval_policy="never"' -c 'sandbox_workspace_write.network_access=false' -c 'agents.enabled=false' -c 'agents.max_concurrent_threads_per_session=1' -c 'agents.max_depth=0' < "$prompt_file"
 worker_status=$?
 set -e
 exit "$worker_status"
