@@ -545,7 +545,7 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
   parity証明専用で候補採否には使わない。次は凍結済み`steal_twin_design.md`の
   `twin_only_v1`をST-R1→ST-R4順に実装・dry-runし、eval12の事前登録gateから進める。
 
-### E24 prerequisite loop: eval-36 image bundle recovery（2026-09-03・物理実行前）
+### E24 prerequisite loop: eval-36 image bundle recovery（2026-09-03〜04）
 
 1. **固定仮説**: 429で止まった1,487個別ファイルを、competition mount内で生成する
    15個の決定的USTARへ置き換えれば、既存manifest/security契約を弱めずeval-36画像を
@@ -573,6 +573,32 @@ ft 版 eval-12 に E10 センサスを再適用（全 12 本とも公式カウ�
    missing/extra/hash差はHOLD。root分割は別仮説として再レビューする。
 7. **LB境界**: E24では提出しない。画像READY後にsealed ST-R3→twin-only eval12→24→36
    を直列評価し、事前gateを通った候補だけを必要に応じてKaggle提出する。
+8. **物理結果（2026-09-04）**: private CPU/internet-off kernel
+   `taichiiiii/biohub-eval36-bundle-packer` v1は`COMPLETE`。canonical PASSは
+   354.312秒、notebook完了は362.072秒。receipt SHAは`f7f4bc77...f94d0`、log SHAは
+   `ea552c21...102a`。fresh downloadの15 tarを全量独立rehashし、全size/SHA一致、
+   合計`6,104,616,960` bytes。CLI `kernels files`の894/895-byte表示は異常値のため
+   evidenceに使わず、物理stat/receipt/hashを採用した。
+9. **import結果**: dry-runは`installed=0 / skipped=43 / validated=1487`、実installは
+   `installed=1487 / skipped=43 / validated=1530`。248,372-byte canonical receiptの
+   SHAは`0b224bf8...94570`。最終tree gateは36 roots / 3,672 files /
+   `15,932,872,938` bytes、全3,600 chunk / `30,198,988,800` decoded bytesを完走し、
+   ST-R3 binding-order digestは`635a326f...b49646`。
+10. **独立reviewでの残留HOLD**: 初稿verifierはinventoryをdataset-root相対
+    `train/<stem>.zarr/...`、inodeを`data`へbindした一方、ST-R3はdirect image-view
+    `<stem>.zarr/...`と`data/train` inodeを要求した。単体47 testsはPASSしたがhandoffが
+    不可能なため実データREADY発行を停止。path basis/identityを統一し、再review後にだけ
+    36-root物理verifierを実行する。候補・metric・threshold・モデルは変更していない。
+11. **READY closure**: 修正版はmixed `data/train`内のGT `.geff`を読まず、固定36 Zarr
+    だけをimage-view相対でsealする。48 tests、Ruff、compile、独立SHIP後にcommit
+    `2877f285...`へ固定。最初のverifier本体は49.87秒でPASSしたが、親`time -l`が
+    sandboxの`sysctl kern.clockrate`拒否でexit 1となったため、その証跡を保持してfresh
+    direct runを実行。子exit 0、約37.25秒、READY SHA `8a0a36d...8c73e`、content
+    digest `2211abec...214a`、inventory SHA `efe652bd...0714`。別agentが全3,672 files /
+    `15,932,872,938` bytesを8.113秒（warm cache）で独立rehashし全一致。E24のimage
+    prerequisiteは**READY**。次は別inodeのfresh image-only実行viewを同inventoryへ
+    content-bindし、
+    current-HEAD E23/Base1 strict receiptを作る。提出はまだ行わない。
 
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 

@@ -1,6 +1,6 @@
 # ST-R3 binding contract: immutable official evaluation and feasibility harness
 
-Updated: 2026-08-31 (Asia/Tokyo)
+Updated: 2026-09-04 (Asia/Tokyo)
 
 This document is the binding design for ST-R3. It is read with
 [`steal_twin_design.md`](steal_twin_design.md),
@@ -33,12 +33,19 @@ training-loss gate and then enter a separately named/preregistered candidate.
 - No notebook proxy score, handwritten micro-average, or rounded display value
   may decide a gate.
 
-Current data status is **NOT_READY**. Active download progress does not change
-that status. Only a new, completed, hash-pinned latest-verifier receipt covering
-the final image-tree checks and the content-hash gate below may transition it
-to READY; preregistration records that receipt's timestamp and SHA-256. ST-R4
-prediction or scoring is forbidden while the latest receipt says NOT_READY or
-is absent/stale.
+Current eval-36 image-completeness prerequisite status is **READY** as of
+2026-09-04. The authoritative completed
+latest-verifier receipt is
+`outputs/local/eval36_image_ready/20260904T220902+0900_2877f28_direct/READY.json`,
+SHA-256
+`8a0a36d393ecc11a0532bc12011257a4c012cb7361d4346941b4d1211c58c73e`,
+with content digest
+`2211abec541bc31df2f31aacf1575c065025f0aa143147c3df07b4ece2b3214a`
+and inventory SHA-256
+`efe652bd8e8a791bd51cf3b980ae87fe0fe2205ec52d2f3639717cd2b0550714`.
+Preregistration must record that receipt's timestamp and SHA-256. Image READY
+does not waive the separate fresh image-only view, sandbox, provenance,
+runtime, memory, parity-receipt, or state-machine gates.
 
 The official submodule trust check is fail-closed: its checked-out `HEAD` must
 equal the superproject gitlink, its working tree must be clean, and both values

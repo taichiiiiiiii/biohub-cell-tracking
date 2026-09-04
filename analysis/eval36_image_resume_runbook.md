@@ -3,9 +3,9 @@
 ## 境界と合格条件
 
 これは eval-36 の **train image Zarr だけ**を再開し、固定済みの
-[`data/manifest.csv`](../data/manifest.csv) と照合する fail-closed 手順である。現在の
-部分ツリーは **evaluation-ready ではない**。最終ゲートがすべて PASS
-するまで予測、採点、結果解釈に使わない。
+[`data/manifest.csv`](../data/manifest.csv) と照合する fail-closed 手順である。
+このrunbook開始時点（2026-08-30）の部分ツリーは **evaluation-readyではなかった**。
+最新状態は末尾の2026-09-04 closure sectionを正とする。
 
 この手順は Kaggle kernel の push/run、competition submission、Git push、commit、
 データの削除・改名を許可しない。実行する外部操作は competition files の
@@ -416,6 +416,25 @@ PY
 parity、公式 metric の正しさは別ゲートである。本 runbook の完了から
 submission、kernel push/run、Git push/commit への暗黙の許可は発生しない。
 
-残留する外部 blocker は **十分な cooldown 後に Kaggle API に到達でき、現行認証と
-competition access/rate quota が有効な環境で、残り 5,930,937,781 bytes を取得すること**
-である。2026-09-02 snapshot 時点でこれは未解消であり、状態は **NOT_READY** である。
+## 2026-09-04 bundle recovery completion snapshot
+
+外部 download blocker は private CPU bundle kernel version 1 で解消した。15 archive
+の物理合計 `6,104,616,960` bytesと全SHA-256を独立再検証し、importerは
+`installed=1487 / skipped=43 / validated=1530`でPASSした。最終treeも36 roots、
+3,672 exact files、`15,932,872,938` bytesであり、全3,600 chunk /
+`30,198,988,800` decoded bytesの実decodeを完走した。ST-R3順序のdecoded digestは
+`635a326ff78526a3d43952b94950e6d97d07db14cd53bc056517ea70d5b49646`。
+
+不足bytesの状態は解消済みであり、正式状態も **READY** へ遷移した。path-basis修正版は
+48 testsと独立SHIP review後にcommit `2877f285...`へ固定し、direct child exit 0で
+`outputs/local/eval36_image_ready/20260904T220902+0900_2877f28_direct/`へ
+canonical READYをno-clobber公開した。READY SHAは
+`8a0a36d393ecc11a0532bc12011257a4c012cb7361d4346941b4d1211c58c73e`、content digestは
+`2211abec541bc31df2f31aacf1575c065025f0aa143147c3df07b4ece2b3214a`、inventory SHAは
+`efe652bd8e8a791bd51cf3b980ae87fe0fe2205ec52d2f3639717cd2b0550714`。
+独立監査も3,672 files / `15,932,872,938` bytesを全rehashし、全record、identity、
+開始/終了treeを一致確認した。GT `.geff` bytesは読んでいない。
+
+最初の物理runもverifier本体はPASSしたが、計測用`/usr/bin/time -l`がsandbox内の
+`sysctl kern.clockrate`でexit 1となったため、証跡を保持したままwrapperなしのfresh
+direct runを最終receiptとした。今後はこのMacのsandbox内で`time -l`を判定exitに使わない。

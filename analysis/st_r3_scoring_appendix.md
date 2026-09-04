@@ -1,6 +1,6 @@
 # ST-R3 scoring appendix: sealed feasibility handoff and score artifacts
 
-Updated: 2026-09-02 (Asia/Tokyo)
+Updated: 2026-09-04 (Asia/Tokyo)
 
 ## Status
 
@@ -294,8 +294,11 @@ label authorizes no Kaggle operation.
 
 - Full generation supervisor and this exact feasibility handoff do not yet
   exist: `HOLD_INTERFACE_INCOMPLETE`.
-- No READY latest image-verifier receipt was supplied to this phase: data
-  remains `NOT_READY` for production ST-R4.
+- The authoritative latest image-verifier receipt became READY on 2026-09-04
+  (`READY.json` SHA-256
+  `8a0a36d393ecc11a0532bc12011257a4c012cb7361d4346941b4d1211c58c73e`).
+  This closes only image completeness; production ST-R4 remains held by the
+  incomplete generation/feasibility handoff and the gates below.
 - No target-class runtime calibration/equivalence or whole-cgroup memory
   receipt was supplied here. Those remain generation/feasibility holds and
   cannot be inferred from local scoring tests.

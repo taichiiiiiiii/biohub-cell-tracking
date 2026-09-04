@@ -1,6 +1,6 @@
 # Eval-36 bundle recovery loop
 
-Updated: 2026-09-03 (Asia/Tokyo)
+Updated: 2026-09-04 (Asia/Tokyo)
 
 This is the live record for the prerequisite recovery loop. It follows the
 binding order in `analysis/gold_loop_protocol.md`:
@@ -21,9 +21,9 @@ This loop changes recovery transport only. It does not change model weights,
 tracking logic, metric code, or a submission candidate, and it does not make a
 leaderboard claim.
 
-## 2. Cause diagnosis
+## 2. Pre-recovery cause diagnosis (2026-09-02 snapshot)
 
-- Local eval-36 images: 21/36 roots complete, 2,185/3,672 exact files.
+- Local eval-36 images were 21/36 roots complete and 2,185/3,672 exact files.
 - Exact shortfall: 1,487 files and 5,930,937,781 bytes; mismatch, extra,
   symlink, and partial counts are all zero.
 - The prior individual-file recovery stopped on HTTP 429.
@@ -71,7 +71,7 @@ Local staging is fresh/no-clobber under ignored
 `outputs/local/eval36_kernel/<run-id>/`; `READY.json` is published last and
 binds the two-file package and staging receipt.
 
-## 5. Tests and current verdict
+## 5. Tests and pre-run verdict
 
 Final local results before staging:
 
@@ -96,9 +96,10 @@ failed PASS/READY publication, bounded secret-free failure output, the generated
 `_run()` success path, output schema/type/extra-file rejection, and an offline
 Kaggle client request capture proving exact script text and private CPU flags.
 
-Independent post-change security re-review verdict: **SHIP to one isolated
-private CPU run**. Installation remains HOLD until physical output, transfer,
-importer, and image-verifier gates pass. Repository-wide Ruff still reports 64
+The independent post-change security re-review verdict was **SHIP to one
+isolated private CPU run**. Installation was held until physical output,
+transfer, importer, and image-verifier gates passed. Repository-wide Ruff still
+reports 64
 pre-existing findings in untouched exploratory notebooks/scripts; the owned
 change set is clean and this unrelated baseline debt is not rewritten here.
 
@@ -123,10 +124,65 @@ Timeout, disk exhaustion, mount drift, incomplete saved output, missing PASS
 receipt, hash mismatch, or importer failure is HOLD. Do not silently split the
 15 roots; a split job is a new contract requiring another review.
 
-## 7. Failure record and next loop
+## 7. Physical result, residual hold, and next loop
 
-No physical result exists yet. After the run, record the exact kernel version,
-session/status, code/metadata/receipt hashes, runtime, output byte inventory,
-transfer hashes, importer counts, image-verifier receipt, failure mechanism if
-any, the countermeasure, and the next frozen hypothesis here and in
-`analysis/experiment_ledger.md`.
+The one permitted physical run is complete and the transport hypothesis passed:
+
+- private CPU/internet-off kernel `taichiiiii/biohub-eval36-bundle-packer`,
+  version 1, reached terminal `COMPLETE`;
+- canonical PASS stdout appeared at `354.311787647` seconds and notebook export
+  finished at `362.072439612` seconds; stderr contained only two third-party
+  `SyntaxWarning` messages and nbconvert progress, with no user traceback;
+- downloaded 2,798-byte `KERNEL_RESULT.json` has SHA-256
+  `f7f4bc7759dae375283d5e32fc5f3f46a26af9dc53b84fe0d240a15b5f1f94d0`;
+  the retained kernel log SHA-256 is
+  `ea552c218ebc3a3f02986b1407febb241c5ec08bf90e0ff137c5843be6b6102a`;
+- fresh output contains exactly the 15 fixed archives plus the receipt. An
+  independent local rehash matched all 15 receipt SHA-256 values and exact
+  aggregate archive bytes `6,104,616,960`;
+- the importer dry-run passed with `installed=0`, `skipped=43`,
+  `validated=1487`; the no-overwrite install then passed with
+  `installed=1487`, `skipped=43`, `validated=1530`;
+- canonical import receipt
+  `eval36-import-0b224bf87b6fb0d0653cd265461a4fb75e17068de3550a73b19379eeb2294570.json`
+  is 248,372 bytes and its file SHA-256 is the embedded
+  `0b224bf87b6fb0d0653cd265461a4fb75e17068de3550a73b19379eeb2294570`;
+- the exact final tree gate passed: 36 roots, 3,672 files,
+  `15,932,872,938` stored bytes. A full 3,600-chunk decode covered
+  `30,198,988,800` decoded bytes; the ST-R3 binding-order digest is
+  `635a326ff78526a3d43952b94950e6d97d07db14cd53bc056517ea70d5b49646`.
+
+The Kaggle CLI 2.2.4 `kernels files` size field reported the same implausible
+894/895-byte values for the large saved files, so it is not evidence for this
+gate; the downloaded physical `stat`, receipt sizes, and independent hashes are
+authoritative. No second kernel version was pushed because the CLI exposes only
+the latest version through these status/log/file/output commands.
+
+Independent review found and blocked a path-basis mismatch in the first
+verifier draft (`data/train/...` versus image-view-relative
+`<stem>.zarr/...`). The fixed verifier binds its inventory to the source
+`data/train` image view, ignores rather than reads colocated non-Zarr GT trees,
+and requires a later image-only copy to prove content equality rather than
+inode equality. It passed 48 focused tests and independent SHIP review, then
+was committed at `2877f285c084e114eb2997134f73183e4f8e8fcc` before use.
+
+The first physical invocation emitted PASS and published a valid receipt in
+49.87 seconds, but `/usr/bin/time -l` itself returned 1 because sandboxed
+`sysctl kern.clockrate` is unavailable. That output is retained but is not the
+authoritative latest receipt. The countermeasure was one fresh direct child
+invocation without the broken wrapper; it returned 0 and canonical PASS after
+about 37.25 seconds at:
+
+`outputs/local/eval36_image_ready/20260904T220902+0900_2877f28_direct/`
+
+The authoritative READY is 1,431 bytes, SHA-256
+`8a0a36d393ecc11a0532bc12011257a4c012cb7361d4346941b4d1211c58c73e`;
+its content digest is
+`2211abec541bc31df2f31aacf1575c065025f0aa143147c3df07b4ece2b3214a`.
+The 580,155-byte inventory SHA-256 is
+`efe652bd8e8a791bd51cf3b980ae87fe0fe2205ec52d2f3639717cd2b0550714`.
+An independent read-only pass rehashed all `15,932,872,938` image bytes in
+8.113 warm-cache seconds, matched every one of the 3,672 records and both tree
+scans, and read no GT bytes. The eval-36 image prerequisite is therefore
+**READY**. Creating and proving the distinct image-only execution view remains
+an ST-R3 generation prerequisite, not an image-completeness hold.

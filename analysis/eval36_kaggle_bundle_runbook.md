@@ -1,9 +1,10 @@
 # Eval-36 Zarr bundle runbook
 
-Status: **SHIP to one private CPU physical run; HOLD for installation**. The
-single-file package passed independent SOL review and local tests. Kaggle
-runtime/output persistence, transfer, importer dry-run, and the exact image
-verifier must still pass before installation or ST-R3 scoring.
+Status: **kernel, transfer, installation, and sealed image READY all PASS**.
+Version 1 passed the independent archive/importer gates on 2026-09-04, and the
+committed verifier then passed a direct full-data run plus independent complete
+inventory rehash. ST-R3 generation retains its separate sandbox, image-only
+view, provenance, runtime, and memory gates.
 
 This workflow replaces 1,487 individual competition downloads with 15
 uncompressed deterministic USTAR files. It does not replace or relax the
@@ -176,6 +177,61 @@ Production archive sizes are rejected before parsing unless they are one of the
 15 pinned sizes; all modes also cap archive bytes and member count before any
 payload copy, so sparse/oversize and excessive-member inputs fail without
 expansion.
+
+## Version 1 physical receipt (2026-09-04)
+
+- Kernel: `taichiiiii/biohub-eval36-bundle-packer`, version 1, private CPU,
+  internet/GPU/TPU disabled, terminal `COMPLETE`.
+- Canonical PASS stdout time: `354.311787647` seconds; notebook export complete:
+  `362.072439612` seconds.
+- `KERNEL_RESULT.json` SHA-256:
+  `f7f4bc7759dae375283d5e32fc5f3f46a26af9dc53b84fe0d240a15b5f1f94d0`.
+- Retained log SHA-256:
+  `ea552c218ebc3a3f02986b1407febb241c5ec08bf90e0ff137c5843be6b6102a`.
+- Downloaded archive count/bytes: 15 / `6,104,616,960`; every physical size
+  and SHA-256 matched the receipt in an independent full rehash.
+- Dry-run: `installed=0`, `skipped=43`, `validated=1487`.
+- Install: `installed=1487`, `skipped=43`, `validated=1530`.
+- Import receipt: 248,372 bytes, SHA-256
+  `0b224bf87b6fb0d0653cd265461a4fb75e17068de3550a73b19379eeb2294570`.
+- Final path/size tree gate: 36 roots / 3,672 files /
+  `15,932,872,938` bytes. Independent full decode: 3,600 chunks /
+  `30,198,988,800` bytes, binding-order SHA-256
+  `635a326ff78526a3d43952b94950e6d97d07db14cd53bc056517ea70d5b49646`.
+
+Do not use the Kaggle CLI 2.2.4 `kernels files` reported size field as evidence:
+for this run it returned anomalous 894/895-byte values for every saved output.
+Use downloaded physical sizes plus the receipt and rehashes. Do not push a
+second kernel version merely to inspect history; these CLI endpoints are
+latest-version views.
+
+## Image READY receipt (2026-09-04)
+
+The authoritative latest direct run is:
+
+```text
+outputs/local/eval36_image_ready/20260904T220902+0900_2877f28_direct/
+```
+
+- verifier commit: `2877f285c084e114eb2997134f73183e4f8e8fcc`;
+- verifier bytes/SHA-256: 46,060 /
+  `fa69202ed0438ea74bd5f0ec4768653de31d53d11590c1b90974b7e81dd3e6b4`;
+- READY bytes/SHA-256: 1,431 /
+  `8a0a36d393ecc11a0532bc12011257a4c012cb7361d4346941b4d1211c58c73e`;
+- READY content digest:
+  `2211abec541bc31df2f31aacf1575c065025f0aa143147c3df07b4ece2b3214a`;
+- inventory bytes/SHA-256: 580,155 /
+  `efe652bd8e8a791bd51cf3b980ae87fe0fe2205ec52d2f3639717cd2b0550714`;
+- direct verifier exit: 0; observed wall about 37.25 seconds on a warm cache;
+- independent inventory rehash: all 3,672 files and `15,932,872,938` bytes,
+  8.113 seconds warm-cache, with exact SHA/size/identity and start/end tree
+  equality; no GT `.geff` content was opened.
+
+An earlier valid PASS receipt is retained in the sibling
+`20260904T220629+0900_2877f28` directory, but its `/usr/bin/time -l` parent
+returned 1 after child completion because sandboxed `sysctl kern.clockrate`
+was unavailable. Do not use that wrapper exit as the final run. The direct
+receipt above is the authoritative latest verifier evidence.
 
 ## Stop conditions
 
