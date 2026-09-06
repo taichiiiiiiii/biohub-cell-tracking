@@ -255,6 +255,8 @@ set -- codex exec --ephemeral --strict-config --ignore-user-config -C "$target" 
     -c 'model_context_window=32768' \
     -c 'model_auto_compact_token_limit=24000' \
     -c 'analytics.enabled=false' \
+    -c 'features.shell_tool=false' \
+    -c 'features.unified_exec=false' \
     -c 'features.apps=false' \
     -c 'features.plugins=false' \
     -c 'features.remote_plugin=false' \

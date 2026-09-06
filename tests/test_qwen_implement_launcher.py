@@ -177,6 +177,8 @@ def test_default_is_fixed_flash_without_interactive(harness: Harness) -> None:
         "sandbox_workspace_write.network_access=false",
         "agents.enabled=false",
         "analytics.enabled=false",
+        "features.shell_tool=false",
+        "features.unified_exec=false",
         'web_search="disabled"',
     }
     assert required <= set(overrides)
