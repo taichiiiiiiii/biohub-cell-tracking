@@ -105,8 +105,8 @@ capture.mkdir(exist_ok=True)
 (Path(os.environ["QWEN_TEST_QUEUE_PID"])).write_text(str(os.getpid()))
 argv = sys.argv[1:]
 (capture / "queue.json").write_text(json.dumps(argv))
-interactive = bool(argv and argv[0] == "--interactive")
-if interactive:
+cloud_only = bool(argv and argv[0] == "--cloud-only")
+if cloud_only:
     argv = argv[1:]
 mutation = os.environ.get("QWEN_TEST_MUTATE")
 target = Path(os.environ["BIOHUB_QWEN_TARGET"])
@@ -158,16 +158,17 @@ def queue_argv(harness: Harness) -> list[str]:
     return json.loads((harness.capture / "queue.json").read_text())
 
 
-def test_default_is_fixed_flash_without_interactive(harness: Harness) -> None:
-    result = harness.invoke()
+def test_explicit_cloud_only_preserves_fixed_queue_input(harness: Harness) -> None:
+    result = harness.invoke("--cloud-only")
     assert result.returncode == 0, result.stderr.decode()
     argv = queue_argv(harness)
-    assert argv[:2] == ["codex", "exec"]
+    assert argv[:3] == ["--cloud-only", "codex", "exec"]
+    queue_input = argv[1:]
     assert "--interactive" not in argv
-    assert argv[argv.index("--model") + 1] == "qwen38-flash-next"
-    assert "--strict-config" in argv
-    assert "--ignore-user-config" in argv
-    overrides = [argv[index + 1] for index, arg in enumerate(argv[:-1]) if arg == "-c"]
+    assert queue_input[queue_input.index("--model") + 1] == "qwen38-flash-next"
+    assert "--strict-config" in queue_input
+    assert "--ignore-user-config" in queue_input
+    overrides = [queue_input[index + 1] for index, arg in enumerate(queue_input[:-1]) if arg == "-c"]
     required = {
         'model_provider="qwen_flash_local"',
         'model_catalog_json="/Users/taichi/.codex-local-flash/models.json"',
@@ -183,26 +184,53 @@ def test_default_is_fixed_flash_without_interactive(harness: Harness) -> None:
     }
     assert required <= set(overrides)
     assert any(value.startswith("model_providers.qwen_flash_local={") for value in overrides)
+    codex_argv = json.loads((harness.capture / "codex.json").read_text())
+    assert codex_argv[0] == "exec"
+    assert "--cloud-only" not in codex_argv
     prompt = (harness.capture / "prompt.bin").read_text()
-    assert "Flash first" in prompt
+    assert "exact qwen3.7-plus" in prompt
+    assert "qwen_token_plan subscription-only" in prompt
+    assert "fallback and retries zero" in prompt
+    assert "Quota exhaustion, authentication failure, provider error" in prompt
+    assert "Request retries, stream retries" in prompt
+    assert "never start from automation" in prompt
     assert "bounded task" in prompt
 
 
-def test_interactive_is_explicitly_forwarded_once(harness: Harness) -> None:
-    result = harness.invoke("--interactive")
-    assert result.returncode == 0, result.stderr.decode()
-    assert queue_argv(harness)[:3] == ["--interactive", "codex", "exec"]
-
-
-@pytest.mark.parametrize("args", [("--unknown",), ("--interactive", "--interactive")])
-def test_unknown_and_duplicate_flags_are_rejected(harness: Harness, args: tuple[str, ...]) -> None:
+@pytest.mark.parametrize(
+    "args",
+    [(), ("--interactive",), ("--unknown",), ("--cloud-only", "--cloud-only")],
+)
+def test_missing_unknown_interactive_and_duplicate_flags_are_rejected(
+    harness: Harness, args: tuple[str, ...]
+) -> None:
     result = harness.invoke(*args)
     assert result.returncode == 2
     assert not (harness.capture / "queue.json").exists()
 
 
+def test_cloud_only_after_worktree_is_rejected(harness: Harness) -> None:
+    result = subprocess.run(
+        [str(harness.launcher), str(harness.worktree), "--cloud-only"],
+        input=b"bounded task\n",
+        env=harness.env,
+        capture_output=True,
+    )
+    assert result.returncode == 2
+    assert not (harness.capture / "queue.json").exists()
+
+    unknown = subprocess.run(
+        [str(harness.launcher), "--cloud-only", "--unknown"],
+        input=b"bounded task\n",
+        env=harness.env,
+        capture_output=True,
+    )
+    assert unknown.returncode == 2
+    assert not (harness.capture / "queue.json").exists()
+
+
 def test_primary_foreign_protected_and_detached_are_rejected(harness: Harness, tmp_path: Path) -> None:
-    assert harness.invoke(target=harness.root).returncode == 2
+    assert harness.invoke("--cloud-only", target=harness.root).returncode == 2
 
     foreign = tmp_path / "foreign"
     foreign_worktree = tmp_path / "foreign-worktree"
@@ -213,25 +241,25 @@ def test_primary_foreign_protected_and_detached_are_rejected(harness: Harness, t
     run("git", "-C", foreign, "add", ".")
     run("git", "-C", foreign, "commit", "-m", "fixture")
     run("git", "-C", foreign, "worktree", "add", "-b", "feature/foreign", foreign_worktree)
-    assert harness.invoke(target=foreign_worktree).returncode == 2
+    assert harness.invoke("--cloud-only", target=foreign_worktree).returncode == 2
 
     run("git", "-C", harness.worktree, "switch", "-c", "main")
-    assert harness.invoke().returncode == 2
+    assert harness.invoke("--cloud-only").returncode == 2
     run("git", "-C", harness.worktree, "switch", "--detach")
-    assert harness.invoke().returncode == 2
+    assert harness.invoke("--cloud-only").returncode == 2
 
 
 def test_dirty_and_hidden_index_flags_are_rejected(harness: Harness) -> None:
     (harness.worktree / "untracked").write_text("dirty")
-    assert harness.invoke().returncode == 2
+    assert harness.invoke("--cloud-only").returncode == 2
     (harness.worktree / "untracked").unlink()
 
     run("git", "-C", harness.worktree, "update-index", "--assume-unchanged", "tracked.txt")
-    assert harness.invoke().returncode == 2
+    assert harness.invoke("--cloud-only").returncode == 2
     run("git", "-C", harness.worktree, "update-index", "--no-assume-unchanged", "tracked.txt")
 
     run("git", "-C", harness.worktree, "update-index", "--skip-worktree", "tracked.txt")
-    assert harness.invoke().returncode == 2
+    assert harness.invoke("--cloud-only").returncode == 2
     run("git", "-C", harness.worktree, "update-index", "--no-skip-worktree", "tracked.txt")
 
 
@@ -240,7 +268,7 @@ def test_shim_rejects_state_changed_after_queue_admission(harness: Harness, muta
     env = harness.env.copy()
     env["QWEN_TEST_MUTATE"] = mutation
     result = subprocess.run(
-        [str(harness.launcher), str(harness.worktree)],
+        [str(harness.launcher), "--cloud-only", str(harness.worktree)],
         input=b"task\n",
         env=env,
         capture_output=True,
@@ -253,7 +281,7 @@ def test_exit_code_is_preserved_and_reaped_lock_is_released(harness: Harness) ->
     env = harness.env.copy()
     env["QWEN_TEST_CODEX_EXIT"] = "37"
     result = subprocess.run(
-        [str(harness.launcher), str(harness.worktree)], input=b"task\n", env=env
+        [str(harness.launcher), "--cloud-only", str(harness.worktree)], input=b"task\n", env=env
     )
     assert result.returncode == 37
     assert not harness.lock.exists()
@@ -287,7 +315,7 @@ def test_same_worktree_is_exclusive_and_signal_releases_reaped_lock(
     env = harness.env.copy()
     env.update(QWEN_TEST_READY=str(ready), QWEN_TEST_RELEASE=str(release))
     first = subprocess.Popen(
-        [str(harness.launcher), str(harness.worktree)],
+        [str(harness.launcher), "--cloud-only", str(harness.worktree)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -300,7 +328,7 @@ def test_same_worktree_is_exclusive_and_signal_releases_reaped_lock(
         first.stdin.write(b"task\n")
         first.stdin.close()
         wait_for(ready)
-        assert harness.invoke().returncode == 2
+        assert harness.invoke("--cloud-only").returncode == 2
         first.send_signal(sig)
         assert first.wait(timeout=5) == expected
         assert (harness.capture / "signal.txt").read_text() == str(sig)
@@ -317,7 +345,7 @@ def test_unreaped_launch_retains_lock(harness: Harness) -> None:
     env = harness.env.copy()
     env.update(QWEN_TEST_READY=str(ready), QWEN_TEST_RELEASE=str(release))
     process = subprocess.Popen(
-        [str(harness.launcher), str(harness.worktree)],
+        [str(harness.launcher), "--cloud-only", str(harness.worktree)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -356,7 +384,7 @@ def test_signal_race_with_killed_queue_retains_lock(harness: Harness) -> None:
         QWEN_TEST_KILL_ON_SIGNAL="1",
     )
     process = subprocess.Popen(
-        [str(harness.launcher), str(harness.worktree)],
+        [str(harness.launcher), "--cloud-only", str(harness.worktree)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -380,7 +408,7 @@ def test_signal_style_queue_exit_retains_lock(harness: Harness) -> None:
     env = harness.env.copy()
     env["QWEN_TEST_CODEX_EXIT"] = "137"
     result = subprocess.run(
-        [str(harness.launcher), str(harness.worktree)], input=b"task\n", env=env
+        [str(harness.launcher), "--cloud-only", str(harness.worktree)], input=b"task\n", env=env
     )
     assert result.returncode == 137
     assert harness.lock.is_dir()
@@ -401,9 +429,11 @@ def test_shared_queue_validate_and_cloud_conversion_use_mock_metadata(
     harness: Harness, tmp_path: Path
 ) -> None:
     module = load_shared_queue()
-    result = harness.invoke()
+    result = harness.invoke("--cloud-only")
     assert result.returncode == 0
-    argv = queue_argv(harness)
+    queued = queue_argv(harness)
+    assert queued[:3] == ["--cloud-only", "codex", "exec"]
+    argv = queued[1:]
     module.validate(argv)
 
     config = tmp_path / "config.toml"
@@ -427,5 +457,9 @@ def test_shared_queue_validate_and_cloud_conversion_use_mock_metadata(
     assert "--ignore-user-config" in converted
     overrides = [converted[index + 1] for index, arg in enumerate(converted[:-1]) if arg == "-c"]
     assert 'model_provider="qwen_token_plan"' in overrides
-    assert any(value.startswith("model_providers.qwen_token_plan={") for value in overrides)
+    provider = next(value for value in overrides if value.startswith("model_providers.qwen_token_plan={"))
+    assert "request_max_retries=0" in provider
+    assert "stream_max_retries=0" in provider
+    assert 'model_reasoning_effort="none"' in overrides
     assert f'model_catalog_json="{catalog}"' in overrides
+    assert all("qwen_flash_local" not in value for value in converted)

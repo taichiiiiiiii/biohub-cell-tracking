@@ -2,8 +2,8 @@
 # External Qwen implementation worker for Biohub.
 #
 # This launcher is policy and launch validation, not a security boundary. The
-# shared queue owns Flash-first routing and any explicitly interactive cloud
-# overflow conversion. No credential or provider endpoint is copied here.
+# shared queue owns the explicit subscription-cloud conversion. Its fixed Flash
+# input contract remains intact; no credential or provider endpoint is copied here.
 
 set -eu
 
@@ -20,7 +20,7 @@ POLICY_BASENAME="biohub_implementer.instructions.md"
 
 usage() {
     cat <<'USAGE'
-Usage: qwen-implement [--interactive] WORKTREE
+Usage: qwen-implement --cloud-only WORKTREE
 
 Read one bounded implementation task from stdin and run an external Qwen worker
 inside a clean, registered linked worktree of this repository.
@@ -29,8 +29,8 @@ WORKTREE must be the exact worktree top level on a non-protected branch.
 Primary checkouts, foreign repositories, detached HEADs, dirty worktrees, and
 main/master/develop are rejected.
 
---interactive is an explicit supervised opt-in passed to the shared queue. The
-default never requests cloud overflow.
+--cloud-only is required for one directly user-initiated, parent-supervised
+subscription task. There is no default local route, fallback, or retry.
 USAGE
 }
 
@@ -110,19 +110,13 @@ case "${1:-}" in
         ;;
 esac
 
-interactive="false"
-if [ "${1:-}" = "--interactive" ]; then
-    interactive="true"
-    shift
-fi
-[ "$#" -eq 1 ] || {
+[ "$#" -eq 2 ] || {
     usage >&2
-    die "expected exactly one WORKTREE argument"
+    die "expected exactly --cloud-only WORKTREE"
 }
-case "$1" in
-    --interactive) die "--interactive must appear at most once before WORKTREE" ;;
-    -*) die "unknown option: $1" ;;
-esac
+[ "$1" = "--cloud-only" ] || die "explicit --cloud-only must appear once before WORKTREE"
+shift
+case "$1" in -*) die "WORKTREE must follow --cloud-only" ;; esac
 
 for tool in git codex mktemp cat tr wc iconv rm grep mkdir rmdir; do
     command -v "$tool" >/dev/null 2>&1 || die "required command not found: $tool"
@@ -235,7 +229,7 @@ is_blank "$task_file" && die "task is empty or whitespace-only"
 
 prompt_file="$(mktemp "${TMPDIR:-/tmp}/biohub-qwen-prompt.XXXXXX")" || die "cannot create prompt file"
 chmod 600 "$prompt_file"
-printf 'Implementation routing: Flash first; configured reasoning effort: none.\n' > "$prompt_file" || die "cannot write model banner"
+printf '%s\n' 'Implementation routing: exact qwen3.7-plus through qwen_token_plan subscription-only cloud; directly user-initiated, parent-supervised one-shot; configured reasoning effort none; fallback and retries zero; stop on quota, authentication, provider, or routing error; never start from automation, a heartbeat, or an unattended goal continuation.' > "$prompt_file" || die "cannot write model banner"
 cat "$policy_file" >> "$prompt_file" || die "cannot copy fixed policy"
 printf '\n\n--- BOUNDED TASK (verbatim) ---\n\n' >> "$prompt_file" || die "cannot append task separator"
 cat "$task_file" >> "$prompt_file" || die "cannot append task"
@@ -267,10 +261,6 @@ set -- codex exec --ephemeral --strict-config --ignore-user-config -C "$target" 
     -c 'agents.enabled=false' \
     -c 'agents.max_concurrent_threads_per_session=1' \
     -c 'agents.max_depth=0'
-if [ "$interactive" = "true" ]; then
-    set -- --interactive "$@"
-fi
-
 set +e
 worker_started="true"
 PATH="$shim_dir:$PATH" \
@@ -279,7 +269,7 @@ BIOHUB_QWEN_TARGET="$target" \
 BIOHUB_QWEN_COMMON="$target_common" \
 BIOHUB_QWEN_GIT_DIR="$target_git_dir" \
 BIOHUB_QWEN_BRANCH_REF="$branch_ref" \
-"$IMPLEMENTATION_QUEUE" "$@" < "$prompt_file" &
+"$IMPLEMENTATION_QUEUE" --cloud-only "$@" < "$prompt_file" &
 queue_pid=$!
 wait "$queue_pid"
 worker_status=$?
