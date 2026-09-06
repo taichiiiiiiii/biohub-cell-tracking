@@ -2,23 +2,25 @@
 # External Qwen implementation worker for Biohub.
 #
 # This launcher is policy and launch validation, not a security boundary. The
-# local worker uses a dedicated minimal Codex home and an Ollama model; no cloud
-# provider credential is needed. A machine-wide queue serializes inference.
+# shared queue owns Flash-first routing and any explicitly interactive cloud
+# overflow conversion. No credential or provider endpoint is copied here.
 
 set -eu
 
 PROG="qwen-implement"
-MODEL="qwen38-27b"
-PROVIDER="ollama"
-REASONING="low"
-LOCAL_QUEUE="/Users/taichi/.local/bin/qwen38-queue"
+MODEL="qwen38-flash-next"
+PROVIDER="qwen_flash_local"
+REASONING="none"
+IMPLEMENTATION_QUEUE="/Users/taichi/.local/bin/qwen-implementation-queue"
+MODEL_CATALOG="/Users/taichi/.codex-local-flash/models.json"
+PROVIDER_DEFINITION='{name="Local Flash Next",base_url="http://127.0.0.1:11436/v1",wire_api="responses",requires_openai_auth=false,request_max_retries=0,stream_max_retries=0,stream_idle_timeout_ms=600000}'
 MAX_TASK_BYTES=1048576
 PROTECTED_BRANCHES="main master develop"
 POLICY_BASENAME="biohub_implementer.instructions.md"
 
 usage() {
     cat <<'USAGE'
-Usage: qwen-implement WORKTREE
+Usage: qwen-implement [--interactive] WORKTREE
 
 Read one bounded implementation task from stdin and run an external Qwen worker
 inside a clean, registered linked worktree of this repository.
@@ -26,6 +28,9 @@ inside a clean, registered linked worktree of this repository.
 WORKTREE must be the exact worktree top level on a non-protected branch.
 Primary checkouts, foreign repositories, detached HEADs, dirty worktrees, and
 main/master/develop are rejected.
+
+--interactive is an explicit supervised opt-in passed to the shared queue. The
+default never requests cloud overflow.
 USAGE
 }
 
@@ -58,14 +63,45 @@ is_blank() {
 
 task_file=""
 prompt_file=""
+worker_lock=""
+lock_owned="false"
+worker_started="false"
+worker_reaped="false"
+queue_pid=""
 cleanup() {
     for file in "$task_file" "$prompt_file"; do
         if [ -n "$file" ] && [ -f "$file" ]; then
             rm -f -- "$file"
         fi
     done
+    # Never release a lock after an interrupted launch unless the child exited.
+    # A retained lock requires manual process verification; never steal it.
+    if [ "$lock_owned" = "true" ] && {
+        [ "$worker_started" = "false" ] || [ "$worker_reaped" = "true" ]
+    }; then
+        rmdir -- "$worker_lock" 2>/dev/null || true
+    fi
 }
-trap cleanup EXIT HUP INT TERM
+forward_signal() {
+    signal="$1"
+    status="$2"
+    trap - HUP INT TERM
+    if [ -n "$queue_pid" ]; then
+        kill -s "$signal" "$queue_pid" 2>/dev/null || true
+        set +e
+        wait "$queue_pid"
+        queue_status=$?
+        set -e
+        if [ "$queue_status" -lt 128 ] || [ "$queue_status" -eq "$status" ]; then
+            worker_reaped="true"
+        fi
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'forward_signal HUP 129' HUP
+trap 'forward_signal INT 130' INT
+trap 'forward_signal TERM 143' TERM
 
 case "${1:-}" in
     -h | --help)
@@ -74,18 +110,31 @@ case "${1:-}" in
         ;;
 esac
 
+interactive="false"
+if [ "${1:-}" = "--interactive" ]; then
+    interactive="true"
+    shift
+fi
 [ "$#" -eq 1 ] || {
     usage >&2
     die "expected exactly one WORKTREE argument"
 }
 case "$1" in
+    --interactive) die "--interactive must appear at most once before WORKTREE" ;;
     -*) die "unknown option: $1" ;;
 esac
 
-for tool in git codex mktemp cat tr wc iconv rm grep; do
+for tool in git codex mktemp cat tr wc iconv rm grep mkdir rmdir; do
     command -v "$tool" >/dev/null 2>&1 || die "required command not found: $tool"
 done
-[ -x "$LOCAL_QUEUE" ] || die "shared local Qwen queue is missing or not executable: $LOCAL_QUEUE"
+[ -x "$IMPLEMENTATION_QUEUE" ] || die "shared implementation queue is missing or not executable: $IMPLEMENTATION_QUEUE"
+
+real_codex="$(command -v codex 2>/dev/null || true)"
+case "$real_codex" in
+    /*) ;;
+    *) die "cannot resolve the real Codex executable to an absolute path" ;;
+esac
+[ -x "$real_codex" ] || die "real Codex executable is not executable"
 
 # Inherited git plumbing must not redirect any launch gate.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM 2>/dev/null || true
@@ -161,8 +210,19 @@ for protected in $PROTECTED_BRANCHES; do
     [ "$branch" != "$protected" ] || die "protected branch is not allowed: $branch"
 done
 
+# Acquire before the clean check so concurrent callers cannot both pass it.
+worker_lock="$target_git_dir/biohub-implement.lock"
+mkdir -- "$worker_lock" 2>/dev/null || die "WORKTREE implementation lock exists or cannot be created; verify the owner before retrying"
+lock_owned="true"
+
 dirty="$(git -C "$target" -c core.fsmonitor=false -c core.fileMode=true -c core.ignorecase=false -c core.precomposeunicode=false status --porcelain=v1 --untracked-files=all --ignore-submodules=none 2>/dev/null || die "failed to inspect WORKTREE status")"
 [ -z "$dirty" ] || die "WORKTREE must be clean, including untracked files"
+index_verbose="$(git -C "$target" ls-files -v 2>/dev/null)" || die "failed to inspect assume-unchanged index flags"
+assume_unchanged="$(printf '%s\n' "$index_verbose" | grep '^[a-z]' || true)"
+[ -z "$assume_unchanged" ] || die "WORKTREE has assume-unchanged index entries"
+index_tags="$(git -C "$target" ls-files -t 2>/dev/null)" || die "failed to inspect skip-worktree index flags"
+skip_worktree="$(printf '%s\n' "$index_tags" | grep '^S ' || true)"
+[ -z "$skip_worktree" ] || die "WORKTREE has skip-worktree index entries"
 
 [ ! -t 0 ] || die "read the bounded task from a pipe or redirected file"
 task_file="$(mktemp "${TMPDIR:-/tmp}/biohub-qwen-task.XXXXXX")" || die "cannot create task file"
@@ -175,13 +235,57 @@ is_blank "$task_file" && die "task is empty or whitespace-only"
 
 prompt_file="$(mktemp "${TMPDIR:-/tmp}/biohub-qwen-prompt.XXXXXX")" || die "cannot create prompt file"
 chmod 600 "$prompt_file"
-printf '/no_think\n' > "$prompt_file" || die "cannot write local thinking-mode directive"
+printf 'Implementation routing: Flash first; configured reasoning effort: none.\n' > "$prompt_file" || die "cannot write model banner"
 cat "$policy_file" >> "$prompt_file" || die "cannot copy fixed policy"
 printf '\n\n--- BOUNDED TASK (verbatim) ---\n\n' >> "$prompt_file" || die "cannot append task separator"
 cat "$task_file" >> "$prompt_file" || die "cannot append task"
 
+shim_dir="$(physical_dir "$launcher_dir/../libexec/qwen-implement")"
+[ -n "$shim_dir" ] || die "cannot resolve launch-check shim directory"
+shim="$shim_dir/codex"
+[ -f "$shim" ] && [ ! -L "$shim" ] && [ -x "$shim" ] || die "launch-check shim is missing or unsafe"
+[ ! "$shim" -ef "$real_codex" ] || die "launch-check shim resolves to the real Codex executable"
+
+set -- codex exec --ephemeral --strict-config --ignore-user-config -C "$target" \
+    --model "$MODEL" --sandbox workspace-write --json \
+    --disable multi_agent --disable multi_agent_v2 \
+    -c "model_provider=\"$PROVIDER\"" \
+    -c "model_providers.$PROVIDER=$PROVIDER_DEFINITION" \
+    -c "model_catalog_json=\"$MODEL_CATALOG\"" \
+    -c 'model_context_window=32768' \
+    -c 'model_auto_compact_token_limit=24000' \
+    -c 'analytics.enabled=false' \
+    -c 'features.apps=false' \
+    -c 'features.plugins=false' \
+    -c 'features.remote_plugin=false' \
+    -c 'web_search="disabled"' \
+    -c "model_reasoning_effort=\"$REASONING\"" \
+    -c 'approval_policy="never"' \
+    -c 'sandbox_workspace_write.network_access=false' \
+    -c 'agents.enabled=false' \
+    -c 'agents.max_concurrent_threads_per_session=1' \
+    -c 'agents.max_depth=0'
+if [ "$interactive" = "true" ]; then
+    set -- --interactive "$@"
+fi
+
 set +e
-"$LOCAL_QUEUE" codex exec --ephemeral --strict-config -C "$target" --model "$MODEL" --sandbox workspace-write --json --disable multi_agent --disable multi_agent_v2 -c "model_provider=\"$PROVIDER\"" -c "model_reasoning_effort=\"$REASONING\"" -c 'approval_policy="never"' -c 'sandbox_workspace_write.network_access=false' -c 'agents.enabled=false' -c 'agents.max_concurrent_threads_per_session=1' -c 'agents.max_depth=0' < "$prompt_file"
+worker_started="true"
+PATH="$shim_dir:$PATH" \
+BIOHUB_QWEN_REAL_CODEX="$real_codex" \
+BIOHUB_QWEN_TARGET="$target" \
+BIOHUB_QWEN_COMMON="$target_common" \
+BIOHUB_QWEN_GIT_DIR="$target_git_dir" \
+BIOHUB_QWEN_BRANCH_REF="$branch_ref" \
+"$IMPLEMENTATION_QUEUE" "$@" < "$prompt_file" &
+queue_pid=$!
+wait "$queue_pid"
 worker_status=$?
+# A signal-style queue status cannot prove that its separately-grouped Codex
+# child was reaped. Retain the repository lock for operator verification.
+if [ "$worker_status" -lt 128 ]; then
+    worker_reaped="true"
+fi
+queue_pid=""
 set -e
 exit "$worker_status"

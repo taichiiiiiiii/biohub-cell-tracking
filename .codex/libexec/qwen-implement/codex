@@ -1,0 +1,78 @@
+#!/bin/sh
+# Revalidate the Biohub worktree after queue admission, immediately before Codex.
+
+set -eu
+
+die() {
+    printf '%s: %s\n' "qwen-implement-codex" "$1" >&2
+    exit 2
+}
+
+physical_dir() {
+    CDPATH= cd -- "$1" 2>/dev/null && pwd -P || true
+}
+
+for name in BIOHUB_QWEN_REAL_CODEX BIOHUB_QWEN_TARGET BIOHUB_QWEN_COMMON BIOHUB_QWEN_GIT_DIR BIOHUB_QWEN_BRANCH_REF; do
+    eval "value=\${$name:-}"
+    [ -n "$value" ] || die "missing launcher handoff: $name"
+done
+
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM 2>/dev/null || true
+
+case "$BIOHUB_QWEN_REAL_CODEX" in
+    /*) ;;
+    *) die "real Codex path is not absolute" ;;
+esac
+[ -x "$BIOHUB_QWEN_REAL_CODEX" ] || die "real Codex executable is unavailable"
+[ ! "$0" -ef "$BIOHUB_QWEN_REAL_CODEX" ] || die "refusing recursive shim execution"
+
+target="$(physical_dir "$BIOHUB_QWEN_TARGET")"
+[ -n "$target" ] || die "WORKTREE disappeared while queued"
+target_top="$(git -C "$target" rev-parse --path-format=absolute --show-toplevel 2>/dev/null || true)"
+target_top="$(physical_dir "$target_top")"
+[ "$target" = "$target_top" ] || die "WORKTREE top changed while queued"
+[ -f "$target/.git" ] && [ ! -L "$target/.git" ] || die "linked WORKTREE identity changed while queued"
+
+target_common="$(git -C "$target" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+target_common="$(physical_dir "$target_common")"
+[ "$target_common" = "$BIOHUB_QWEN_COMMON" ] || die "WORKTREE repository changed while queued"
+target_git_dir="$(git -C "$target" rev-parse --path-format=absolute --absolute-git-dir 2>/dev/null || true)"
+target_git_dir="$(physical_dir "$target_git_dir")"
+[ "$target_git_dir" = "$BIOHUB_QWEN_GIT_DIR" ] || die "WORKTREE git directory changed while queued"
+
+registered="false"
+while IFS= read -r line; do
+    case "$line" in
+        "worktree "*)
+            listed="$(physical_dir "${line#worktree }")"
+            if [ -n "$listed" ] && [ "$listed" = "$target" ]; then
+                registered="true"
+                break
+            fi
+            ;;
+    esac
+done <<EOF
+$(git -C "$target" worktree list --porcelain 2>/dev/null || die "failed to list registered worktrees")
+EOF
+[ "$registered" = "true" ] || die "WORKTREE is no longer registered"
+
+branch_ref="$(git -C "$target" symbolic-ref -q HEAD 2>/dev/null || true)"
+[ "$branch_ref" = "$BIOHUB_QWEN_BRANCH_REF" ] || die "WORKTREE branch changed while queued"
+case "${branch_ref#refs/heads/}" in
+    main | master | develop) die "WORKTREE moved to a protected branch while queued" ;;
+esac
+
+dirty="$(git -C "$target" -c core.fsmonitor=false -c core.fileMode=true -c core.ignorecase=false -c core.precomposeunicode=false status --porcelain=v1 --untracked-files=all --ignore-submodules=none 2>/dev/null || die "failed to recheck WORKTREE status")"
+[ -z "$dirty" ] || die "WORKTREE became dirty while queued"
+index_verbose="$(git -C "$target" ls-files -v 2>/dev/null)" || die "failed to inspect assume-unchanged index flags"
+assume_unchanged="$(printf '%s\n' "$index_verbose" | grep '^[a-z]' || true)"
+[ -z "$assume_unchanged" ] || die "WORKTREE has assume-unchanged index entries"
+index_tags="$(git -C "$target" ls-files -t 2>/dev/null)" || die "failed to inspect skip-worktree index flags"
+skip_worktree="$(printf '%s\n' "$index_tags" | grep '^S ' || true)"
+[ -z "$skip_worktree" ] || die "WORKTREE has skip-worktree index entries"
+
+# The shared queue may have converted only model/provider/catalog for an
+# explicitly interactive overflow. Preserve its argv exactly.
+real_codex="$BIOHUB_QWEN_REAL_CODEX"
+unset BIOHUB_QWEN_REAL_CODEX BIOHUB_QWEN_TARGET BIOHUB_QWEN_COMMON BIOHUB_QWEN_GIT_DIR BIOHUB_QWEN_BRANCH_REF
+exec "$real_codex" "$@"
