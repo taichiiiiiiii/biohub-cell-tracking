@@ -225,6 +225,31 @@ def test_csv_writer_raises_on_dangling_edge():
         writer.write_edges("dsA", nodes, [{"source_id": 1, "target_id": 999}])
 
 
+def test_core_uses_optional_serializer_in_the_existing_ordered_writer(tmp_path, monkeypatch):
+    from biohub.screen_output_bounds import ScreenNodeSerializer
+
+    nodes = {1: _node(1, 0, x=256.), 2: _node(2, 1, x=2.)}
+    edges = [{"source_id": 1, "target_id": 2}]
+    monkeypatch.setattr(pipeline_module, "_load_geff_as_dicts", lambda _path: (nodes, edges))
+    monkeypatch.setattr(pipeline_module, "filter_output_graph",
+                        lambda _cfg, n, e, **_kwargs: (n, e, pipeline_module.new_stats()))
+    serializer = ScreenNodeSerializer({"b": (2, 64, 256, 256), "a": (2, 64, 256, 256)})
+    path = tmp_path / "submission.csv"
+    result = pipeline_module.run_postproc_core(
+        (tmp_path / "b.geff", tmp_path / "a.geff"), path, _cfg(tmp_path),
+        deepcenter_loader=lambda _cfg: None, node_serializer=serializer,
+        write_run_stats_output=False, exclusive_output=True,
+    )
+    with path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert result["datasets"] == ["b", "a"] and result["total_rows"] == 6
+    assert [row["id"] for row in rows] == list(map(str, range(6)))
+    assert [row["row_type"] for row in rows] == ["node", "node", "edge"] * 2
+    assert rows[0]["x"] == rows[3]["x"] == "255"
+    assert [row["row_id"] for row in serializer.snapshot()["corrections"]] == [0, 3]
+    assert nodes[1]["x"] == 256.  # Serializer did not mutate the graph.
+
+
 # --------------------------------------------------------------------------
 # E23 all-node intensity-centroid refinement (Phase 2)
 # --------------------------------------------------------------------------

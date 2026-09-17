@@ -303,6 +303,29 @@ def load_deepcenter_veto_detector_strict(
     )
 
 
+def load_deepcenter_veto_detector_e31_target(
+    cfg: PostprocConfig,
+    checkpoint_path: Path,
+    manifest_path: Path,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Load E31 target ep500 DeepCenter artifact (package unchanged bestepoch2).
+
+    Uses the updated manifest hash for the 500-epoch metadata while keeping
+    all other expected constants identical to the strict loader. Never falls
+    back to alternate artifacts or relaxed verification.
+    """
+    return _load_deepcenter_veto_detector_strict_verified(
+        cfg,
+        checkpoint_path,
+        manifest_path,
+        expected_checkpoint_sha256=STRICT_DEEPCENTER_CHECKPOINT_SHA256,
+        expected_manifest_sha256="3bfe97304e9bbc3b3481a095392a1e83937315325bac8b987eb527d2951b96f3",
+        expected_epoch=STRICT_DEEPCENTER_EPOCH,
+        expected_manifest_model_config=STRICT_DEEPCENTER_MANIFEST_MODEL_CONFIG,
+        expected_checkpoint_model_config=STRICT_DEEPCENTER_CHECKPOINT_MODEL_CONFIG,
+    )
+
+
 def _dc_pool_frame_xy(volume: np.ndarray, factor: int) -> np.ndarray:
     if factor <= 1:
         return volume.astype(np.float32, copy=False)

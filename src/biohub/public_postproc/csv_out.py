@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
@@ -9,6 +10,7 @@ import pandas as pd
 
 SUBMISSION_COLUMNS = ["dataset", "row_type", "node_id", "t", "z", "y", "x", "source_id", "target_id"]
 CSV_COLUMNS = ["id", *SUBMISSION_COLUMNS]
+NodeSerializer = Callable[[dict[str, object], str, int], dict[str, object]]
 
 
 class SubmissionCsvWriter:
@@ -19,15 +21,16 @@ class SubmissionCsvWriter:
     filtered-graph's edge-list order.
     """
 
-    def __init__(self, handle: TextIO) -> None:
+    def __init__(self, handle: TextIO, *, node_serializer: NodeSerializer | None = None) -> None:
         self._writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
         self._writer.writeheader()
+        self._node_serializer = node_serializer
         self.row_id = 0
 
     def write_nodes(self, dataset: str, nodes_by_id: dict[int, dict[str, object]]) -> None:
         for node_id in sorted(nodes_by_id):
             node = nodes_by_id[node_id]
-            self._writer.writerow({
+            row = self._node_serializer(node, dataset, self.row_id) if self._node_serializer is not None else {
                 "id": self.row_id,
                 "dataset": dataset,
                 "row_type": "node",
@@ -38,7 +41,8 @@ class SubmissionCsvWriter:
                 "x": max(0, int(round(float(node["x"])))),
                 "source_id": -1,
                 "target_id": -1,
-            })
+            }
+            self._writer.writerow(row)
             self.row_id += 1
 
     def write_edges(self, dataset: str, nodes_by_id: dict[int, dict[str, object]], edges: list[dict[str, object]]) -> dict[int, int]:
