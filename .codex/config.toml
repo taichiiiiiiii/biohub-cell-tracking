@@ -1,9 +1,21 @@
 model = "gpt-5.6-sol"
-model_reasoning_effort = "ultra"
+model_reasoning_effort = "medium"
+# Native children remain SOL; implementation uses the external subscription-only
+# canonical launcher with --parent-reviewed --cloud-only --cloud-model qwen3.8-max, never native fallback.
+approvals_reviewer = "user"
+
+[features]
+multi_agent = true
+skill_mcp_dependency_install = false
+
+[features.multi_agent_v2]
+enabled = true
+min_wait_timeout_ms = 120000
+default_wait_timeout_ms = 120000
 
 [agents]
 enabled = true
-max_concurrent_threads_per_session = 4
-default_subagent_model = "gpt-5.6-sol"
+max_concurrent_threads_per_session = 2
+default_subagent_model = "gpt-5.6-terra"
 default_subagent_reasoning_effort = "medium"
 interrupt_message = true

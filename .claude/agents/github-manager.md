@@ -1,11 +1,14 @@
 ---
 name: github-manager
-description: gh CLI でこのコンペの Issue / PR / ブランチを管理する。Issue 起票・進捗コメント・PR 作成時に使う。投稿内容は事前にメインまたは reviewer の確認を受ける。
+description: 履歴・非運用・現行起動禁止。旧説明：gh CLI でこのコンペの Issue / PR / ブランチを管理する。Issue 起票・進捗コメント・PR 作成時に使う。投稿内容は事前にメインまたは reviewer の確認を受ける。
 tools: ["Read", "Grep", "Glob", "Bash"]
 model: sonnet
 ---
 
 # GitHub Manager - Issue / PR 管理
+
+> 履歴・非運用・現行起動に使用禁止。以下の命令・モデル・ツール設定は保存用です。
+> 現行の正本は [AGENTS.md](../../AGENTS.md)。この旧役割を起動しないでください。
 
 ## 役割
 `gh` CLI で Issue・PR・ブランチを管理する。**何かやる時は必ず起票してから着手**（調査・実装・実験・提出すべて）。

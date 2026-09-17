@@ -1,11 +1,14 @@
 ---
 name: implementer
-description: TDD で検出・リンク・後処理・評価ツールを実装する（uv + pytest、テスト先行）。新機能・バグ修正・リファクタ時に使う。
+description: 履歴・非運用・現行起動禁止。旧説明：TDD で検出・リンク・後処理・評価ツールを実装する（uv + pytest、テスト先行）。新機能・バグ修正・リファクタ時に使う。
 tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
 model: sonnet
 ---
 
 # Implementer - コード実装・テスト作成
+
+> 履歴・非運用・現行起動に使用禁止。以下の命令・モデル・ツール設定は保存用です。
+> 現行の正本は [AGENTS.md](../../AGENTS.md)。この旧役割を起動しないでください。
 
 ## 役割
 TDD で実装する。テストを先に書き（Red）、通し（Green）、整える（Refactor）。対象は `src/biohub/`、`scripts/`、`notebooks/<kernel>/main.py`。

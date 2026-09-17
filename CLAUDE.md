@@ -1,5 +1,9 @@
 # Biohub – Cell Tracking During Development（Kaggle）
 
+現行の指示入口は `AGENTS.md`。以下は初期構築の参照・履歴であり、事前全文読込は不要。
+現在の状態は実験台帳の該当最新節、科学条件は対応する固定契約を確認する。
+過去のモデル・ブランチ・未提出・規模・締切記述は、現在の指示や外部操作の承認ではない。
+
 ## プロジェクト概要
 
 - **目的**: 3D+時間の顕微鏡動画（ゼブラフィッシュ胚、2系統 `44b6`/`6bba`）から細胞の検出・追跡グラフを出し、公式指標（adjusted edge Jaccard + 0.1×division Jaccard）で上位を取る。
@@ -27,7 +31,27 @@
 
 `develop`（既定・開発）／`main`（安定）。**必ず Issue を起票してから着手**し、`feat/issue{N}-slug` → develop へ PR → CI（ruff + pytest）緑 → squash merge。`Closes #N` は PR 本文に書く。CI 確認は `gh api repos/taichiiiiiiii/biohub-cell-tracking/actions/runs?branch=<br>`。
 
-## サブエージェント（`.claude/agents/`）
+## 少数・低オーバーヘッドのサブエージェント（2026-09-08 最新ユーザー指示）
+
+> 履歴・非運用・現行起動に使用禁止。以下は当時の運用記録。
+> 現行は [AGENTS.md](AGENTS.md)：2026-09-14にMAX実装へ変更。評価入口は別の読取専用経路、親が最終採否。
+
+ユーザーがサブエージェントを再有効化した。親SOL/mediumが設計・採否を担当し、実装は
+QwenCloud Individual Token Planの`qwen3.8-flash`固定・監督付き経路へ渡す（2026-09-12上書き）。
+共有queueには必ず`--cloud-only --cloud-model qwen3.8-flash`を渡す。共有既定は変更せず、
+Max・Plus・ローカルFlash・PAYG・別モデル／providerへのfallbackは禁止。
+原因分析・レビューは原則1〜2人のSOL子（既定medium、難度で調整）へ渡す。
+親・子とも単純確認low、通常medium、難しい因果/漏洩/指標問題だけ理由を明示してhigh。
+ultra常用はしない。Qwenの現行adapterはnoneを維持し、SOLのeffort尺度を流用しない。
+短周期ポーリング、全履歴fork、重複調査、儀式的な受領書の増殖を避ける。
+待機・文脈・所有範囲の詳細は `AGENTS.md` を参照。旧worktree必須launcherは再開せず、
+canonical対応経路の検証前はQwen実装HOLD。自動goal/heartbeatでQwenを起動しない。
+以下の旧役割表は履歴でありモデル選択の根拠にしない。科学条件・直列物理評価は維持する。
+
+## 旧サブエージェント定義（`.claude/agents/`・使用停止）
+
+> 履歴・非運用・現行起動に使用禁止。旧役割の実行例やモデル指定を使用しない。
+> 現行の入口は [AGENTS.md](AGENTS.md) のみ。
 
 | 役割 | 使うとき | model |
 |---|---|---|

@@ -15,6 +15,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO / ".codex/bin/qwen-implement"
 POLICY = REPO / ".codex/runners/biohub_implementer.instructions.md"
+FLASH_POLICY = REPO / ".codex/runners/biohub_flash_implementer.instructions.md"
+MAX_POLICY = REPO / ".codex/runners/biohub_max_implementer.instructions.md"
 SHIM = REPO / ".codex/libexec/qwen-implement/codex"
 SHARED_QUEUE = Path("/Users/taichi/.local/bin/qwen-implementation-queue")
 
@@ -78,8 +80,13 @@ def harness(tmp_path: Path) -> Harness:
         'IMPLEMENTATION_QUEUE="/Users/taichi/.local/bin/qwen-implementation-queue"',
         f'IMPLEMENTATION_QUEUE="{queue}"',
     )
+    launcher_text = launcher_text.replace(
+        'CANONICAL="/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking"', f'CANONICAL="{root}"'
+    )
     launcher.write_text(launcher_text)
     policy.write_bytes(POLICY.read_bytes())
+    (policy.parent / FLASH_POLICY.name).write_bytes(FLASH_POLICY.read_bytes())
+    (policy.parent / MAX_POLICY.name).write_bytes(MAX_POLICY.read_bytes())
     shim.write_bytes(SHIM.read_bytes())
     tracked = root / "tracked.txt"
     tracked.write_text("clean\n")
@@ -108,6 +115,8 @@ argv = sys.argv[1:]
 cloud_only = bool(argv and argv[0] == "--cloud-only")
 if cloud_only:
     argv = argv[1:]
+if len(argv) >= 2 and argv[0] == "--cloud-model" and argv[1] in ("qwen3.8-flash", "qwen3.8-max"):
+    argv = argv[2:]
 mutation = os.environ.get("QWEN_TEST_MUTATE")
 target = Path(os.environ["BIOHUB_QWEN_TARGET"])
 if mutation == "dirty":
@@ -158,12 +167,49 @@ def queue_argv(harness: Harness) -> list[str]:
     return json.loads((harness.capture / "queue.json").read_text())
 
 
+@pytest.mark.parametrize("model", ["qwen3.8-flash", "qwen3.8-max"])
+def test_canonical_authoring_preserves_dirty_input(harness: Harness, model: str) -> None:
+    run("git", "-C", harness.root, "switch", "-c", "feature/author")
+    original = harness.root / "tracked.txt"
+    original.write_text("user WIP\n")
+    result = harness.invoke("--parent-reviewed", "--cloud-only", "--cloud-model", model,
+                            target=harness.root)
+    assert result.returncode == 0, result.stderr.decode()
+    argv = queue_argv(harness)
+    assert argv[:3] == ["--cloud-only", "--cloud-model", model]
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
+    assert "project_doc_max_bytes=0" in argv
+    assert 'features.shell_tool=false' in argv
+    assert 'features.unified_exec=false' in argv
+    assert original.read_text() == "user WIP\n"
+    assert not (harness.root / ".git/biohub-implement.lock").exists()
+    if model == "qwen3.8-max":
+        prompt_text = (harness.capture / "prompt.bin").read_text()
+        assert "User override 2026-09-14" in prompt_text
+        assert "Authoring-only tasks" in prompt_text
+
+
+@pytest.mark.parametrize("case", ["protected", "linked", "max", "missing_model"])
+def test_canonical_authoring_rejects_before_queue(harness: Harness, case: str) -> None:
+    args = ["--parent-reviewed", "--cloud-only", "--cloud-model", "qwen3.8-flash"]
+    target = harness.root
+    if case == "linked":
+        target = harness.worktree
+    if case == "max":
+        args[-1] = "qwen3.8-max"
+    if case == "missing_model":
+        args = args[:2]
+    result = harness.invoke(*args, target=target)
+    assert result.returncode != 0
+    assert not (harness.capture / "queue.json").exists()
+
+
 def test_explicit_cloud_only_preserves_fixed_queue_input(harness: Harness) -> None:
     result = harness.invoke("--cloud-only")
     assert result.returncode == 0, result.stderr.decode()
     argv = queue_argv(harness)
-    assert argv[:3] == ["--cloud-only", "codex", "exec"]
-    queue_input = argv[1:]
+    assert argv[:5] == ["--cloud-only", "--cloud-model", "qwen3.8-flash", "codex", "exec"]
+    queue_input = argv[3:]
     assert "--interactive" not in argv
     assert queue_input[queue_input.index("--model") + 1] == "qwen38-flash-next"
     assert "--strict-config" in queue_input
@@ -188,13 +234,53 @@ def test_explicit_cloud_only_preserves_fixed_queue_input(harness: Harness) -> No
     assert codex_argv[0] == "exec"
     assert "--cloud-only" not in codex_argv
     prompt = (harness.capture / "prompt.bin").read_text()
-    assert "exact qwen3.7-plus" in prompt
+    assert "exact qwen3.8-flash" in prompt
     assert "qwen_token_plan subscription-only" in prompt
-    assert "fallback and retries zero" in prompt
+    assert "fallback and transport retries zero" in prompt
     assert "Quota exhaustion, authentication failure, provider error" in prompt
     assert "Request retries, stream retries" in prompt
-    assert "never start from automation" in prompt
+    assert "never start from a heartbeat or schedule" in prompt
     assert "bounded task" in prompt
+
+
+@pytest.mark.parametrize("model", ["qwen3.8-flash"])
+def test_cloud_selector_is_explicit_and_uses_noncontradictory_policy(harness: Harness, model: str) -> None:
+    result = harness.invoke("--cloud-only", "--cloud-model", model)
+    assert result.returncode == 0, result.stderr.decode()
+    argv = queue_argv(harness)
+    assert argv[:5] == ["--cloud-only", "--cloud-model", model, "codex", "exec"]
+    prompt = (harness.capture / "prompt.bin").read_text()
+    assert f"exact {model} through qwen_token_plan subscription-only" in prompt
+    assert "supersedes historical Max/Plus/local-model names" in prompt
+    assert "authoring-only tasks" in prompt
+    assert "exactly `qwen3.7-plus`" not in prompt
+    assert "fallback and transport retries zero" in prompt
+    assert "never start from a heartbeat or schedule" in prompt
+    assert not harness.lock.exists()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--cloud-model", "qwen3.8-flash"),
+        ("--interactive", "--cloud-model", "qwen3.8-flash"),
+        ("--cloud-only", "--cloud-model"),
+        ("--cloud-only", "--cloud-model=qwen3.8-flash"),
+        ("--cloud-only", "--cloud-model", "qwen3.8-max-preview"),
+        ("--cloud-only", "--cloud-model", "qwen3.8-max"),
+        ("--cloud-only", "--cloud-model", "qwen38-flash-next"),
+        ("--cloud-only", "--cloud-model=qwen3.8-max"),
+        ("--interactive", "--cloud-model", "qwen3.8-max"),
+        ("--cloud-only", "--cloud-model", "qwen3.7-plus"),
+        ("--cloud-only", "--cloud-model", "qwen3.8-flash", "--cloud-model", "qwen3.8-flash"),
+        ("--cloud-only", "--cloud-model", "qwen3.8-max", "--cloud-model", "qwen3.8-flash"),
+    ],
+)
+def test_invalid_flash_selectors_do_not_reach_queue(harness: Harness, args: tuple[str, ...]) -> None:
+    result = harness.invoke(*args)
+    assert result.returncode == 2
+    assert not (harness.capture / "queue.json").exists()
+    assert not harness.lock.exists()
 
 
 @pytest.mark.parametrize(
@@ -432,8 +518,8 @@ def test_shared_queue_validate_and_cloud_conversion_use_mock_metadata(
     result = harness.invoke("--cloud-only")
     assert result.returncode == 0
     queued = queue_argv(harness)
-    assert queued[:3] == ["--cloud-only", "codex", "exec"]
-    argv = queued[1:]
+    assert queued[:5] == ["--cloud-only", "--cloud-model", "qwen3.8-flash", "codex", "exec"]
+    argv = queued[3:]
     module.validate(argv)
 
     config = tmp_path / "config.toml"
@@ -463,3 +549,77 @@ def test_shared_queue_validate_and_cloud_conversion_use_mock_metadata(
     assert 'model_reasoning_effort="none"' in overrides
     assert f'model_catalog_json="{catalog}"' in overrides
     assert all("qwen_flash_local" not in value for value in converted)
+
+    # The existing implicit Plus route and its catalog remain untouched.
+    parsed, interactive, cloud_only, model = module.parse_route(["--cloud-only", *argv])
+    assert parsed == argv and not interactive and cloud_only and model == "qwen3.7-plus"
+    flash_catalog = tmp_path / "flash-catalog.json"
+    flash_catalog.write_text(json.dumps({"models": [{"slug": "qwen3.8-flash"}]}))
+    module.CLOUD_FLASH_CATALOG = flash_catalog
+    selected = queued
+    parsed, interactive, cloud_only, model = module.parse_route(selected)
+    assert parsed == argv and not interactive and cloud_only and model == "qwen3.8-flash"
+    flash = module.cloud_command(parsed, model)
+    assert flash[flash.index("--model") + 1] == "qwen3.8-flash"
+    flash_overrides = [flash[index + 1] for index, arg in enumerate(flash[:-1]) if arg == "-c"]
+    assert 'model_provider="qwen_token_plan"' in flash_overrides
+    assert 'model_reasoning_effort="none"' in flash_overrides
+    assert f'model_catalog_json="{flash_catalog}"' in flash_overrides
+    assert provider in flash_overrides
+    assert "model_context_window=32768" in flash_overrides
+    assert module.cloud_command(argv) == converted
+
+    max_catalog = tmp_path / "max-catalog.json"
+    max_catalog.write_text(json.dumps({"models": [{"slug": "qwen3.8-max"}]}))
+    module.CLOUD_MAX_CATALOG = max_catalog
+    selected = ["--cloud-only", "--cloud-model", "qwen3.8-max", *argv]
+    parsed, interactive, cloud_only, model = module.parse_route(selected)
+    assert parsed == argv and not interactive and cloud_only and model == "qwen3.8-max"
+    maximum = module.cloud_command(parsed, model)
+    assert maximum[maximum.index("--model") + 1] == "qwen3.8-max"
+    max_overrides = [maximum[index + 1] for index, arg in enumerate(maximum[:-1]) if arg == "-c"]
+    assert f'model_catalog_json="{max_catalog}"' in max_overrides
+    assert 'model_provider="qwen_token_plan"' in max_overrides
+    assert 'model_reasoning_effort="none"' in max_overrides
+    assert "model_context_window=32768" in max_overrides
+    assert provider in max_overrides
+    assert module.cloud_command(argv) == converted
+    assert module.cloud_command(argv, "qwen3.8-flash") == flash
+    max_catalog.write_text(json.dumps({"models": [{"slug": "qwen3.8-flash"}]}))
+    with pytest.raises(SystemExit):
+        module.cloud_command(argv, "qwen3.8-max")
+
+    # A renamed or mixed catalog cannot silently select a different model.
+    flash_catalog.write_text(json.dumps({"models": [{"slug": "qwen3.7-plus"}]}))
+    with pytest.raises(SystemExit):
+        module.cloud_command(argv, "qwen3.8-flash")
+    with pytest.raises(SystemExit):
+        module.cloud_command(argv, "qwen3.8-max-preview")
+    config.write_text(config.read_text().replace(expected["base_url"], "https://example.invalid/payg"))
+    with pytest.raises(SystemExit):
+        module.cloud_command(argv)
+
+
+@pytest.mark.parametrize(
+    "prefix,suffix",
+    [
+        (["--cloud-model", "qwen3.8-flash"], []),
+        (["--interactive", "--cloud-model", "qwen3.8-flash"], []),
+        (["--cloud-only", "--cloud-model"], []),
+        (["--cloud-only", "--cloud-model=qwen3.8-flash"], []),
+        (["--cloud-only", "--cloud-model", "qwen3.8-max-preview"], []),
+        (["--cloud-only", "--cloud-model=qwen3.8-max"], []),
+        (["--interactive", "--cloud-model", "qwen3.8-max"], []),
+        (["--cloud-only", "--cloud-model", "qwen3.7-plus"], []),
+        (["--cloud-only", "--cloud-model", "qwen3.8-flash", "--cloud-model", "qwen3.8-flash"], []),
+        (["--cloud-only"], ["--cloud-model", "qwen3.8-flash"]),
+        (["--cloud-only"], ["--cloud-model", "qwen3.8-max"]),
+        (["--cloud-only", "--cloud-model", "qwen3.8-max", "--cloud-model", "qwen3.8-flash"], []),
+    ],
+)
+def test_shared_queue_rejects_bad_selector_before_model_or_auth(
+    prefix: list[str], suffix: list[str]
+) -> None:
+    module = load_shared_queue()
+    with pytest.raises(SystemExit):
+        module.parse_route([*prefix, "codex", "exec", *suffix])

@@ -1,47 +1,53 @@
-# Biohub Cell Tracking During Development
+# Biohub Cell Tracking
 
-## Mission
+Work in Japanese in the canonical checkout on its current feature branch, never develop/main/master.
 
-Improve the 3D+t microscopy cell-detection and lineage-tracking pipeline for `taichiiiiiiii/biohub-cell-tracking`. Work in Japanese unless the user asks otherwise. The target repository's active development branch is `develop`.
+## Boundaries
 
-## Sources of truth
+- Preserve user WIP, frozen evaluation inputs and runtime. No new checkouts/worktrees, destructive cleanup, stash/reset, global edits, or plugin/hook removal. Heavy physical evaluation is serial.
+- Keep official/ read-only; adapt via src/biohub/. Never expose credentials, tokens or signed URLs, retrieve Keychain secrets, or delete data.
+- During the macOS screen lock or a Qwen implementation lock, the parent may use the existing authenticated Kaggle CLI/API for read-only competition files, submissions/status, scores, leaderboard, quota/deadline and kernel-status inspection without browser UI. This does not relax the Qwen worker's network ban or authorize downloads, kernel pushes/runs, submissions, comments, joins, settings changes or credential refresh. On authentication failure, stop without retrying and request user re-authentication while the screen is unlocked; never read, print or transmit credential-file contents.
+- Kaggle execution/submission, GPU spending, team joining, publication, merge, release and tags need explicit user approval. Subagents must not submit, push, create PRs or send external data. Git commit/push obey the user's completion, verification and branch gates; never infer permission from a schedule.
+- Local work is small-data analysis and tests; training/full inference belongs on Kaggle only when authorized. Do not edit frozen source or commit/push while a physical run is generating or remains unscored.
 
-Use evidence in this order: (1) `official/` metric implementation and tests, (2) the repository code and focused tests, (3) `CLAUDE.md`, `CHECKLIST.md`, `analysis/experiment_ledger.md`, and `docs/LESSONS.md`, (4) Kaggle scores and reproducible public notebooks, and (5) external papers. State dataset, annotation, metric, and license differences when transferring external methods.
+## Commit and push
 
-## Non-negotiable constraints
+Only the parent agent may commit or push, and only after explicit user authorization for that action; Qwen and native subagents never do so. A commit must be one complete logical unit whose acceptance criteria are met, with relevant checks passing (or an explicit recorded reason they could not run), the final diff reviewed, and no credentials, generated competition data, or unrelated changes staged. Stage only the named paths and use an accurate conventional commit message. Push only at a genuine milestone from a non-protected task branch after a successful fetch proves the remote branch is not ahead or diverged. Never push directly to `main`, `master`, or `develop`, never force-push, and never push while an authorized physical run remains unscored. If any condition is uncertain, preserve the work locally and report the blocker.
 
-- The score is adjusted edge Jaccard plus 0.1 times division Jaccard. Report both components and per-dataset results.
-- Ground truth is sparse; unmatched detections are not equivalent to fully supervised false positives. Never infer full annotation coverage.
-- Public test contains four dummy datasets and is in-sample. Never call its score generalization performance.
-- Keep `official/` read-only. Adapt through `src/biohub/`.
-- Edges must connect t to t+1. Gap handling must create intermediate nodes.
-- Local RAM and disk are constrained. Training and full inference run on Kaggle; local work is limited to small data, tests, and analysis.
-- Never push a Kaggle kernel, submit, join a team, spend GPU quota, publish, merge, release, or tag without explicit user approval.
+Keep commits small and independently reviewable or revertible. Split unrelated behavior, tests, configuration, experiment records, and separate hypotheses when each is a valid standalone unit; do not bundle separate completed tasks into one commit. Do not split an implementation from the directly required test or frozen contract update when that would leave an invalid intermediate commit.
 
-## Workflow
+Use an issue-first workflow for every repository-scoped file change, experiment, durable research result, or external operation. Before work, the parent creates a GitHub Issue containing the goal, exact scope, acceptance checks, and competition/safety boundaries; Qwen and native subagents only report to the parent and never create, comment on, or close Issues. Use a non-protected branch named `codex/issue-<number>-<slug>` and reference the Issue in commits. After verification, the parent must push the branch, then add an Issue result comment with outcome, changed paths, checks, commit and branch, plus remaining risks. Close the Issue only after that push succeeds and acceptance criteria are met. If work, scoring, verification, commit, or push is incomplete, record the blocker and keep the Issue open. Emergency data-protection actions and simple conversational or read-only status answers are exempt; any follow-up repository work is not.
 
-Start from an Issue and a falsifiable hypothesis. Inspect the real evaluation path before coding. Establish the measurement unit and noise floor before claiming improvement. Use video-level splits stratified by `44b6` and `6bba`; keep related frames from one video in one fold. Implement one isolated lever, add focused tests, run repository checks, and record negative as well as positive results in the experiment ledger. Estimate hidden-test runtime for roughly 200 videos and retain a feasible fallback path.
+## Read only what the task needs
 
-## Delegation
+Evidence priority: official metric/tests, current code/tests, relevant project records, reproducible Kaggle evidence, then external papers. No blanket document preload.
+- Status: latest relevant section of analysis/experiment_ledger.md, not its entire history.
+- Scientific design/evaluation: relevant frozen experiment contract and analysis/gold_loop_protocol.md; inspect official metric path when the claim depends on it.
+- Metric/format diagnosis: official/metrics.md and src/biohub/evaluate.py plus affected tests.
+- Implementation: assigned task, affected source/tests; docs/LESSONS.md or CHECKLIST.md only for a relevant known failure.
+- Provider routing: .codex/runners/biohub_implementer.instructions.md for Max implementation and the selected launcher. CLAUDE.md's dated setup/role history is not current status or authorization.
+- AGENTS.md is the current authority. Historical/non-operational prompts (including old analysis task briefs and .claude roles) must never be piped into a current launcher. Prepare a fresh bounded brief under current policy.
 
-Use the minimum useful specialists. Read-heavy specification, literature, and review tasks may run independently. Avoid parallel edits to metric conversion, graph construction, or the same notebook. The main agent owns hypotheses, integration, adoption decisions, and all external actions.
+## Scientific work
 
-- Run the parent agent with `gpt-5.6-sol` at `ultra` reasoning effort. Choose
-  native subagent effort by task: `medium` for bounded specification and
-  submission checks, and `high` for experiment design, tracking research, and
-  scientific review. The default fallback is `medium`.
-- When the Qwen service is healthy, delegate code and test implementation
-  through the external worker:
-  `printf '%s\n' "$TASK" | .codex/bin/qwen-implement /absolute/linked/worktree`.
-  Do not use native `spawn_agent` for Qwen implementation. Codex 0.151.0 does
-  not propagate a custom `model_provider` into native child roles.
-- The external worker uses local `qwen3.8:27b` Q4_K_M through Ollama, addressed
-  by the local `qwen38-27b` alias and a dedicated minimal Codex home. It uses
-  low reasoning plus `/no_think` for bounded implementation and requires no
-  cloud-model credential.
-- Give each worker a clean linked worktree on a non-protected branch. Multiple
-  independent callers may queue work, but `/Users/taichi/.local/bin/qwen38-queue`
-  permits only one physical Qwen inference at a time on this 48 GB Mac. Assigned
-  files must not overlap.
-- Parallelize independent read-only work, but do not let multiple agents edit the same files or run heavy experiments concurrently.
-- Before adopting Qwen-authored changes, the SOL parent agent must reread the complete diff and rerun the relevant pytest and ruff checks itself.
+Start scientific changes from an Issue and falsifiable hypothesis, with measurement unit, noise floor, control and acceptance gate fixed before results. Follow hypothesis → diagnosis → independent review → isolated change → focused tests → serial physical evaluation → failure/result record → next design.
+- Score = adjusted edge Jaccard + 0.1 × division Jaccard; report both and per-dataset results. Sparse unmatched detections are not blanket false positives.
+- Public4 is dummy in-sample data, never generalization evidence. Split whole videos, stratify 44b6/6bba, preserve unexposed GT boundaries.
+- Edges are t→t+1; gaps require intermediate nodes. Estimate hidden-scale runtime (~200 videos) and retain an already-required feasible fallback. State data, annotation, metric and license differences for transferred methods.
+- Record positive and negative results once in the ledger, with required reproducibility hashes. Configuration changes, test success and worker exit0 are not scientific improvement or goal resumption.
+
+## Delegation and implementation
+
+- Parent owns design/adoption. Submission checks use Luna/low; spec investigation and experiments use Terra/medium; tracking research and scientific review use Sol/high. Do not use xhigh, max or ultra routinely, and do not claim a live model/effort switch from file edits.
+- Delegate 1–2 concrete independent tasks only alongside useful parent work; no nested delegation or ceremonial review chains. Briefs contain goal, exact file ownership, constraints, acceptance and output limit; prefer minimal context/fork_turns="none". Do not duplicate investigations.
+- While children run, do useful separate work. Otherwise wait twice estimated remaining time, or 120 seconds if unknown, subject to tool/higher-priority limits. No short polling or restarting on timeout.
+- Implementation, feature engineering, training/inference code and directly needed unit/functional tests use QwenCloud Individual Token Plan qwen3.8-max (user override 2026-09-14 lifting Flash-only implementation). Pass --parent-reviewed --cloud-only --cloud-model qwen3.8-max; keep shared defaults unchanged. No other implementation model, PAYG, provider fallback, purchase/reset or authentication change. Provider request/stream retries remain zero.
+- The separate qwen-evaluate route remains evaluation-only for submission candidates, important private-score-sensitive proposals, CV/leakage/tracking-evaluation/reproducibility changes, or multi-module changes. MAX has no numeric, percentage, Goal-wide or per-revision evaluation cap. The parent may invoke it whenever a fresh read-only evaluation materially reduces adoption risk or resolves a concrete uncertainty, and records the trigger, new evidence or changed risk plus the final decision. A materially changed candidate is eligible again; an unchanged candidate may be re-evaluated only when acceptance criteria, evidence or unresolved risk materially changes. Never repeat an identical packet without a stated new reason, pad review activity or let MAX replace the parent decision. Read .codex/runners/biohub_max_implementer.instructions.md only for this role; it never reimplements.
+- Give Max only acceptance criteria, diff, changed files, relevant test/experiment results and minimal surrounding code, not a whole repository, long history or large logs. It returns major defects, leakage/evaluation risks, missing verification and a short adoption recommendation. Parent Codex decides adoption, experiment continuation and submission.
+- Parent-only Max entry: `.codex/bin/qwen-evaluate --parent-reviewed < evaluation.json`; input contract is in .codex/runners/biohub_max_implementer.instructions.md. Max implementation is a separate route from evaluation; canonical authoring uses `.codex/bin/qwen-implement --parent-reviewed --cloud-only --cloud-model qwen3.8-max CANONICAL < task.txt`, read-only/no-tools, with parent-reviewed minimal redacted input and parent-applied validated output. Existing WIP is allowed only in this authoring mode.
+- Qwen may be started by a direct request or by the parent during an active Goal. For Goal continuation, wait for the previous process to end, review its delivery and results, then issue a new bounded hypothesis or evidence-based correction. There is no fixed implementation-attempt cap for the Goal or a hypothesis while each invocation is materially different, evidence-based and has explicit acceptance checks. Permit one implementation at a time for this project/worktree and no identical blind retry. A pre-admission busy result may be retried once after capacity is confirmed free. If the same failure repeats twice without new causal evidence, reject only that hypothesis/checkpoint and automatically continue to the next distinct testable hypothesis; do not block the whole Goal for one failed hypothesis or unavailable MAX review. MAX is optional during development and required only before high-risk adoption. Stop after the Goal success condition, eight consecutive valid non-improving hypotheses, or when no safe in-scope testable hypothesis remains. Never start from heartbeats or schedules. Verify canonical-compatible subscription routing; do not revive the linked-worktree launcher in canonical. If unavailable, report the blocker. Native SOL spawn is not Qwen.
+- Keep Qwen adapter effort none; do not infer internal reasoning behavior or substitute unsupported effort settings. Parent may edit small routing/docs locally; Qwen Cloud Max authors application code. Parent reviews delivery and sufficient relevant results; use independent scientific review for material scientific changes and Max only at the eligibility gate above. Do not add duplicate tests/reviews to small reversible changes or extra experiments/abstractions when evidence is sufficient.
+
+## Smallest complete change
+
+Reuse existing structures, dependencies and abstractions. No speculative frameworks, generic layers, new documents, compatibility shims or fallback routes without a concrete current requirement. Fix only the requested scope; use relevant existing tests, not repeated full-suite runs or reviews. Once explicit acceptance is met, stop. Re-read evidence only after changes or a concrete contradiction.

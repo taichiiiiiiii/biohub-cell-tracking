@@ -16,11 +16,20 @@ MODEL_CATALOG="/Users/taichi/.codex-local-flash/models.json"
 PROVIDER_DEFINITION='{name="Local Flash Next",base_url="http://127.0.0.1:11436/v1",wire_api="responses",requires_openai_auth=false,request_max_retries=0,stream_max_retries=0,stream_idle_timeout_ms=600000}'
 MAX_TASK_BYTES=1048576
 PROTECTED_BRANCHES="main master develop"
-POLICY_BASENAME="biohub_implementer.instructions.md"
+POLICY_BASENAME="biohub_flash_implementer.instructions.md"
+CLOUD_MODEL="qwen3.8-flash"
+AUTHORING="false"
+CANONICAL="/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking"
 
 usage() {
     cat <<'USAGE'
-Usage: qwen-implement --cloud-only WORKTREE
+Usage: qwen-implement --cloud-only [--cloud-model qwen3.8-flash] WORKTREE
+       qwen-implement --parent-reviewed --cloud-only --cloud-model qwen3.8-max CANONICAL < task.txt
+
+The parent-reviewed route accepts the canonical checkout with existing WIP,
+uses read-only authoring (no tools), and returns code for parent validation.
+The flag attests parent-reviewed bounded input; it is not an authentication
+boundary. Active-Goal use is allowed by AGENTS.md; never use from heartbeats/schedules.
 
 Read one bounded implementation task from stdin and run an external Qwen worker
 inside a clean, registered linked worktree of this repository.
@@ -29,8 +38,8 @@ WORKTREE must be the exact worktree top level on a non-protected branch.
 Primary checkouts, foreign repositories, detached HEADs, dirty worktrees, and
 main/master/develop are rejected.
 
---cloud-only is required for one directly user-initiated, parent-supervised
-subscription task. There is no default local route, fallback, or retry.
+--cloud-only is required for one directly requested or AGENTS.md-authorized active-Goal
+subscription task. There is no default local route, fallback, or transport retry.
 USAGE
 }
 
@@ -110,12 +119,32 @@ case "${1:-}" in
         ;;
 esac
 
-[ "$#" -eq 2 ] || {
+if [ "${1:-}" = "--parent-reviewed" ]; then
+    AUTHORING="true"
+    MAX_TASK_BYTES=32768
+    shift
+    [ "$#" -eq 4 ] || die "canonical authoring requires explicit cloud model and target"
+fi
+
+{ [ "$#" -eq 2 ] || [ "$#" -eq 4 ]; } || {
     usage >&2
-    die "expected exactly --cloud-only WORKTREE"
+    die "expected --cloud-only [--cloud-model qwen3.8-flash] WORKTREE"
 }
 [ "$1" = "--cloud-only" ] || die "explicit --cloud-only must appear once before WORKTREE"
 shift
+if [ "$#" -eq 3 ]; then
+    [ "$1" = "--cloud-model" ] || die "expected exact --cloud-model selector"
+    case "$2" in
+        qwen3.8-flash) POLICY_BASENAME="biohub_flash_implementer.instructions.md" ;;
+        qwen3.8-max)
+            [ "$AUTHORING" = "true" ] || die "qwen3.8-max implementation requires canonical parent-reviewed authoring"
+            POLICY_BASENAME="biohub_implementer.instructions.md"
+            ;;
+        *) die "only exact qwen3.8-flash or canonical qwen3.8-max is allowed" ;;
+    esac
+    CLOUD_MODEL="$2"
+    shift 2
+fi
 case "$1" in -*) die "WORKTREE must follow --cloud-only" ;; esac
 
 for tool in git codex mktemp cat tr wc iconv rm grep mkdir rmdir; do
@@ -166,7 +195,13 @@ target_top="$(physical_dir "$target_top")"
 
 # A linked worktree has a regular .git file. The primary checkout has a .git
 # directory; symlink imitations are rejected.
-[ -f "$target/.git" ] && [ ! -L "$target/.git" ] || die "WORKTREE must be a registered linked worktree, not the primary checkout"
+if [ "$AUTHORING" = "true" ]; then
+    canonical="$(physical_dir "$CANONICAL")"
+    [ "$target" = "$canonical" ] && [ "$launcher_top" = "$canonical" ] || die "authoring requires canonical checkout"
+    [ -d "$target/.git" ] && [ ! -L "$target/.git" ] || die "canonical git directory required"
+else
+    [ -f "$target/.git" ] && [ ! -L "$target/.git" ] || die "WORKTREE must be a registered linked worktree, not the primary checkout"
+fi
 
 target_common="$(git -C "$target" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
 [ -n "$target_common" ] || die "cannot resolve target git common directory"
@@ -176,7 +211,9 @@ target_common="$(physical_dir "$target_common")"
 target_git_dir="$(git -C "$target" rev-parse --path-format=absolute --absolute-git-dir 2>/dev/null || true)"
 [ -n "$target_git_dir" ] || die "cannot resolve target git directory"
 target_git_dir="$(physical_dir "$target_git_dir")"
-[ "$target_git_dir" != "$target_common" ] || die "primary checkout is not allowed"
+if [ "$AUTHORING" != "true" ]; then
+    [ "$target_git_dir" != "$target_common" ] || die "primary checkout is not allowed"
+fi
 
 registered="false"
 while IFS= read -r line; do
@@ -210,7 +247,9 @@ mkdir -- "$worker_lock" 2>/dev/null || die "WORKTREE implementation lock exists 
 lock_owned="true"
 
 dirty="$(git -C "$target" -c core.fsmonitor=false -c core.fileMode=true -c core.ignorecase=false -c core.precomposeunicode=false status --porcelain=v1 --untracked-files=all --ignore-submodules=none 2>/dev/null || die "failed to inspect WORKTREE status")"
-[ -z "$dirty" ] || die "WORKTREE must be clean, including untracked files"
+if [ "$AUTHORING" != "true" ]; then
+    [ -z "$dirty" ] || die "WORKTREE must be clean, including untracked files"
+fi
 index_verbose="$(git -C "$target" ls-files -v 2>/dev/null)" || die "failed to inspect assume-unchanged index flags"
 assume_unchanged="$(printf '%s\n' "$index_verbose" | grep '^[a-z]' || true)"
 [ -z "$assume_unchanged" ] || die "WORKTREE has assume-unchanged index entries"
@@ -229,7 +268,7 @@ is_blank "$task_file" && die "task is empty or whitespace-only"
 
 prompt_file="$(mktemp "${TMPDIR:-/tmp}/biohub-qwen-prompt.XXXXXX")" || die "cannot create prompt file"
 chmod 600 "$prompt_file"
-printf '%s\n' 'Implementation routing: exact qwen3.7-plus through qwen_token_plan subscription-only cloud; directly user-initiated, parent-supervised one-shot; configured reasoning effort none; fallback and retries zero; stop on quota, authentication, provider, or routing error; never start from automation, a heartbeat, or an unattended goal continuation.' > "$prompt_file" || die "cannot write model banner"
+printf '%s\n' "Implementation routing: exact $CLOUD_MODEL through qwen_token_plan subscription-only cloud; directly requested or bounded active-Goal invocation under AGENTS.md; configured reasoning effort none; fallback and transport retries zero; stop this invocation on quota, authentication, provider, or routing error; never start from a heartbeat or schedule." > "$prompt_file" || die "cannot write model banner"
 cat "$policy_file" >> "$prompt_file" || die "cannot copy fixed policy"
 printf '\n\n--- BOUNDED TASK (verbatim) ---\n\n' >> "$prompt_file" || die "cannot append task separator"
 cat "$task_file" >> "$prompt_file" || die "cannot append task"
@@ -240,8 +279,14 @@ shim="$shim_dir/codex"
 [ -f "$shim" ] && [ ! -L "$shim" ] && [ -x "$shim" ] || die "launch-check shim is missing or unsafe"
 [ ! "$shim" -ef "$real_codex" ] || die "launch-check shim resolves to the real Codex executable"
 
+sandbox="workspace-write"
+if [ "$AUTHORING" = "true" ]; then
+    sandbox="read-only"
+    # No queued workspace-write validation shim is used for no-tool authoring.
+    shim_dir="${real_codex%/*}"
+fi
 set -- codex exec --ephemeral --strict-config --ignore-user-config -C "$target" \
-    --model "$MODEL" --sandbox workspace-write --json \
+    --model "$MODEL" --sandbox "$sandbox" --json \
     --disable multi_agent --disable multi_agent_v2 \
     -c "model_provider=\"$PROVIDER\"" \
     -c "model_providers.$PROVIDER=$PROVIDER_DEFINITION" \
@@ -261,6 +306,11 @@ set -- codex exec --ephemeral --strict-config --ignore-user-config -C "$target" 
     -c 'agents.enabled=false' \
     -c 'agents.max_concurrent_threads_per_session=1' \
     -c 'agents.max_depth=0'
+if [ "$AUTHORING" = "true" ]; then
+    set -- "$@" -c 'project_doc_max_bytes=0' \
+        -c 'developer_instructions="Author only the requested code as text. No tools, filesystem access, edits, agents, network, or test execution. The parent reviews and applies the response. Follow the supplied Flash policy."'
+fi
+set -- --cloud-only --cloud-model "$CLOUD_MODEL" "$@"
 set +e
 worker_started="true"
 PATH="$shim_dir:$PATH" \
@@ -269,7 +319,7 @@ BIOHUB_QWEN_TARGET="$target" \
 BIOHUB_QWEN_COMMON="$target_common" \
 BIOHUB_QWEN_GIT_DIR="$target_git_dir" \
 BIOHUB_QWEN_BRANCH_REF="$branch_ref" \
-"$IMPLEMENTATION_QUEUE" --cloud-only "$@" < "$prompt_file" &
+"$IMPLEMENTATION_QUEUE" "$@" < "$prompt_file" &
 queue_pid=$!
 wait "$queue_pid"
 worker_status=$?
