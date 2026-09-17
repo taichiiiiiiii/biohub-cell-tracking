@@ -1114,16 +1114,26 @@ def _write_new_regular(parent_fd: int, name: str, raw: bytes) -> tuple[int, int]
             os.fsync(parent_fd)
             if _name_info(parent_fd, name) is not None:
                 raise PublicationAmbiguityError("failed receipt write remains after rollback")
-        except PublicationAmbiguityError:
-            raise
         except BaseException as cleanup:
-            raise PublicationAmbiguityError("failed receipt write could not be rolled back") from ExceptionGroup(
+            raise PublicationAmbiguityError("failed receipt write could not be rolled back") from BaseExceptionGroup(
                 "receipt write and rollback failed", [original, cleanup]
             )
         raise
     finally:
-        with contextlib.suppress(OSError):
+        pending = sys.exception()
+        try:
             os.close(fd)
+        except OSError:
+            pass
+        except BaseException as close_error:
+            if pending is not None:
+                raise PublicationAmbiguityError(
+                    "receipt fault and descriptor close are ambiguous"
+                ) from BaseExceptionGroup(
+                    "receipt operation and descriptor-close failure",
+                    [pending, close_error],
+                )
+            raise
 
 
 def _rename_noreplace(parent_fd: int, source: str, destination: str) -> str:
@@ -1214,22 +1224,26 @@ def _bind_empty_staging(parent_fd: int, name: str) -> tuple[int, _OwnedStaging]:
 
 
 def _recover_initial_staging_fault(parent_fd: int, name: str, cause: BaseException) -> None:
-    recovery_fd: int | None = None
     try:
         recovery_fd, owned = _bind_empty_staging(parent_fd, name)
     except BaseException as identity_error:
-        raise PublicationAmbiguityError("new staging identity could not be recovered") from ExceptionGroup(
+        raise PublicationAmbiguityError("new staging identity could not be recovered") from BaseExceptionGroup(
             "initial staging identity fault and recovery failure",
             [cause, identity_error],
         )
-    finally:
-        if recovery_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(recovery_fd)
+    try:
+        os.close(recovery_fd)
+    except OSError:
+        pass
+    except BaseException as close_error:
+        raise PublicationAmbiguityError("new staging recovery descriptor close is ambiguous") from BaseExceptionGroup(
+            "initial staging identity fault and descriptor-close failure",
+            [cause, close_error],
+        )
     try:
         _cleanup_owned(parent_fd, name, owned)
     except BaseException as cleanup_error:
-        raise PublicationAmbiguityError("new staging recovery is not durable") from ExceptionGroup(
+        raise PublicationAmbiguityError("new staging recovery is not durable") from BaseExceptionGroup(
             "initial staging identity fault and cleanup failure",
             [cause, cleanup_error],
         )
@@ -1255,12 +1269,19 @@ def _create_owned_staging(parent_fd: int, name: str) -> tuple[int, _OwnedStaging
             raise PublicationAmbiguityError("new staging identity changed after parent fsync")
         return directory_fd, owned
     except BaseException as error:
-        with contextlib.suppress(OSError):
+        try:
             os.close(directory_fd)
+        except OSError:
+            pass
+        except BaseException as close_error:
+            raise PublicationAmbiguityError("new staging descriptor close is ambiguous") from BaseExceptionGroup(
+                "staging creation and descriptor-close failure",
+                [error, close_error],
+            )
         try:
             _cleanup_owned(parent_fd, name, owned)
         except BaseException as cleanup_error:
-            raise PublicationAmbiguityError("new staging creation rollback failed") from ExceptionGroup(
+            raise PublicationAmbiguityError("new staging creation rollback failed") from BaseExceptionGroup(
                 "staging creation and rollback failed",
                 [error, cleanup_error],
             )
@@ -1288,19 +1309,19 @@ def _publish_staging(parent_fd: int, final_name: str, owned: _OwnedStaging) -> s
         os.fsync(parent_fd)
         return primitive
     except BaseException as original:
-        staging_owned = _owned_name(parent_fd, owned.name, owned.identity)
-        final_owned = _owned_name(parent_fd, final_name, owned.identity)
-        if final_owned and not staging_owned:
-            try:
+        try:
+            staging_owned = _owned_name(parent_fd, owned.name, owned.identity)
+            final_owned = _owned_name(parent_fd, final_name, owned.identity)
+            if final_owned and not staging_owned:
                 _rollback_publication(parent_fd, final_name, owned.name, owned)
-            except BaseException as rollback:
-                raise PublicationAmbiguityError("publication and rollback both failed") from ExceptionGroup(
-                    "publication and rollback failed", [original, rollback]
-                )
-        elif staging_owned and not final_owned:
-            _cleanup_owned(parent_fd, owned.name, owned)
-        else:
-            raise PublicationAmbiguityError("publication outcome is ambiguous") from original
+            elif staging_owned and not final_owned:
+                _cleanup_owned(parent_fd, owned.name, owned)
+            else:
+                raise PublicationAmbiguityError("publication outcome is ambiguous")
+        except BaseException as recovery:
+            raise PublicationAmbiguityError("publication and recovery both failed") from BaseExceptionGroup(
+                "publication and recovery failed", [original, recovery]
+            )
         if renamed:
             raise RawProvenanceError("publication durability failed and was rolled back") from original
         raise
@@ -1427,6 +1448,118 @@ def _load_bundle(parent_fd: int, run_name: str) -> tuple[bytes, bytes, tuple[int
         os.close(run_fd)
 
 
+def _assert_output_parent_rebound(
+    root_fd: int,
+    relative: str,
+    parent_fd: int,
+    expected_identity: tuple[int, int, int],
+) -> None:
+    if _directory_handle_identity(os.fstat(parent_fd)) != expected_identity:
+        raise RawProvenanceError("held output parent identity drift")
+    fresh_fd = _open_relative_directory(root_fd, relative)
+    try:
+        fresh_identity = _directory_handle_identity(os.fstat(fresh_fd))
+        if fresh_identity != expected_identity or fresh_identity != _directory_handle_identity(os.fstat(parent_fd)):
+            raise RawProvenanceError("canonical output parent pathname displacement")
+    finally:
+        os.close(fresh_fd)
+
+
+def _validate_owned_bundle(
+    parent_fd: int,
+    name: str,
+    owned: _OwnedStaging,
+    expected_primary: bytes,
+    expected_secondary: bytes,
+) -> tuple[int, int, int, int, int, int, int]:
+    if not _owned_name(parent_fd, name, owned.identity):
+        raise RawProvenanceError("owned raw-provenance bundle pathname identity drift")
+    run_fd = _open_relative_directory(parent_fd, (name,))
+    try:
+        before = _identity(os.fstat(run_fd))
+        path_before = _identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False))
+        names = os.listdir(run_fd)
+        expected_files = dict(owned.files)
+        expected_bytes = {PRIMARY_RECEIPT: expected_primary, SECONDARY_RECEIPT: expected_secondary}
+        if (
+            _ownership(os.fstat(run_fd)) != owned.identity
+            or before != path_before
+            or stat.S_IMODE(before[2]) != 0o555
+            or len(names) != 2
+            or set(names) != set(RECEIPT_NAMES)
+            or set(expected_files) != set(RECEIPT_NAMES)
+        ):
+            raise RawProvenanceError("owned raw-provenance bundle identity or membership drift")
+        observed: dict[str, bytes] = {}
+        for filename in RECEIPT_NAMES:
+            path_info = os.stat(filename, dir_fd=run_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(path_info.st_mode)
+                or path_info.st_nlink != 1
+                or _ownership(path_info) != expected_files[filename]
+            ):
+                raise RawProvenanceError("owned raw-provenance receipt inode drift")
+            item = _read_named_regular(run_fd, filename, max_bytes=MAX_RECEIPT_BYTES)
+            if stat.S_IMODE(item.identity[2]) != 0o444:
+                raise RawProvenanceError("owned raw-provenance receipt mode drift")
+            if item.raw != expected_bytes[filename] or _sha256(item.raw) != _sha256(expected_bytes[filename]):
+                raise RawProvenanceError("owned raw-provenance receipt bytes or hash drift")
+            observed[filename] = item.raw
+        after = _identity(os.fstat(run_fd))
+        path_after = _identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False))
+        if observed != expected_bytes or before != after or after != path_after:
+            raise RawProvenanceError("owned raw-provenance bundle bytes or identity drift")
+        return after
+    finally:
+        os.close(run_fd)
+
+
+def _publish_verified(
+    root: Path,
+    guard: CheckoutGuard,
+    parent_fd: int,
+    parent_identity: tuple[int, int, int],
+    final_name: str,
+    owned: _OwnedStaging,
+    primary_raw: bytes,
+    secondary_raw: bytes,
+    authority: Authority,
+) -> str:
+    renamed = False
+    try:
+        _assert_checkout_rebound(root, guard)
+        _assert_output_parent_rebound(guard.root_fd, authority.output_parent_relative, parent_fd, parent_identity)
+        _validate_owned_bundle(parent_fd, owned.name, owned, primary_raw, secondary_raw)
+        primitive = _rename_noreplace(parent_fd, owned.name, final_name)
+        renamed = True
+        os.fsync(parent_fd)
+        _assert_checkout_rebound(root, guard)
+        _assert_output_parent_rebound(guard.root_fd, authority.output_parent_relative, parent_fd, parent_identity)
+        if _name_info(parent_fd, owned.name) is not None:
+            raise RawProvenanceError("raw-provenance staging name remained after publication")
+        _validate_owned_bundle(parent_fd, final_name, owned, primary_raw, secondary_raw)
+        _assert_checkout_rebound(root, guard)
+        _assert_output_parent_rebound(guard.root_fd, authority.output_parent_relative, parent_fd, parent_identity)
+        return primitive
+    except BaseException as original:
+        try:
+            staging_owned = _owned_name(parent_fd, owned.name, owned.identity)
+            final_owned = _owned_name(parent_fd, final_name, owned.identity)
+            if final_owned and not staging_owned:
+                _rollback_publication(parent_fd, final_name, owned.name, owned)
+            elif staging_owned and not final_owned:
+                _cleanup_owned(parent_fd, owned.name, owned)
+            else:
+                raise PublicationAmbiguityError("raw-provenance publication ownership is ambiguous")
+        except BaseException as recovery:
+            raise PublicationAmbiguityError("raw-provenance publication recovery is ambiguous") from BaseExceptionGroup(
+                "raw-provenance publication and recovery failed", [original, recovery]
+            )
+        if renamed:
+            raise RawProvenanceError("raw-provenance publication failed and was durably rolled back") from original
+        raise
+
+
 def _portable_bundle_path(root: Path, run: Path, name: str) -> str:
     relative = (run / name).relative_to(root).as_posix()
     return _safe_relative(relative)
@@ -1462,6 +1595,8 @@ def _verify(root: Path, run_dir: Path, authority: Authority) -> dict[str, object
     try:
         run, run_name = _constrain_run_dir(root, run_dir, authority)
         parent_fd = _open_relative_directory(root_fd, authority.output_parent_relative)
+        parent_identity = _directory_handle_identity(os.fstat(parent_fd))
+        _assert_output_parent_rebound(root_fd, authority.output_parent_relative, parent_fd, parent_identity)
         primary_before, secondary_before, bundle_before = _load_bundle(parent_fd, run_name)
         collected = _collect_authority(root_fd, root, authority, checkout)
         primary_value = _validate_receipt(primary_before, "primary", collected, authority)
@@ -1476,6 +1611,7 @@ def _verify(root: Path, run_dir: Path, authority: Authority) -> dict[str, object
             raise RawProvenanceError("receipt bundle changed during verification")
         result = _result(root, run, collected.git, primary_before, secondary_before)
         _assert_checkout_rebound(root, checkout)
+        _assert_output_parent_rebound(root_fd, authority.output_parent_relative, parent_fd, parent_identity)
         return result
     finally:
         if parent_fd is not None:
@@ -1504,6 +1640,8 @@ def _build(root: Path, run_dir: Path, authority: Authority) -> dict[str, object]
         run, run_name = _constrain_run_dir(root, run_dir, authority)
         collected_before = _collect_authority(root_fd, root, authority, checkout)
         parent_fd = _ensure_output_parent(root_fd, authority.output_parent_relative)
+        parent_identity = _directory_handle_identity(os.fstat(parent_fd))
+        _assert_output_parent_rebound(root_fd, authority.output_parent_relative, parent_fd, parent_identity)
         if any(name.casefold() == run_name.casefold() for name in os.listdir(parent_fd)):
             raise FileExistsError(run_name)
         staging_name = f".staging.{run_name}.{secrets.token_hex(8)}"
@@ -1554,11 +1692,20 @@ def _build(root: Path, run_dir: Path, authority: Authority) -> dict[str, object]
             raise RawProvenanceError("staged bundle changed before publication")
         success_result = _result(root, run, collected_before.git, staged_primary, staged_secondary)
         _assert_checkout_rebound(root, checkout)
-        for fd in (checkout.official_fd, checkout.git_fd, checkout.root_fd):
-            os.close(fd)
-        checkout = None
+        _validate_owned_bundle(parent_fd, staging_name, owned, staged_primary, staged_secondary)
+        _assert_output_parent_rebound(root_fd, authority.output_parent_relative, parent_fd, parent_identity)
         publication_attempted = True
-        _publish_staging(parent_fd, run_name, owned)
+        _publish_verified(
+            root,
+            checkout,
+            parent_fd,
+            parent_identity,
+            run_name,
+            owned,
+            staged_primary,
+            staged_secondary,
+            authority,
+        )
         published = True
         with contextlib.suppress(OSError):
             os.close(parent_fd)
@@ -1568,8 +1715,8 @@ def _build(root: Path, run_dir: Path, authority: Authority) -> dict[str, object]
         if owned is not None and not published and not publication_attempted and parent_fd is not None:
             try:
                 _cleanup_owned(parent_fd, owned.name, owned)
-            except PublicationAmbiguityError as cleanup:
-                raise PublicationAmbiguityError("pre-publication rollback failed") from ExceptionGroup(
+            except BaseException as cleanup:
+                raise PublicationAmbiguityError("pre-publication rollback failed") from BaseExceptionGroup(
                     "construction and rollback failed",
                     [original, cleanup],
                 )

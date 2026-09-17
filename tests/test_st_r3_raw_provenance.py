@@ -61,6 +61,18 @@ def _fd_count() -> int:
     return len(os.listdir("/dev/fd"))
 
 
+def _assert_base_fault_group(
+    error: BaseException,
+    original_type: type[BaseException],
+    recovery_type: type[BaseException],
+) -> None:
+    group = error.__cause__
+    assert isinstance(group, BaseExceptionGroup)
+    assert len(group.exceptions) == 2
+    assert isinstance(group.exceptions[0], original_type)
+    assert isinstance(group.exceptions[1], recovery_type)
+
+
 def _mock_clean_git(
     environment: TinyEnvironment,
     *,
@@ -589,6 +601,195 @@ def test_publication_ambiguity_is_explicit_and_never_returns_a_verdict(
     assert tiny_environment.run.is_dir()
 
 
+def test_public_build_rejects_staging_displacement_and_preserves_foreign_bytes(
+    tiny_environment: TinyEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_collect = provenance._collect_authority
+    calls = 0
+
+    def displace_after_second_collection(*args: object, **kwargs: object) -> provenance.CollectedAuthority:
+        nonlocal calls
+        collected = original_collect(*args, **kwargs)
+        calls += 1
+        if calls == 2:
+            parent = tiny_environment.root / tiny_environment.authority.output_parent_relative
+            staging = next(path for path in parent.iterdir() if path.name.startswith(".staging."))
+            staging.rename(parent / f"{staging.name}.owned-displaced")
+            staging.mkdir()
+            (staging / "foreign-sentinel").write_bytes(b"foreign")
+        return collected
+
+    monkeypatch.setattr(provenance, "_collect_authority", displace_after_second_collection)
+    before = _fd_count()
+    with pytest.raises(provenance.PublicationAmbiguityError):
+        _build(tiny_environment)
+    assert _fd_count() == before
+    parent = tiny_environment.root / tiny_environment.authority.output_parent_relative
+    foreign = next(path for path in parent.iterdir() if (path / "foreign-sentinel").is_file())
+    assert (foreign / "foreign-sentinel").read_bytes() == b"foreign"
+    assert any(path.name.endswith(".owned-displaced") for path in parent.iterdir())
+    assert not tiny_environment.run.exists()
+
+
+def test_public_build_parent_displacement_never_succeeds_and_preserves_foreign(
+    tiny_environment: TinyEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tiny_environment.root / tiny_environment.authority.output_parent_relative
+    displaced = parent.with_name("st_r3_raw_provenance.displaced")
+    calls = 0
+
+    def rename_then_displace(parent_fd: int, source: str, destination: str) -> str:
+        nonlocal calls
+        calls += 1
+        result = _fake_rename(parent_fd, source, destination)
+        if calls == 1:
+            parent.rename(displaced)
+            parent.mkdir()
+            (parent / "foreign-sentinel").write_bytes(b"foreign")
+        return result
+
+    monkeypatch.setattr(provenance, "_rename_noreplace", rename_then_displace)
+    before = _fd_count()
+    with pytest.raises(provenance.RawProvenanceError, match="durably rolled back"):
+        _build(tiny_environment)
+    assert _fd_count() == before
+    assert (parent / "foreign-sentinel").read_bytes() == b"foreign"
+    assert not tiny_environment.run.exists()
+    assert not (displaced / tiny_environment.run.name).exists()
+    assert not [path for path in displaced.iterdir() if path.name.startswith(".staging.")]
+
+
+@pytest.mark.parametrize("replacement", ("same_inode_bytes", "new_inode"))
+def test_public_build_final_receipt_tamper_is_never_a_success(
+    tiny_environment: TinyEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    original_validate = provenance._validate_owned_bundle
+
+    def tamper_final(
+        parent_fd: int,
+        name: str,
+        owned: provenance._OwnedStaging,
+        primary: bytes,
+        secondary: bytes,
+    ) -> tuple[int, int, int, int, int, int, int]:
+        if name == tiny_environment.run.name:
+            run = tiny_environment.run
+            run.chmod(0o755)
+            receipt = run / provenance.PRIMARY_RECEIPT
+            receipt.chmod(0o644)
+            if replacement == "new_inode":
+                receipt.unlink()
+                receipt.write_bytes(b"foreign replacement")
+            else:
+                receipt.write_bytes(b"same inode tamper")
+            receipt.chmod(0o444)
+            run.chmod(0o555)
+        return original_validate(parent_fd, name, owned, primary, secondary)
+
+    monkeypatch.setattr(provenance, "_validate_owned_bundle", tamper_final)
+    before = _fd_count()
+    expected = provenance.PublicationAmbiguityError if replacement == "new_inode" else provenance.RawProvenanceError
+    with pytest.raises(expected):
+        _build(tiny_environment)
+    assert _fd_count() == before
+    assert not tiny_environment.run.exists()
+    parent = tiny_environment.root / tiny_environment.authority.output_parent_relative
+    staging = [path for path in parent.iterdir() if path.name.startswith(".staging.")]
+    if replacement == "same_inode_bytes":
+        assert staging == []
+    else:
+        assert len(staging) == 1
+        assert (staging[0] / provenance.PRIMARY_RECEIPT).read_bytes() == b"foreign replacement"
+
+
+def test_public_build_collision_preserves_existing_without_staging(
+    tiny_environment: TinyEnvironment,
+) -> None:
+    tiny_environment.run.mkdir(parents=True)
+    marker = tiny_environment.run / "foreign-sentinel"
+    marker.write_bytes(b"foreign")
+    before = _fd_count()
+    with pytest.raises(FileExistsError):
+        _build(tiny_environment)
+    assert _fd_count() == before
+    assert marker.read_bytes() == b"foreign"
+    assert not [path for path in tiny_environment.run.parent.iterdir() if path.name.startswith(".staging.")]
+
+
+@pytest.mark.parametrize("persistent", (False, True))
+def test_public_build_post_rename_fsync_fault_rolls_back_or_reports_ambiguity(
+    tiny_environment: TinyEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+    persistent: bool,
+) -> None:
+    original_fsync = provenance.os.fsync
+    publication_parent_fd: int | None = None
+    fail_enabled = False
+    failures = 0
+
+    def mark_publication(parent_fd: int, source: str, destination: str) -> str:
+        nonlocal publication_parent_fd, fail_enabled
+        result = _fake_rename(parent_fd, source, destination)
+        if source.startswith(".staging.") and destination == tiny_environment.run.name:
+            publication_parent_fd = parent_fd
+            fail_enabled = True
+        return result
+
+    def fail_fsync(fd: int) -> None:
+        nonlocal failures
+        if fail_enabled and fd == publication_parent_fd and (persistent or failures == 0):
+            failures += 1
+            raise OSError("injected post-rename parent fsync fault")
+        original_fsync(fd)
+
+    monkeypatch.setattr(provenance, "_rename_noreplace", mark_publication)
+    monkeypatch.setattr(provenance.os, "fsync", fail_fsync)
+    before = _fd_count()
+    expected = provenance.PublicationAmbiguityError if persistent else provenance.RawProvenanceError
+    with pytest.raises(expected):
+        _build(tiny_environment)
+    assert _fd_count() == before
+    assert not tiny_environment.run.exists()
+    staging = [path for path in tiny_environment.run.parent.iterdir() if path.name.startswith(".staging.")]
+    if persistent:
+        assert len(staging) == 1
+    else:
+        assert staging == []
+
+
+def test_public_verify_rejects_output_parent_displacement_and_preserves_foreign(
+    tiny_environment: TinyEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _build(tiny_environment)
+    parent = tiny_environment.run.parent
+    displaced = parent.with_name("st_r3_raw_provenance.verify-displaced")
+    original_collect = provenance._collect_authority
+    displaced_once = False
+
+    def displace_during_verify(*args: object, **kwargs: object) -> provenance.CollectedAuthority:
+        nonlocal displaced_once
+        result = original_collect(*args, **kwargs)
+        if not displaced_once:
+            displaced_once = True
+            parent.rename(displaced)
+            parent.mkdir()
+            (parent / "foreign-sentinel").write_bytes(b"foreign")
+        return result
+
+    monkeypatch.setattr(provenance, "_collect_authority", displace_during_verify)
+    before = _fd_count()
+    with pytest.raises(provenance.RawProvenanceError, match="pathname displacement"):
+        provenance.verify_raw_provenance(tiny_environment.run)
+    assert _fd_count() == before
+    assert (parent / "foreign-sentinel").read_bytes() == b"foreign"
+    assert (displaced / tiny_environment.run.name / provenance.PRIMARY_RECEIPT).is_file()
+
+
 def test_receipt_mutation_is_rejected_even_when_reencoded_canonically(
     tiny_environment: TinyEnvironment,
 ) -> None:
@@ -775,6 +976,109 @@ def test_new_receipt_initial_fstat_fault_closes_fd_and_durably_removes_file(
     os.close(parent_fd)
 
 
+@pytest.mark.parametrize(
+    ("original_type", "recovery_type"),
+    ((KeyboardInterrupt, SystemExit), (SystemExit, KeyboardInterrupt)),
+)
+def test_new_receipt_base_write_and_cleanup_faults_are_grouped_without_deletion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    original_type: type[BaseException],
+    recovery_type: type[BaseException],
+) -> None:
+    parent_fd = os.open(tmp_path, os.O_RDONLY)
+    sentinel = tmp_path / "foreign-sentinel"
+    sentinel.write_bytes(b"keep")
+    monkeypatch.setattr(
+        provenance.os,
+        "write",
+        lambda *_args: (_ for _ in ()).throw(original_type("original write base fault")),
+    )
+    monkeypatch.setattr(
+        provenance.os,
+        "unlink",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(recovery_type("cleanup unlink base fault")),
+    )
+    before = _fd_count()
+    try:
+        with pytest.raises(provenance.PublicationAmbiguityError) as captured:
+            provenance._write_new_regular(parent_fd, "receipt.json", b"payload")
+        _assert_base_fault_group(captured.value, original_type, recovery_type)
+        assert _fd_count() == before
+        assert (tmp_path / "receipt.json").is_file()
+        assert sentinel.read_bytes() == b"keep"
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize(
+    ("original_type", "recovery_type"),
+    ((KeyboardInterrupt, SystemExit), (SystemExit, KeyboardInterrupt)),
+)
+def test_initial_staging_recovery_base_faults_are_grouped_without_foreign_deletion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    original_type: type[BaseException],
+    recovery_type: type[BaseException],
+) -> None:
+    parent_fd = os.open(tmp_path, os.O_RDONLY)
+    staging = tmp_path / ".staging.run.token"
+    staging.mkdir()
+    sentinel = staging / "foreign-sentinel"
+    sentinel.write_bytes(b"keep")
+    monkeypatch.setattr(
+        provenance,
+        "_bind_empty_staging",
+        lambda *_args: (_ for _ in ()).throw(recovery_type("identity recovery base fault")),
+    )
+    before = _fd_count()
+    try:
+        with pytest.raises(provenance.PublicationAmbiguityError) as captured:
+            provenance._recover_initial_staging_fault(
+                parent_fd, staging.name, original_type("initial staging base fault")
+            )
+        _assert_base_fault_group(captured.value, original_type, recovery_type)
+        assert _fd_count() == before
+        assert sentinel.read_bytes() == b"keep"
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize(
+    ("original_type", "recovery_type"),
+    ((KeyboardInterrupt, SystemExit), (SystemExit, KeyboardInterrupt)),
+)
+def test_owned_staging_creation_base_faults_are_grouped_without_deletion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    original_type: type[BaseException],
+    recovery_type: type[BaseException],
+) -> None:
+    parent_fd = os.open(tmp_path, os.O_RDONLY)
+    sentinel = tmp_path / "foreign-sentinel"
+    sentinel.write_bytes(b"keep")
+    monkeypatch.setattr(
+        provenance.os,
+        "fsync",
+        lambda *_args: (_ for _ in ()).throw(original_type("staging fsync base fault")),
+    )
+    monkeypatch.setattr(
+        provenance,
+        "_cleanup_owned",
+        lambda *_args: (_ for _ in ()).throw(recovery_type("staging cleanup base fault")),
+    )
+    before = _fd_count()
+    try:
+        with pytest.raises(provenance.PublicationAmbiguityError) as captured:
+            provenance._create_owned_staging(parent_fd, ".staging.run.token")
+        _assert_base_fault_group(captured.value, original_type, recovery_type)
+        assert _fd_count() == before
+        assert (tmp_path / ".staging.run.token").is_dir()
+        assert sentinel.read_bytes() == b"keep"
+    finally:
+        os.close(parent_fd)
+
+
 def test_staging_open_fault_has_zero_fd_delta_and_zero_orphan(
     tiny_environment: TinyEnvironment,
     monkeypatch: pytest.MonkeyPatch,
@@ -799,6 +1103,88 @@ def test_staging_open_fault_has_zero_fd_delta_and_zero_orphan(
     assert not tiny_environment.run.exists()
     parent = tiny_environment.root / tiny_environment.authority.output_parent_relative
     assert not [path for path in parent.iterdir() if path.name.startswith(".staging.run-one.")]
+
+
+@pytest.mark.parametrize("phase", ("pre_rename", "post_rename"))
+@pytest.mark.parametrize(
+    ("original_type", "recovery_type"),
+    ((KeyboardInterrupt, SystemExit), (SystemExit, KeyboardInterrupt)),
+)
+def test_raw_publication_base_faults_are_grouped_without_unknown_deletion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    original_type: type[BaseException],
+    recovery_type: type[BaseException],
+) -> None:
+    parent_fd = os.open(tmp_path, os.O_RDONLY)
+    staging_fd, owned = provenance._create_owned_staging(parent_fd, ".staging.run.token")
+    os.close(staging_fd)
+    sentinel = tmp_path / "foreign-sentinel"
+    sentinel.write_bytes(b"keep")
+    publication_failed = False
+
+    def publication_fault(fd: int, source: str, destination: str) -> str:
+        nonlocal publication_failed
+        if phase == "post_rename":
+            os.rename(source, destination, src_dir_fd=fd, dst_dir_fd=fd)
+        publication_failed = True
+        raise original_type("raw publication base fault")
+
+    monkeypatch.setattr(provenance, "_rename_noreplace", publication_fault)
+    original_owned_name = provenance._owned_name
+
+    def recovery_fault(fd: int, name: str, identity: tuple[int, int]) -> bool:
+        if publication_failed:
+            raise recovery_type("raw ownership recovery base fault")
+        return original_owned_name(fd, name, identity)
+
+    monkeypatch.setattr(provenance, "_owned_name", recovery_fault)
+    before = _fd_count()
+    try:
+        with pytest.raises(provenance.PublicationAmbiguityError) as captured:
+            provenance._publish_staging(parent_fd, "run", owned)
+        _assert_base_fault_group(captured.value, original_type, recovery_type)
+        assert _fd_count() == before
+        assert sentinel.read_bytes() == b"keep"
+        remaining = "run" if phase == "post_rename" else owned.name
+        absent = owned.name if phase == "post_rename" else "run"
+        assert (tmp_path / remaining).is_dir()
+        assert not (tmp_path / absent).exists()
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize(
+    ("original_type", "recovery_type"),
+    ((KeyboardInterrupt, SystemExit), (SystemExit, KeyboardInterrupt)),
+)
+def test_raw_build_outer_base_faults_are_grouped_without_staging_deletion(
+    tiny_environment: TinyEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+    original_type: type[BaseException],
+    recovery_type: type[BaseException],
+) -> None:
+    parent = tiny_environment.root / tiny_environment.authority.output_parent_relative
+
+    def construction_fault(*_args: object) -> tuple[bytes, bytes, tuple[int, ...]]:
+        (parent / "foreign-sentinel").write_bytes(b"keep")
+        raise original_type("raw construction base fault")
+
+    monkeypatch.setattr(provenance, "_load_bundle", construction_fault)
+    monkeypatch.setattr(
+        provenance,
+        "_cleanup_owned",
+        lambda *_args: (_ for _ in ()).throw(recovery_type("raw outer cleanup base fault")),
+    )
+    before = _fd_count()
+    with pytest.raises(provenance.PublicationAmbiguityError) as captured:
+        _build(tiny_environment)
+    _assert_base_fault_group(captured.value, original_type, recovery_type)
+    assert _fd_count() == before
+    assert (parent / "foreign-sentinel").read_bytes() == b"keep"
+    assert len([path for path in parent.iterdir() if path.name.startswith(".staging.")]) == 1
+    assert not tiny_environment.run.exists()
 
 
 @pytest.mark.parametrize("fault", ("stat", "fstat"))
@@ -1003,13 +1389,13 @@ def test_checkout_guard_rejects_held_root_identity_drift(tiny_environment: TinyE
         guard.close()
 
 
-def test_build_validates_before_commit_closes_checkout_and_never_postverifies(
+def test_build_holds_checkout_through_verified_publication_and_never_postverifies(
     tiny_environment: TinyEnvironment,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original_validate = provenance._validate_checkout
     original_result = provenance._result
-    original_publish = provenance._publish_staging
+    original_publish = provenance._publish_verified
     captured: dict[str, object] = {"result_ready": False}
 
     def capture_guard(root: Path) -> provenance.CheckoutGuard:
@@ -1023,21 +1409,36 @@ def test_build_validates_before_commit_closes_checkout_and_never_postverifies(
         return result
 
     def assert_commit_boundary(
+        root: Path,
+        guard: provenance.CheckoutGuard,
         parent_fd: int,
+        parent_identity: tuple[int, int, int],
         final_name: str,
         owned: provenance._OwnedStaging,
+        primary_raw: bytes,
+        secondary_raw: bytes,
+        authority: provenance.Authority,
     ) -> str:
         assert captured["result_ready"] is True
-        guard = captured["guard"]
+        assert guard is captured["guard"]
         assert isinstance(guard, provenance.CheckoutGuard)
         for fd in (guard.root_fd, guard.git_fd, guard.official_fd):
-            with pytest.raises(OSError):
-                os.fstat(fd)
-        return original_publish(parent_fd, final_name, owned)
+            os.fstat(fd)
+        return original_publish(
+            root,
+            guard,
+            parent_fd,
+            parent_identity,
+            final_name,
+            owned,
+            primary_raw,
+            secondary_raw,
+            authority,
+        )
 
     monkeypatch.setattr(provenance, "_validate_checkout", capture_guard)
     monkeypatch.setattr(provenance, "_result", capture_result)
-    monkeypatch.setattr(provenance, "_publish_staging", assert_commit_boundary)
+    monkeypatch.setattr(provenance, "_publish_verified", assert_commit_boundary)
     monkeypatch.setattr(
         provenance,
         "_verify",
@@ -1045,6 +1446,11 @@ def test_build_validates_before_commit_closes_checkout_and_never_postverifies(
     )
     built = _build(tiny_environment)
     assert built["status"] == provenance.STATUS
+    guard = captured["guard"]
+    assert isinstance(guard, provenance.CheckoutGuard)
+    for fd in (guard.root_fd, guard.git_fd, guard.official_fd):
+        with pytest.raises(OSError):
+            os.fstat(fd)
 
 
 @pytest.mark.parametrize(
