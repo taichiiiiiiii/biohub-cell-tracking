@@ -3,6 +3,3601 @@
 このファイルが一次記録である。**判定規則は結果が届く前に書く。** 後から書き換えない。
 E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝突を確認する。
 
+## 現Goalの提出上限（2026-09-13、ユーザー更新）
+
+「5ケース提出したら停止」を追加。今回の指示以降の新規提出を最大5ケースとして数える。
+開始時点0/5。過去のE23/E26提出を遡って加算しない。各ケースは異なる凍結候補で、
+Kaggle側の受理をsubmission IDで確認して数える。送信失敗、同一候補の重複送信、ローカルの
+対照実行は加算しない。応答が曖昧なら受理状況を確認するまで再送しない。
+5件受理後は新規実験・実装・提出を停止し、必要な結果読取と最良候補/比較/未解決事項の報告
+だけを行う。上限到達をCV改善成功と混同しない。元のリーク/検証/CPU/形式/由来条件と
+停止条件は維持し、枠を埋める目的で未検証・不合格候補を提出しない。
+各受理時に本節の件数とケース/成果物hash/submission ID/受理日時/結果を追記する。
+
+| ケース | 候補・成果物 | submission ID | 受理・結果 |
+| --- | --- | --- | --- |
+| 1/5 E31 | primary-only reciprocal consensus / kernel v3 / CSV SHA2842635b8416fc3745fdb0b69c7d8d96adaace2a476be922b41bd20d395de9c8 | 56213346 | 2026-09-13 18:50:14.763 UTC受理、PENDING（score未確定） |
+
+現在の受理数1/5。E31 v3は95tests・実2GPU完走・v2 byte同値・全CSV/bounds/hash検証を経て、
+Max/親の単回exploratory判断で提出。known12 gate REJECTは変更せず、E23 incumbent0.924維持。
+取得ログの詳細・runtime推定・判断記録は`analysis/e31_target_submission.md`。
+当該提出の終端score/error確認までsource/config凍結、重い次候補実行とcommit/pushは行わない。
+送信後CLIは当日残り4件、履歴APIで上記submission ID/PENDINGを確認済み。再送しない。
+
+## 旧探索記録（2026-09-13: 当時E34評価を含め8/8非改善として探索停止）
+
+### E29 設計・独立評価（2026-09-13、Issue #15、実装/評価未実施）
+
+E29 core loader plumbing（2026-09-13）: Qwen Cloud qwen3.8-flash session22891へ限定実装を再依頼。
+返却diffは既存関数の実シグネチャに合わせ、consensus_loaderの型/排他検証とrun_postproc_coreへの
+keyword伝播だけを親が選択適用した。初回の広いrunner依頼(session36880)は周辺定義不足による
+仮想定数・省略diffだったため不採用。実装後、consensus関連49tests PASS/3.09秒、Ruff/diff check
+PASS。runnerのe29_consensus mode/receipt生成/監督経路は未実装であり、物理評価・提出なし。
+
+ローカル学習入口の診断（2026-09-13）: official trainerはCUDA同期を無条件に呼ぶため、
+`scripts/local_train_unet_transformer.py`を追加し、非CUDA環境では同期をno-opにして公式コードを
+変更せず実行できるようにした。実データ1動画、3 epoch、各epoch 1 iterationの診断をCPUで実施。
+det lossは0.6448→0.4915→0.4051と低下したがedge lossは0.0015→0.0017→0.0022、validation
+は全て0であり、学習gate/候補昇格不可。best checkpointは診断用にのみ保存し、Kaggle推論・提出へ
+使用しない。wrapper Ruff/diff checkはPASS。完全学習にはGPUまたは大幅な時間予算が必要。
+
+E29 runner接続（2026-09-13）: Flash session89002はmode/loader変更を納品せず終了したため、
+同一変更の2回目失敗として親が限定差分を適用。`e29_consensus`受付、共通appearance planからの
+`load_consensus_frames`呼出し、coreへのconsensus_loader伝播、E29 control/candidate/receipt/status、
+supervisorのallowlist・receipt binding検証を追加した。既存82件（runner/core/supervisor、loader、
+reservation）PASS、Ruff/diff check PASS。MAX評価ルートは入力受付拒否で実行されなかったため、
+親による差分レビューを継続し、実E29 runnerの生成前に追加のmode/receiptテストを必要とする。
+現時点で実動画評価・Kaggle提出なし、非改善2/8、提出0/5。
+
+E29実動画生成・known12評価（2026-09-13）: r1は距離gate外候補を例外扱いして停止、r3は
+E29 telemetryを旧統計schemaが拒否、r5は候補CSVをbaseline byte parityとして誤検査した。
+原因をそれぞれ「eligible候補は除外して残差へ継続」「E29 reserved countをcomponentへ加算」「
+candidate modeはreference不一致を許容」と診断し、各修正後に既存テストを再実行。r6は
+12動画をserial CPU/child監督で完走（821.06秒、peak RSS約4.5GB、returncode0）。
+E29 control/receipt/result binding、形式・再現性・GT未読を確認。候補CSV SHAはRESULT bindingを
+参照し、consensus receipt SHA `91b7cad86a26147893c899923019608748ad3faa52f6d2ab7f2a8fae5924efd6`。
+固定known12のローカル公式metricは baseline score 0.9272489145、E29 score 0.9293581291、
+差分 +0.0021092146（採否基準 +0.005 未達）。edge Jaccard 0.9110664→0.9132075、node
+recall 0.9837015→0.9841002。改善は5動画、悪化3動画、同値4動画で、private改善を保証しないため
+E29は非改善3/8として棄却。additional GT24・Kaggle提出は行わない。
+
+E30事前設計・pure filter（2026-09-13）: E29の改善が閾値未達だったため、3方向の固定logitが
+すべて正のunique reciprocal pairだけを予約する単一仮説を`analysis/e30_consensus_confidence_design.md`
+へ評価前に記録。Flash session76830は実ファイル文脈不一致と空patchを繰り返し、架空APIを含む
+diffのみ返却したため不採用。親が既存`reciprocal_consensus_pairs`を変更せず、同じ厳格検証後に
+符号判定する純粋`positive_reciprocal_consensus_pairs`を追加し、正/負/ゼロ/tie/不変性テストを
+選択適用。関連46tests PASS、Ruff/diff check PASS。loader/runner接続、実動画評価、採否判定は
+未実施。E29のknown12 +0.0021092146を上回るかは未確認。非改善3/8、提出0/5。
+
+E30実動画生成・known12評価（2026-09-13）: positive-logit filterをE30専用loader/schemaへ
+接続し、r1はactive transition key差異を検出して停止。欠落transitionを空集合として扱う修正後、
+r2は12動画をserial CPU/監督で完走（約13分、returncode0）。形式・receipt・GT未読・bindingを
+検証した。固定known12 metricは baseline `0.9272489145`、E30 `0.9287913736`、差分
+`+0.0015424592`で、E29 `+0.0021092146`より悪化し、採否基準`+0.005`未達。division Jaccard
+も0.1176471→0.1142857へ低下。E30を非改善4/8として棄却し、提出なし。
+
+E31事前設計・primary-only helper（2026-09-13）: E30までの結果を踏まえ、secondary一致要求を
+外す単一仮説を`analysis/e31_primary_consensus_design.md`へ事前登録。既存strict validationを
+再利用する`primary_reciprocal_consensus_pairs`、E31専用loader/schema/runnerを追加し、E27-E30の
+既存分岐は維持。関連73tests PASS、Ruff/diff check PASS。実動画評価はこれから実施する。
+
+E31実動画生成・known12評価（2026-09-13）: r1-r3はrunner検証のstatus/schema漏れで無効、r4で
+12動画をserial監督実行し、形式・receipt・binding・GT未読を確認。固定metricはbaseline
+`0.9272489145`、E31 `0.9296051036`、差分`+0.0023561892`。E29の`+0.0021092146`よりは
+改善したが、採否基準`+0.005`未達のため棄却。node recallは`0.9837015→0.9846955`、
+division指標は不変。追加GT・提出なし。valid non-improvementは5/8、提出0/5。
+
+E32実動画生成・known12評価（2026-09-13）: E31と同じprimary consensus適格集合をhard予約せず、
+既存assignment costへのsoft preferenceとして渡す専用経路を実装。r1は直接実行の環境allowlist違反で
+無効、r2は監督付きCPU serialで12動画完走し、形式・receipt・binding・GT未読を確認した。
+固定metricは baseline `0.9272489145`、E32 `0.9277109385`、差分`+0.0004620240`。
+edge Jaccardは`0.9110664→0.9111809`、division Jaccardは`0.1176471→0.1212121`だが、
+採否基準`+0.005`未達。E32をvalid non-improvement **6/8**として棄却し、提出なし。
+
+#### E33 設計登録（consensus-proven short-track rescue）
+
+E29〜E32の辺選択変更とは独立に、最小track長6の除去境界だけを検証する。exact 5-node、
+forkなし、時刻連続、synthetic/gapなし、全4辺が既存3方向 reciprocal consensusで証明された
+線形成分のみを除去前に救済し、それ以外はbaselineと同じにする。採否基準は固定known12で
+baseline比 paired mean `>= +0.005`、median `>= 0`、worst動画gate内、全既存gate通過。
+証明集合が空なら科学的無効、基準未達ならE33=7/8として棄却する。詳細は
+`analysis/e33_consensus_short_track_rescue_design.md`。
+Qwen Cloud Flashへのbounded実装依頼は、現セッションのソース読取制約でpatchを生成できず停止。
+親レビューでshort-track filterとpipelineのread-only伝播接点を追加し、既存関連68テストと
+Ruff/diff checkは成功したが、専用runner/receipt接続と物理評価は未完了。未完了のためE33の
+非改善カウントはまだ増やさない。
+
+#### E34 設計登録（bidirectional motion-consistency gate）
+
+E29〜E32のconsensus選別、E33のshort-track境界とは独立に、baselineの一方向motion relinkで発生し得る局所identity swapを検証する。baseline forwardで選ばれたmotion辺だけを同じ固定cost/gate/一対一制約のreverse assignmentでも再選択できた場合に限り残し、reverse入力不整合・例外・空transitionはbaselineへfail-closedする。新閾値・学習・追加データは使わない。確認辺0本は科学的無効、確認辺があり採否基準未達ならE34=8/8として探索停止。採否基準はknown12 paired mean `>=+0.005`、median `>=0`、全既存gate合格。詳細は `analysis/e34_bidirectional_motion_consistency_design.md`。複数module/private-score影響のため、Flash実装後にMax評価を1回まで許可する。実装・物理評価は未実施。
+
+E29共通NPZ loader受入（2026-09-13）: 前turnはID adapter43tests受入のprogress。
+appearance_inputsの元材料検証をprivate _load_framesへ移し、旧public wrapper=False、
+新load_consensus_frames=Trueへ接続。元hash/99packet/座標/ID/reader.recheckとE28返却形は維持。
+Flash session48458の限定4blockを親が適用。workerログにempty patch/view_imageの拒否があり、
+ツール禁止の完全遵守とは主張しない。実ファイル変更は親の選択適用のみ。
+session30502はコード未納品、98697はfixture直接呼出し/架空key等でテスト未採用。
+multi-module変更とtest不備を新証拠としてMAX session57331で1回評価、実NPZで非空一致と
+raw欠損時の非再順位付けを検証する方針を親が採用。MAXの「mock依存」は当該失敗案の
+正確な説明ではなく、実際はAPI/fixture誤用と未納品。GT/予測の実行なし。
+session90080のfixture optional logitsと正しい期待対/空集合/破損の部分を採用し、
+既に届いた正しい5引数loader呼出し/flags/packet pathと選択統合。架空dataset_video/flags/
+signature_ofは不採用。session48421の3文で実manifestとreceiptの3logit signaturesを照合。
+既存fixtureのdefaultはそのままで、param時だけwriterによるhash計算前にlogitsを指定。
+最終63tests PASS/2.29秒、Ruff/diff check PASS、official差分なし。
+合成実NPZで >2**53 ID、3x2全detector順位→raw subset、残る1対、全対除外、all-tie空、
+packet破損/座標違い拒否、99file/103bindings/専用schema/元signaturesを確認。
+appearance_inputs SHA7a519a9d4d2e7c382ffa8d5bfbe75eccf7044917a235cb0938ebf3dfddbde343、
+test SHA43bb6abd2e399111d53aa94e8e566c6561a5c8f58e00052f3eb320475c3d6f19。
+これはsynthetic NPZ接続の受入であり、実known12入力の読み取り/予約生成/対照byte再現/
+候補精度の証拠ではない。次は元rawおよび距離filter後の一対一条件を保つmotion予約への
+接続単位。scientific gate不変、追加GT/新予測/提出なし。非改善2/8、提出0/5。
+
+E29 index→raw ID adapter受入（2026-09-13）: 前turnはranking helper24tests受入のprogress。
+既存appearance loader/packet readerのdetector_lookupとraw座標照合経路を確認し、
+map_consensus_to_rawの契約をE29設計へ事前追記。全detectorで選んだindex対を保持し、
+行/列→global detector index→graph IDの順で写像、raw欠損endpointは代替せず除外する。
+Flash session50435の初回案はlocal/global混同・未整列見逃し・誤期待値/placeholderで未採用。
+session36900の修正本体を採用し、誤ってinvalid扱いされた合法対角pairのtestだけ除外。
+session77069で合法pair/重複列拒否/空pairsでもmapping欠損拒否/直接入力不変性を補正。
+親は返却コードを選択適用し、文字列formatとレイアウトだけRuffで機械整形。
+関連43tests PASS/0.04秒、最終Ruff/diff check PASS。純粋ID対応の検証であり、
+実packet/座標/分裂/距離gate/motion予約/候補精度の検証ではない。元実験sourceは保存済み。
+次のloaderは既存appearance_inputsの共通材料検証を再利用する最小抽出を検討し、
+packetを重複読取したり全動画のdense logitsを保持したりしない。新予測/GT/提出なし。
+非改善2/8・提出0/5、E23 incumbent維持。未完統合をcommit/pushしない。
+
+E29 pure ranking helper受入（2026-09-13）: 新src/biohub/consensus_edges.pyと直接testを実装。
+変更前E28 score closure65fileをoutputs/local/e29_prechange_source_20260913_v1へコピーし、
+全bytes/SHAをE28 v2 PLANと照合。旧PLAN/実験出力を変更しない。新module追加により今後の
+source closureは変わるため、E29には新None対照/新登録が必要。
+Flash session49764のhelperを採用したが、初回testsは非最大値oracle/誤期待値で静的棄却。
+session30123の修正版もforward条件欠落、tie fixture誤り、or True検証で棄却。
+同workerはrequest_user_input拒否ログ1件あり、ツール禁止を完全遵守したとは扱わない。
+2回のtest受入失敗を理由にMAX session35660で修正方針だけを1回評価、実装変更なしで
+正しいoracle/tie/非自明assertへ直す方針を親が採用。
+Flash session77255からoracle/tieのみ採用。最後のrandomtestはoracle自己比較だったため不採用。
+親は既に届いたFlash版の実helper呼出し・独立oracle比較・一意性・不変性assertを選択統合し、
+新たな判定ロジックは作成しない。zip strict指定、曖昧変数名の機械改名、Ruff整形のみ親修正。
+採用後24tests PASS/0.03秒、Ruff/diff check PASS。既存実験経路からはまだ呼ばない。
+helper SHAe6ae3158bd0d44845ab5ed3b78b4e03cbbd272e594f20151950452b0dafb574a、
+test SHA3a4100c8e19f807bde7b6db91199e66dd371ae72ba6c58e2c472a6234e962f10。
+検証範囲: 三方向strict maxima、各tie/不一致、非正方/負値/空、型/shape/finite/予算、
+独立loop oracle、deterministic順序/一対一性/入力不変。raw ID/分裂/gate/実packet/統合は未検証。
+次は既存packet readerとraw写像へこのhelperを接続し、元raw/距離filter双方の一対一条件を
+保った予約集合をmotionへ渡す最小実装単位を設計する。科学的評価未実施、非改善2/8・提出0/5。
+
+前turnはE28最終graph診断完了によるprogress。新Issue #15を作成し、canonicalで
+codex/issue-15-e29-consensus-protectionへ新branchを作成。既存WIPを保持、checkout追加なし。
+親設計はanalysis/e29_consensus_protection_design.md。E23の既存一対一辺でprimary forward/
+primary reverse/secondary forwardの一意第一候補が一致する場合だけmotionで先に予約。
+残余は既存tight/relaxed割当、E27/E28合成なし、係数/半径/GT境界/採否条件不変。
+元rawと距離filter後の双方で一対一を要求し、既知分裂の片側だけの保護を禁止する。
+MAX session85699が新構造proposalを1回読取評価、exit0。親は軸/未知分裂/新None対照の
+懸念を受け入れ、非一致候補削除/bonus二重適用という誤読と条件緩和提案は採らない。
+詳細な判断とhash一致の推論source軸証拠を設計へ記録。追加モデル/学習/GT/実候補/提出なし。
+次単位はFlashによる純粋な三方向ranking helperと直接テスト。物理候補は統合/対照再現/
+事前登録/採点接続を満たすまで開始しない。非改善2/8、提出0/5、E23 incumbent維持。
+Issue #10は既存変更群のcommit/push未完のためOPENのまま。Git一括commit/pushなし。
+
+### E28 v2 公式eval12完了 — SCREEN_REJECT_EVAL12（Issue #10）
+
+結果後の限定graph診断（2026-09-13）: 前turnは生成/公式採点完了によるprogress。
+保存artifact集合を確認し、eventsはstart/raw_stats/finishの時間/RSS記録、inferenceは環境/seed。
+assignment cost marginの中間記録はなく、receiptからmarginを復元できるという案は採らない。
+Flash session32143がread-only CSV比較を作成。ログに禁止view_imageの拒否記録が1件あり、
+ツール使用なしを完全遵守したとは扱わない。返却コードには当該処理なし。親はdataset集合
+比較の片側漏れを発見し、session63777の1行修正を適用。両session終端exit0、Qwen同時実行なし。
+実診断session88820 exit0、両CSV全hash前後一致、重複/参照先チェック成功。
+script: outputs/local/e28_appearance_20260913/E28_EDGE_DIFF.py、SHA256
+51172b9056babc8a3b8b81599c379b828111e6a380840d38cb3db478dec71907。
+実行はcanonicalで `.venv/bin/python outputs/local/e28_appearance_20260913/E28_EDGE_DIFF.py`。
+Ruffは旧式文字列formatのUP031が9件で未PASS。ignored単発診断の書式指摘であり、
+実験sourceを変更したり、この診断を本番validatorとして採用したりしない。
+
+| 動画 | node ID追加/削除 | 共通ID座標/時刻変化 | edge ID対追加/削除 |
+| --- | ---: | ---: | ---: |
+| 44b6_12dfb391 | 39/38 | 392 | 847/845 |
+| 44b6_267148e4 | 0/2 | 12 | 2/4 |
+| 44b6_2a2eff9f | 32/27 | 142 | 306/301 |
+| 44b6_587a1e22 | 0/4 | 4 | 1/4 |
+| 6bba_09961292 | 20/21 | 94 | 207/209 |
+| 他7動画 | 0/0 | 0 | 0/0 |
+| 合計 | 91/92 | 644 | 1363/1363 |
+
+他7動画は最終node座標/時刻とedge ID集合まで同一。変化5動画では共通node IDの
+座標/時刻も変わるため、1363対を物理的な別接続1363本と解釈しない。最終graphに実変更は
+あるが、motion段階の介入本数やGT正解edgeの入替をこの比較だけで断定しない。
+結論: 「動いていない」ではなく「最終graph変化が公式接続/分裂改善にほぼ結び付かなかった」。
+既存D2/graph-stage診断ではE23 FN338中、pre候補保持149（うちfinal対応あり辺なし102）
+が記録済み。次の設計対象はsoft cost項の再調整より、上流接続を後処理が置き換える条件。
+次turnで既存の確率/ID対応artifactから双方向・dual-seedの相互第一候補を保護する案の
+利用可能性を確認する。これは新仮説の設計候補であり、数値設定/実装/実行の事前登録は未了。
+E28を再採用せず、追加GT/新予測/提出なし、非改善2/8・提出0/5維持。
+
+session61808はexit0。score supervisorは86.330秒、親子出力62620bytes、returncode0、
+killpgなし/reap_errorなし。公式core22.024秒、self peak RSS813514752bytes。
+採点前後のsource/PLAN/生成receipt/公式集計再照合成功。結果は
+outputs/local/e28_appearance_score_eval12_20260913_v2/ に保存。
+SCORE_CORE.json: 27849bytes/SHAeeafcc397ba207016402c9c7c6629dd6dbca6ff18664fc4dd8a39b5ddaa21f79。
+SCORE_RESULT.json: 8998bytes/SHAf42112ac3c5649b755c41511c3bc9223b043892aff8185a6cbe2235bf6e16573。
+隣接_supervisor/SUPERVISOR_RESULT.json: 4305bytes/
+SHAf539aeebb6456ec6ad908c416ba99619fc493983582e12f0f0d54bbc50f9f544。
+
+| 指標 | E23 None対照 | E28候補 | 差 |
+| --- | ---: | ---: | ---: |
+| 公式aggregate score | 0.927248914456 | 0.927365572679 | +0.000116658222 |
+| aggregate adjusted edge Jaccard | 0.915484208574 | 0.915600866796 | +0.000116658222 |
+| division Jaccard | 0.117647058824 | 0.117647058824 | 0 |
+| division TP/FP/FN | 4/16/14 | 4/16/14 | 0/0/0 |
+
+採否に用いる動画別paired meanは+0.0000389406363（必要+0.005）、median0、
+worst−0.00000774710775。aggregateとの差と混同しない。3改善/2悪化/7不変。
+mean gate不合格、他のeval12 gateは合格だがAND判定により棄却。係数や基準を変更しない。
+
+| 動画 | 公式score差 |
+| --- | ---: |
+| 44b6_12dfb391 | -0.00000156744937 |
+| 44b6_267148e4 | +0.00000853863311 |
+| 44b6_2a2eff9f | -0.00000774710775 |
+| 44b6_341df25f | 0 |
+| 44b6_587a1e22 | +0.0000198153423 |
+| 44b6_5f15d135 | 0 |
+| 6bba_062c8d37 | 0 |
+| 6bba_07e24132 | 0 |
+| 6bba_085bf656 | 0 |
+| 6bba_09961292 | +0.000448248217 |
+| 6bba_0e7c0d07 | 0 |
+| 6bba_12665c0e | 0 |
+
+失敗原因の一次読取: 全12動画で公式edge TP/FNとdivision TP/FP/FNに変化なし。
+6bba_09961292のedge FPが1減った以外はedge Jaccard不変。その他の微小score差は
+予測node数/total-node-ratio変化による調整項であり、接続正解が増えたとは言えない。
+スコア不変はedge集合が同一という証拠ではない。外観特徴の識別力不足か、固定gate/既存
+costによる介入余地の小ささかはまだ切り分けていない。Flashへ限定read-only原因分析を委任。
+次設計はこの切り分けを踏まえ、E28係数探索ではなく異なる仮説を選ぶ。
+Flash原因分析session2584はexit0（subscription-cloud-only/qwen3.8-flash/none/retry0）。
+親は「既存成果物で介入箇所を確認してから次設計」のみ採用。以下は証拠過剰のため不採用:
+receipt成功だけで実装/再現性の欠陥を全除外、TP数不変から正解edge集合不変を断定、
+FP1減を無視して全score差をnode項へ帰属、最終edge差をmotion assignment差と同一視、
+未保存のcost marginをreceiptだけから読める前提、2候補から特徴空間の改善上限を断定。
+提案された「寄与が埋没なら特徴不良」という判別も係数/介入余地と識別力を混同するため棄却。
+次の限定診断はまず実artifactに保存される情報を確認し、最終edge集合の差と公式count差を
+分離する。cost/assignment中間値が未保存なら未測定と明記し、新実行を黙って追加しない。
+E28科学採用なし、追加24GT未読、再現候補/Kaggle実行/提出なし。新規提出0/5、
+有効非改善はE27+E28の2/8。E23 incumbentを維持。Issue #10の結果分析は継続、
+既存WIPを一括commit/pushしない。以下は復旧から実行までの時系列記録。
+
+### E28 不足データ復旧完了（2026-09-13、Issue #10、候補再実行・CV未評価）
+
+Goal再開・v2事前登録（2026-09-13）: 前回は1188packet復旧によるprogress。
+現物で旧PLAN、score source65件、復旧packet1188件の全SHA一致を再確認。
+Flash session14287（subscription-cloud-only/qwen3.8-flash/none/retry0）はexit0、
+出力先2行だけをv2へ変更する案を返却。親は新E28_FREEZE_PLAN_V2.pyへ適用し、
+旧assemblerとのdiffが当該2行だけ、Ruff/diff check PASSを確認。
+新PLAN作成session24456 exit0、11.335秒、selfRSS472137728bytes。
+outputs/local/e28_eval12_plan_20260913_v2/PLAN.json、890662bytes、SHA256
+84d4aaaf2ea9e41070f4aa64fd928d6df3b5a4b4f8b4d63607239f5289764d38。
+generation source50/score source65と既存None対照を既存verifierで再照合済み。
+仮説/係数/GT境界/採否/予算は変更せず、v1候補/PLAN/PREGEN/ERRORは保全。
+既存MAXの実行前評価と同じsource/科学条件で入力不足だけが解消したため、同一レビューは
+反復せず、親はv2の登録生成1回→成功時に直列known12公式採点へ進める判断。
+この登録は精度改善/科学採用/提出の証拠ではない。追加24GT未読、提出0/5、非改善1/8。
+v2登録生成をsession98439で単回起動。現時点の同session照会はrunning、
+CONTROL/STARTED/inference/deepcenter/submission.csvの生成開始を確認。終端結果未取得。
+監視先outputs/local/e28_appearance_eval12_20260913_v2_supervisor/{stdout,stderr}.log。
+次turnは同sessionを照会し、終端を確認するまで再起動しない。生成成功後のみ同PLANと
+PREGENのhashを渡してscripts.e28_score scoreを新出力先で直列実行する。
+候補未採点の間はsource変更・commit/pushをしない。
+v2生成完了: session98439 exit0、GENERATED_NOT_SCORED。子869.424秒、
+self peak RSS4634116096bytes、子出力40464109bytes、親returncode0/killpgなし/reap_errorなし。
+CSV25549159bytes、SHA38ea2d508ea48d221eb82ebc3d5a37dfdcad3bb5012e2504a99762b31c72a298。
+PREGEN SHA1a1d0b16902b59d49c56d21db8f9605f5722245cf90a004fd7d427cb3b8f54bc。
+run_registered_generationの生成後PLAN/receipt/CSV/feature再照合も通過、GT未読。
+採点CLI初回は親の相対output引数で入口拒否（exit1、出力/audit未作成・子未起動）。
+supervise_scoreのabsolute-path必須チェックを確認し、plan/outputを絶対パスに修正した
+同一候補の採点を開始。仮説/コード/PLAN/予算は不変更、盲目的な再試行ではない。
+
+復旧完了（2026-09-13）: 取得session98354はexit0・認証エラーなし。
+一時領域のNPZ集合が凍結PLANの対象1188件と完全一致し、全件のbytes/SHA256が一致。
+合計1,935,446,009bytes、12動画。既存ファイルを上書きしないコピーで
+outputs/local/e23_collection_verified_20260912/association_collection_run/group00〜02/
+observation/pairs/へ配置し、配置後も1188件のbytes/SHA256を再照合して
+RESTORED_ALL_HASHES_PASS（配置・検証session87977 exit0）。一時取得物は削除せず保全。
+旧PLANのSHA256は41f55391bb0217d46c62a3f4c4f8cbcc15d795d21ea3d2d6ffabd726dcc6e5d5のまま、
+score source closure65件も全hash一致。取得ファイルはGit管理対象外、official差分なし、
+git diff --check / --cached --check PASS。コード変更なしのデータ復旧のため追加の
+単体テストは実行せず、実物の全件照合を受入検証とした。復旧の受入条件は達成。
+不足packet障害は解消したが、候補生成/GT採点/提出は未実施で、科学的改善は未判定。
+旧candidate v1/PREGEN/ERRORは保全し再利用しない。次の実験は新しい出力先・新PLANで
+再登録する必要がある。追加24GT未読、提出0/5、非改善1/8、commit/pushなし、Issue #10継続。
+以下の復旧待ち・開始記録は過去の経過であり、現在のデータ不足を意味しない。
+
+復旧開始（2026-09-13、ユーザー「不足データの復旧して」）: 上記Issue内のknown12入力復旧を
+明示承認された。取得元taichiiiii/biohub-e23-association-collection36のCOMPLETEを既存認証で
+確認し、group00〜02・対象12動画・pairs NPZだけを正規表現で選択して取得開始。
+一時先outputs/local/e28_packet_recovery_20260913_v1、CLI session98354。全1188件の
+1,935,446,009bytesと旧凍結PLAN内のSHA256を照合後に本来のcollection rootへ配置する。
+CLIはversion指定を実リクエストへ渡さないためversion固定とは主張せず、内容hashで同一性を
+確認する。実験code・旧PLAN/PREGEN/失敗出力は変更しない。復旧完了やGoal再開、精度改善、
+提出成功を意味しない。候補生成/採点/追加24GT読取/提出/commit/pushは今回未実施。
+
+定期メンテナンス確認（2026-09-12 23:10 UTC）: get_goalの現在値はblocked。復旧・再開の
+指示待ちであり、このheartbeatでは再開しない。canonicalのHEADは7368cebe2d445e7eb6d0492133fdfb9aed9e51f7、
+branchはcodex/issue-10-e28-appearance-cost、upstream未設定、staged空、既存WIPあり。
+unstaged/staged diffを省略なしで取得し、最新状態と関連差分を確認。既存全WIPの意味的な
+採用レビューは未完のためcommit/push条件不成立。git diff --checkと--cached --checkはPASS、
+official差分なし。今回の編集は本見出しと現状記録だけで、追加test/lint/typecheckは不要。
+E26提出56069885は既録public0.922で終端済みのためAPI再照会なし。Qwen起動・ダウンロード・
+推論・採点・提出・fetch・commit・pushはなし。E23 incumbentとDATA_UNAVAILABLE HOLDを維持。
+
+E28候補初回停止（2026-09-13、DATA_UNAVAILABLE・精度未評価）: 登録生成session13169はexit1。
+停止後の再確認: 対象pairs NPZは依然0件、child44360は存在せず再実行していない。
+既存notebook metadataの取得元候補はtaichiiiii/biohub-e23-association-collection36。
+REFERENCE_PLANでgroup00〜02だけが既露出diagnostic12に対応することを再確認。復旧対象は
+この12動画の1188packet/1,935,446,009bytesに限定可能。過去の完了/metadata取得記録はあるが、
+remote出力の現在の可用性やversion同一性はまだ確認していない。データ障害で停止するユーザー
+指定を維持し、外部取得・新規実験は開始せず、復旧後再開の指示を求める。
+PREGENは正規に作成され、child44360はFileNotFoundErrorで停止。parent6.793秒、清潔に回収、
+killpgなし/reap_errorなし。最初の44b6_12dfb391/pair_0000.npzがcollection rootに存在しない。
+load_appearance_framesの参照パスはmanifestと一致しており、初動の「path組立ミス」疑いは
+否定。collection配下のpairs NPZは0件。既存台帳でもmetadata/graphの取得とpacket未取得が
+分離して記録されていた。prepare_appearance_planはpacketのbytes/SHA/signaturesをmanifest
+から転記するが実packetを開かないため、PLAN/Noneの成功は入力実体の存在証明ではなかった。
+プロジェクト内のpair_0000探索ではpublic4とsyntheticだけで、対象known12の既存copyはなし。
+これは実データ不足と入口の存在確認不足で、候補精度の非改善ではない。全部分出力/ERROR/
+PREGEN/旧PLANは保存し、candidate v1やPLANを上書き/再送しない。codeは変更していない。
+ユーザーGoalのデータ障害停止条件に従い、候補生成/採点/提出を停止。復旧には固定manifestの
+known12 packet実体を一致hashで用意し全件を実確認した上で、新しい出力先/PLANによる再登録
+が必要。追加24GTは未露出、提出0/5、科学的非改善1/8。既存E23を保持しE28の採用判断はなし。
+
+最新継続（E28実行前評価・候補開始判断）: 前turnは76PASSと実PLAN凍結検証によるprogress。
+PLAN SHA41f55391bb0217d46c62a3f4c4f8cbcc15d795d21ea3d2d6ffabd726dcc6e5d5を再確認。
+結合した登録生成/採点経路と現物PLAN/Noneの新証拠をMAX session83026で評価し、限定known12
+generation+scoringへCONDITIONAL PROCEED。親は初回実candidate/採点に残る結合riskを認め、
+凍結予算内の本実行で検証する判断を採用。既実行candidateを前提とする条件は初回実行では
+満たせず、採点coreのbaselineのみ/GT不要smokeという提案も実APIは両arm・GT採点が必要な
+ため採用しない。結果を偽装したsmokeや同一評価の追加実行はしない。max_distance=7.0は
+既存E27 core/凍結contractと一致を再確認。8GiBはchild self peak RSSでありprocessgroup
+aggregate上限ではない（MAX記述を補正）。256MiBは親子出力合計。
+実行方針: このPLANでrun_registered_generationを1回のみ実行し、成功したcandidateを同じ
+凍結PLAN/PREGENでscore supervisorへ渡す。生成失敗時はsource/PLANを変えて黙って再利用
+しない。candidate生成中/未採点中のcode変更・commit/pushは禁止。元のGT境界/採否基準/
+提出条件は維持。これは候補の科学的採用や提出許可検査の完了ではない。
+
+最新継続（child成功接続・実PLAN凍結）: 前turnは監視test統合/独立評価/75PASSによるprogress。
+Flash session4093のchild成功testに対し、親がcopy.deepcopy/boxのsig/Path引数の参照誤りと
+未使用変数を機械修正。module直代入による他testへの漏れはsession87018のmonkeypatch3文で
+置換。新1caseで実run_score_childのE28 PLAN→generation→core→共有post→成功sealを確認。
+stage境界はmockであり実GT採点ではない。関連5file76passed/1.07秒、Ruffのimport空行1件を
+整形、diff check PASS。
+Flash session7042のmetadata専用PLAN組立scriptはscore_sourcesがlistだったため未実行で
+拒否し、session55769のdict loopへ置換。親は既存cb()の無引数契約に合わせ追加label引数を
+除去した小規模API修正のみ実施。Ruff PASS後に既存exclusive writerとverifierで実行。
+session8041 exit0、9.522秒/selfRSS472,760,320bytes、PLAN_VERIFIED_NOT_GENERATED。
+PLAN=outputs/local/e28_eval12_plan_20260913_v1/PLAN.json、890662bytes、SHA256
+41f55391bb0217d46c62a3f4c4f8cbcc15d795d21ea3d2d6ffabd726dcc6e5d5。
+generation source50/score source65、固定None対照・appearance plan・legacy bindings・known12
+inventoryを既存verify_planで実照合。候補出力はe28_appearance_eval12_20260913_v1。
+PREGEN未作成、候補未生成、GT semantic採点なし、提出権限false。ここからscore sourceも
+凍結し、変更時はこのPLANを上書き/流用せず新たに検証する。次は結合した実行経路のMAX
+実行前評価を経て登録候補生成→直列known12採点へ進む。新規提出0/5、非改善1/8維持。
+
+最新継続（E28監視test統合）: 前turnは登録生成実装と7case追加によるprogress。
+未適用supervisor test案をFlash session10364で限定修正したが、成功testの架空fieldや
+appearance_planのlocal変数代入が残り全体は不採用。親は正しい禁止stub/厳密post署名/
+実result argv・environment参照だけを選択し、nested PLAN代入はsession85436の1文を採用。
+元の成功testの実file/path/false権限assertは維持。briefの「KeyError発生」は静的に予想した
+不備の表現であり、修正前案を実行して例外を観測したわけではない。
+既存fixtureをindirect e27/e28で共有し、旧E27の11caseは維持、新E28正常/4失敗caseを追加。
+E28の固定argv/schema/env、選択verifier・共通callback、import不正/旧schema/監視後budget/
+timeoutによる成功seal撤回とprocessgroup cleanupを確認。単体16passed/0.14秒、Ruff PASS。
+同一test案2失敗の新riskとしてMAX session45245で統合版を1回評価、ADOPT WITH MINOR
+OBSERVATIONSを受領し親もこのtest範囲で採用。E28のimport_extra/nonzero/seed追加は既存E27
+共有処理検証と重複するため今は増やさない。省略時E27動作は既存caseが実際に検証している。
+関連5file75passed/1.07秒、diff check PASS。test_e27_score_supervisor_v2.py SHA
+8f7582e4438aaf43e1e64fbdec1d1308e01f15522ed1c1482bf7d18faf02f43a。
+これはmock childを使う実supervisorのroute/lifecycle検証であり、実E28 score child成功や
+CV改善ではない。残るchild成功接続、具体的PLAN凍結/実検証、候補実行前評価を継続する。
+候補生成/採点/提出はまだなし。新規提出0/5、連続科学的非改善1/8は維持。
+
+最新継続（E28登録生成接続）: 前turnはNone物理/事後検証と共有採点CLI統合によるprogress。
+Flash session75559のrun_registered_generationをE28 moduleに追加。親が欠落time importのみ
+補完。既存E27 wrapperのPLAN確認True/True/False・排他的PREGEN・内容/再binding比較・
+単回生成・生成後再検証を維持し、E28 appearance planとbudget callbackへ明示接続。
+wrapper全体にも既存1800秒/selfRSS8GiB検査を適用（子の固定予算を延長しない）。
+Flash session40886のtest案は0始まりdrift比較と存在しないbudget_calls戻り値参照で不採用。
+session96160で該当2行の修正を受領し適用。新7caseは正常、既存receipt保護、生成前後の
+PLAN変化、生成失敗時無再試行、入口/生成後のbudget失敗。mock境界間で同一callbackを
+渡すことも確認。登録/core/PLANの関連3file39passed/0.96秒、Ruff/diff check PASS。
+関数APIのみ追加し、generate CLIは未追加（採点CLIは引き続きscore-child/scoreのみ）。
+次は既存supervisor fixtureをE27/E28で共有する限定test拡張をFlash session77621へ依頼。
+session77621の案は未定義sharedm/box_out_for_routing、未設定FakePopen属性参照、
+appearance_planへの切替欠落、E28 verified候補IDの未更新、例外を返すだけの禁止stubがあり
+不採用・未適用。次回は共有moduleがmであることとpath/fixture契約を明示した限定修正が必要。
+登録処理source SHA 8f8cb8ebd0347e03c0c643b95cac6c9c228286b9895bc536b9fa28ea8c370a22、
+新test SHA a6912890ca9f95f225f3571d35e2b4e93086a5b021064e98ba268728ae07df09。
+候補生成・採点・提出は未実行。generation sourceとNone対照は保持、新規提出0/5、非改善1/8。
+
+最新継続（None物理PASS・共有child/supervisor接続）: 前turnはtest案の不採用/再設計と
+Flash成果物準備によるprogress。session99688はexit0、child/parentともE28 None専用
+NOT_CANDIDATE PASS。12動画491317行、250465nodes/240852edges。CSV25,549,191bytes、
+SHA256 d4c976c69f850f3f1738523482a272d3468eaf8c99082e128069b9f690ff42a9で固定reference完全一致。
+child846.565秒/self peakRSS4,577,787,904bytes、parent847.148秒/total35,980,121bytes。
+gt_read=false、submission_allowed=false、killpg空/reap_errorなし。これは精度改善ではない。
+None終了後だけ、Flash child draftとentry7caseを実source/testsへ適用。共有supervisor案も
+session32600から採用。親はpatchの既存context（get参照/コメント）を実sourceに合わせ、
+selector検査1行を設計どおりimport前へ移動した小規模routing修正を明示。数学/GT/閾値は不変。
+関連4file59passed/1.02秒、Ruff/diff check PASS。新testはE28 PLAN入口例外/cleanupと
+invalidselectorだけで、E28成功採点/latebudget/親E28監視の証明には未到達。
+実None artifactをe28_score.verify_generationで再検証しPASS（session36961、2.589秒、
+355,696,640bytes self peak）。生成sourceclosureが共有score編集後も一致することを実確認。
+scripts/e27_prior_score_v2.py SHA efe1c39082be300383ddca2f3a8fb80c3fefa5efd95ccbf04573b92e1e9102d8、
+tests/test_e27_score_child_v2.py SHA 51b5ff67c2932847c3c893453c402e4b90c2eadc59958c9b18a1d1925192a723。
+次にE28 score-child/scoreだけのCLIと直接testをFlash session54665へ依頼し採用。
+既存shared関数へ明示experiment=e28で委譲し、例外messageは出さず型のみERRORへ記録。
+新4caseは2commandの引数/route/false権限、例外出力、未対応generateのdispatch前拒否。
+関連4file63passed/1.08秒、Ruff/diff check PASS、実moduleの--help exit0で起動口も確認。
+scripts/e28_score.py SHA 7c9472f0ab3de61c993ec2e29b99041ff1ba7f2f6c5ae54520abd594d4da0228、
+tests/test_e28_score.py SHA bad46f4fccd0bd1309b372af7fa9468ae58fd567e152787f2556a23ff3c5f7fc。
+PREGEN登録生成/PLAN生成およびE28 lifecycleの残検証・評価が終わるまでcandidate生成禁止。
+新規提出0/5、連続科学的非改善1/8維持。
+
+最新継続（物理対照継続・child test契約修正）: 前turnは修正案受領・構文確認によるprogress。
+今回session99688を再照会しlive確認、PID69662のCPU使用/経過時間も実確認。9/12動画まで
+完了、約12分時点のRSS約4.1GiBで上限内。terminal/parity PASSは未確認。
+Flash session42478のtest案は不完全helperのみ、session35956修正版はgenerationのpath誤り、
+postの全keyword-only署名、誤monkeypatch対象、options置換によるclosure不一致、handler復元の
+逆assert、late budgetの矛盾assertなどで両方不採用・未実行。科学的非改善には数えない。
+同一test変更2失敗の新証拠をMAX session69261で評価しDO NOT ADOPT。親も拒否を採用。
+ただしMAXの不足import/非隔離fixture指摘は既存moduleへのappendとtmp_path fixtureを無視し、
+mock候補ID自体を不正とする指摘もlifecycle境界testの役割を超えるため採用しない。
+MAX提案の普通strへの変換をinvalidとする検査、PLAN dispatch前の出力不在assertも現契約と
+異なるので不採用。大きな一括test案を棄却し、entry route/selector/例外時handler復元だけの
+新bounded taskへ再設計（Flash sessionはE28_CHILD_ENTRY_TEST_RESULT.jsonl参照）。
+これはfull成功/latebudget/親監視検証の代替ではなく、残るgateは維持。共有supervisorの限定
+route修正briefも実関数のdef〜末尾から準備。entry test session65941の7caseをreviewed draftへ
+保存し構文compile PASS。親がCORE.json/RESULT.jsonを実artifact名SCORE_CORE.json/
+SCORE_RESULT.jsonへ機械修正（assert対象の定数参照訂正）。test未実行・source未適用。
+続いて共有supervisorの限定route修正をFlashへdispatch（E28_SHARED_SUPERVISOR_RESULT.jsonl）。
+None対照10/12動画完了を確認。実sourceは一切変更していない。
+
+最新継続（再開確認・共有child修正案再依頼）: None親の初回起動はbiohub import前に
+ModuleNotFoundErrorで終了。推論/出力生成前の起動設定エラーであり科学的非改善には数えない。
+親の起動だけPYTHONPATH=src:official/src:.を明示して再開（session99688）。子の凍結環境や
+生成sourceは変更していない。再確認時はknown12中2動画完了、親は実行中で重複起動なし。
+Flash E28_SHARED_CHILD_RESULT.jsonlはturn完了だが、不正な5引数署名と_score_protocol欠落で
+不採用。原因として親briefのsource切出しがdef行を欠いていたことを確認。read-onlyで拒否された
+tool試行もstderrにあり、実装適用/成功とは扱わない。実署名と関数全体を含む修正briefを作り、
+NO TOOLS・2関数のplain textだけを要求し、同じsubscription-only Flashで再依頼（session32634）。
+session32634は署名/分岐を修正したがexact type検査がなく、親の再切出しも末尾handler復元を
+欠いていた。親側context不備を明示し、session67675でその2点だけ訂正を依頼。helperと元の
+finally復元を受領し、前deliveryのchild本文と合わせたREVIEWED_DRAFT.pyをoutputsに保存。
+構文compile PASS、実source未適用・実行テスト未実施。入場logはsubscription-cloud-only /
+route=cloud / model=qwen3.8-flash / automatic_retry=0を確認。最後の訂正ではtool試行logなし。
+None対照は4/12動画完了を確認。物理対照のterminal確認までcode適用を保留する。
+新規提出0/5、科学的非改善1/8は不変。
+
+最新継続（共有post検証・None物理対照へ）: 前turnはPLAN実装と20test成功によるprogress。
+Flash session68364で既存e27_prior_score_v2.verify_score_coreにexperiment=e27/e28を追加。
+既定E27の呼出形は維持し、E28だけ同moduleのplan/generation検証にbudget付きで分岐する。
+postの数学・行再構築・artifact再束縛・非採点/非GT semantics・false権限は不変更。
+test初稿session89450はmodule/関数選択・GT fixture identity・callbackの取り違えで不適用。
+session21989修正版の8caseを採用。E27既定/明示とE28正常、artifact/plan drift、未知selector
+3caseを確認。post時にscore_submission/GT preflightを禁止し、検証API各2回・入力とfileの
+非変更を確認。関連4file 52 passed/1.01秒、Ruff import並べ替え1件のみ機械整形、diff check PASS。
+
+採点監視の全接続を待つだけでは対照artifactが得られないため、None対照だけの物理準備を
+新しいreproducibilityリスクとしてMAX session17409で評価しCONDITIONAL PROCEED。
+親は固定CSV完全一致のNOT_CANDIDATE対照が科学評価や未採点候補ではないことを確認し、
+採点接続前のNone先行を採用。本設計に限定的な順序変更を実行前に記録。candidateは従来どおり
+PLAN/PREGEN/監視全接続・実行前評価を満たすまで生成禁止。source closureに本設計が入る
+ことはg._EXTRA_SOURCESで実確認済み。生成closureはここから候補まで原則固定し、台帳だけ
+進捗追記する。旧source対照を新sourceの対照へ流用しない。
+実行予定: e28_none_parity_20260913_v1、known12 CPU、1800秒/child self-RSS8GiB/親子256MiB、
+既存reference25,549,191bytesとSHA完全一致必須。これはGT採点・精度改善・提出ではない。
+
+最新継続（E28 PLAN検証・共有監視設計）: 前turnを生成記録検証/core追加と11test成功による
+progressと分類。Flash session49244でverify_planを追加し、固定E28 schema/keyset、source
+closure、None baseline binding、appearance plan、legacy SHA、known12 inventory選択、
+候補出力先と検証後のplan/source再束縛を接続。CV閾値・追加24GT境界は不変更。
+
+Flash session52857のtest初稿はlocal bindingが合成legacy SHA stubを迂回し、正常系が
+失敗するため不適用。session63600で実binder委譲と各負例の具体的なエラー照合を追加。
+初回19PASS/1FAILは期待メッセージcandidate outputと実candidate_outputの綴りだけが違い、
+意図したguardが実際に例外を投げたことを確認。親がunderscore1文字を機械修正し、
+tests/test_e28_score_plan.py + tests/test_e28_score.py 20 passed/0.91秒、Ruff/diff check PASS。
+新9caseは正常known選択、candidate/appearance/source集合/baseline binding/output同一の
+5改変、誤digest、既存candidate、inventory検証中PLAN変更。合成2動画以外のsealed_extraを
+inventoryへ渡さないことを確認。GT実データは読まず、legacy固定hashだけfixtureで置換する
+ためproduction anchorや実known12データの検証完了を主張しない。
+SHA256 scripts/e28_score.py=bb5819e2f409bca738640778b0f0d9a271312d26da18cc39fabd676586e27ded、
+tests/test_e28_score_plan.py=532138e609dbd40a8bbc1ecadc8d4b7556a54bf25a615e3dc581f62a29e90889。
+
+残る約650行を複製するリスクを新しいmulti-module設計問題としてMAX session16426で一度評価。
+共有verify_score_core/run_score_child/supervise_scoreへexact experiment=e27/e28の明示選択を
+加える案にConditional Approve（設計のみ）を受領。固定label/CLI/異なるverify署名の明示分岐、
+旧label不変・CLI/argv/env・再束縛テストを採用。E28も同じe26集計を使うため別の数学分岐は
+加えず、既存identity-only adaptationを維持する。MAXのcallback省略がTypeErrorになるとの
+説明は現verify_planのcallable guardによるRuntimeErrorと異なるが、callback必須という
+指摘は採用。既存E27 scorerのコードはまだ変更していない。設計と具体label表をE28設計へ記録。
+PREGEN/登録生成は共有化対象外として未完了を明示。次は共有post-verifierの狭い接続から
+実装する。全worker終端、物理実行/新GT読取/提出/commit/pushなし。
+提出0/5、有効未改善1/8、E23 incumbent、Goal active維持。
+
+最新継続（E28生成記録検証・公式採点core）: 前turnは親子17新case/関連97件成功という
+progress。既存E27 score v2のverify_plan/run_score_child/supervise_scoreを現コードで確認し、
+E27固有mode/schema/priorをE28に流用できないことを再確認。native追加spec委譲は新規/既存
+どちらもagent thread limitで未開始。親が範囲を確認し、Flash authoring自体は継続できたため
+Goal全体のblockerとは扱わない。
+
+Flash session85146のgeneration verifier初稿はimport元、budget引数、candidateID/field所属、
+候補CSVまでreference一致要求する誤りで不適用。session45219の限定修正を適用して
+scripts/e28_score.pyへverify_generationを追加。generic read_generation_receiptsと既存
+CSV/bounds/raw統計検証を再利用。Noneだけreference一致、候補は実binding/feature receipt/
+source/planを検証し、検証後の変更を再hashで拒否する。GT/モデルをこの関数で読まない。
+
+生成検証test初稿session89397は架空hash helper、出力階層/親recordの誤り、古いbinding等で
+不適用。session32970とsession75125の3literal修正を採用。実read_generation_receiptsと
+実bindingを使う7合成case（両arm成功、None CSV不一致、候補feature binding不一致、plan不一致、
+検証中raw artifact変更、非callable budget）が成功。CSV/bounds/raw/appearance内容検証は
+stubで、検証APIへの接続とfile receipt同一性のテストであり実データ健全性の証拠とは分ける。
+
+現コードでg._binding_for_pathがpath/bytes/sha256の3fieldであることを再確認。以前のbriefで
+Readerの2field bindingと混同した説明は誤り。実bindingを直接比較するテストは維持し、
+仕様や期待値を2fieldへ弱めていない。後続brief/設計へ正しい区別を反映した。
+
+Flash session56554でscore_eval12_coreを追加。E28 identity/両armの同一設定・入力・plan/
+priors=Noneを照合した後だけ、既存公式score_submission(max_distance7.0)、known12 GT
+preflight、summary normalization、_paired_score_recordを使う。gateの識別子以外は不変更。
+session86823の4core testとentry-budget guardを採用。親が未定義m.E28_APPEARANCE_COST_V1
+参照を既定の同名文字列へ機械修正し、guard hunkの架空signature/docstring contextを実関数の
+contextへ合わせた。アプリの数式やテスト期待値の変更はない。
+
+tests/test_e28_score.py 11 passed/1.09秒、Ruff・git diff --check PASS。core testは実gate集計を
+使いdelta0 REJECT / +.01 PASS、config不一致で採点前停止、summary不一致で終端successなしを
+確認。ただしscore_submission自体は合成値を返すため、E28の実CVが+.01という意味ではない。
+SHA256 scripts/e28_score.py=8f34a82526611e8c8e74e4d5c9f0664ec44d8c7d44d936d1d432716c16c44811、
+tests/test_e28_score.py=11991f12b04b4332d1bf741d4790cf40f535c752fb0037f2f921a259e99ea4ab。
+未完了はE28 PLAN/PREGEN、score post-verifier/child/supervisor/CLI、実行前MAX評価、直列物理
+None parity→候補→公式CV。全worker終端、物理実行/GT追加読取/提出/commit/pushなし。
+提出0/5、有効未改善1/8、E23 incumbent、Goal activeを維持。
+
+最新継続（E28親子テスト完了）: 前turnをmode配線変更と失敗テスト案の特定によるprogress
+と分類。固定CV/候補係数/停止条件は変更せず、失敗した専用testの具体修正を継続。
+反復Flash失敗をtriggerにMAX session39798で一度評価しDO NOT ADOPT。builder mode、
+None CSV、RESULT保存前hashの指摘を採用。MAXのdict ==比較がidentityで不安定という説明、
+ternary assertが偽陽性になるという説明、未使用verifier返り値の追加検証要求は実コードと
+Python semanticsに合わず不採用。実際の誤りはJSON往復後planに対するis比較であり==へ修正。
+
+Flash session60840の限定修正で親2正常系を採用しsupervisor15件PASS。session43468の
+異常系追加案はwriter namespace/監査出力先の誤りを特定し、session49819のliteral修正を
+採用。親E28 11case（正常2、None CSV不一致、schema/plan/feature binding不一致、Noneの
+余分なfeature file、receipt verifier失敗、plan/receipt検証/親RESULT保存後の時間超過）を
+検証し、supervisor全24件PASS。異常caseでは子RESULTを失効し、親successを残さず、
+保存後時間超過では親RESULT.failed.jsonも確認。GT/実subprocess/modelは使っていない。
+
+Flash session3494の子test案は架空prepared/cleanup helper、Noneplan誤認、count/binding
+誤りで不適用。session60641で修正後、親子44件PASS。session44079で順序反転・同一動画
+重複・None CSV不一致・CONTROL事後変更の4caseを追加。候補では本物のchild callbackを
+12回経由し、返却frames identityとreceipt順序/保存bindingを確認する。loader/coreは合成stub
+なので、その成功だけでは実特徴内容やCSV意味を証明せず、既存loader/pipeline実装testと併用。
+
+関連7file 97 passed/2.65秒、Ruff・git diff --check PASS。CLI --helpでもE28両modeを確認。
+runner SHA256=accb95febc4cc1689cdc71c3c381c46c15722111e63b9e0091f873eb01c576ee（不変更）、
+test_e27_baseline_runner.py=5e70dfa9ff9d68a9c365894059b490a5cf8f957c9fe178e2f1c610e8fee2502c、
+test_e27_baseline_supervisor.py=417234a7d5dcf54e4a21d1676cd4d364d63eada9b86c2a24195247c9eff27b6d。
+全worker終端。次はE28公式採点adapterの実装境界を具体化し、実行前評価→直列None parity→
+候補生成→公式known12評価。E27 scorerへE28を偽装しない接続方針を既存E28設計へ記録。
+物理候補/新GT読取/提出/commit/pushなし。提出0/5、有効未改善1/8、E23 incumbent、Goal active。
+
+最新継続（ユーザー再実行指示、E28 mode統合）: Qwen Cloud/qwen_token_planの明示Flash
+入口で再開。前回parent mode session2871はdouble-escaped置換と旧E27 recordへの新field
+混入により不適用。session95339修正版を選択適用し、reference binding検証の無条件実行は
+前案の該当hunkを採用して維持した。子callbackのload_appearance_frames import欠落も修正。
+e28_none/e28_appearanceを子・親・CLIに接続し、E28専用CONTROL/status、None parity、
+candidate receipt binding/plan再照合、prior非混合を追加。source closureに本E28設計を含める。
+session59726の時間予算hunkだけを選択適用し、plan準備前後・receipt検証後・親RESULT書込後
+にも上限検証。E28 elapsedは親の検証を含む。旧E27 recordには新fieldを追加しない。
+
+同sessionの広範テスト案は架空mode/API、CONTROL arm未更新、binding label欠落等で不適用。
+session21356修正版も架空helper/API、receipt filename/shape違い、RESULTのartifact混入等で
+不適用。同checkpointを棄却し、実supervisor全文を渡す2正常系だけのsession29131へ縮小。
+これも既存builderへの非対応mode、None CSV不一致、JSON往復dictへのis比較、書込前hashを
+期待値にする誤りが残り不適用。テスト期待値を弱めたり親が科学コードを代筆して通さない。
+追加テストは未完成であり、実候補生成を開始しない。全Qwen workerはexit0終端だが、
+exit0は成果物採用/テスト成功ではない。テスト・budget境界確認の再設計が次の開発作業。
+
+独立Terra/medium e28_mode_readonly_reviewはNoneのcollection依存とreceipt単独の独立検証
+不足を指摘。親判断: Noneも同一metadataを束縛するのは凍結設計どおりで、特徴値適用とは別。
+実loaderは返却するframe配列からmapped signaturesを生成（appearance_inputs.py 147–154）。
+偽造loader/改変sourceを仮定した提案を現実装の再現bugとは採用しない。ただしreceipt単独では
+独立再計算の証拠でない制限は維持し、source binding・実loaderテスト・採用前再現性確認が必要。
+
+関連7file 80 passed/2.55秒、対象runner/旧親子testのRuff PASS。新mode専用統合・時間予算
+境界テストは未完了なので、CLI配線完了を科学評価可能/改善済みと扱わない。
+runner SHA256=accb95febc4cc1689cdc71c3c381c46c15722111e63b9e0091f873eb01c576ee。
+物理実行/GT追加読取/提出/commit/pushなし。提出0/5、有効未改善1/8、E23 incumbent維持。
+
+最新継続（feature plan/receipt検証）: 前turnはcore callback adapterと実行統合設計でprogress。
+Flash session29188初稿はgroup/schema/receipt key、side件数、original照合欠落で不適用。
+session13537修正版はempty recordをNoneへ失い後段でpath参照不能、片側空/座標signature拒否、
+frame時刻一意昇順guard欠落のため不適用。2失敗・新しい再現性検証箇所をtriggerにMAX
+session25843で評価しDO NOT ADOPTを受領。empty/file完全性/frame順序の指摘を採用。
+MAXのdict equalityがkey順序依存という主張はPythonの意味と矛盾し不採用。fresh plan再構築を
+省略する提案も、既定の入力drift検証を失うため不採用。予算を緩和しない。
+session77425のliteral修正とsession54837のimport scope/型検証順序修正を一意適用。
+Ruffのimport並べ替え・unused import除去のみ機械整形し、prepare_appearance_planと
+verify_appearance_receiptsを既存runnerへ追加。新module/監視frameworkは作らない。
+Qwenのtool呼出をしたという自己申告に対応する実tool eventはJSONLになく、当時runner
+SHAも不変で、外部workerの直接source変更は確認されていない。
+
+実fixed metadata probeで12動画、各103binding、計1188packet recordを取得成功。
+prepareはmetadata SHA/bytesと署名済みrecordを確認しただけで、特徴NPZのarray値・GT・
+モデルは読んでいない。FEATURES値が健全/有益であるという結果ではない。
+Flash session1314の8testを既存test_appearance_inputsへ追加。未定義original_hashes参照
+1箇所だけ既存receipt.original_feature_signaturesへの参照に親が機械修正した。
+既存実PairCapture/Reader/read_packetの99合成NPZ fixtureを再利用し、成功、binding欠損、
+frame重複、original hash不一致、mapped shape不一致、GT flag、receipt欠損、非active空packet
+pair0098の事後改変を検証。fixtureではg._load/STEMS/rootを合成へ置換するため、productionの
+固定SHA照合の証拠とは分ける（上記metadata probeが実入力の確認）。
+関連4testfile 54 passed/2.62秒、Ruff・git diff --check PASS。
+SHA runner=61dfdaea04e5e9702636710b2a8d836766df866a5e9f62d50274ef3bd14e8df4、
+test_appearance_inputs.py=552ba544c4fdd8d69ec783a13122cb18407697252bc06c91f9b0b2209f35fee6。
+残りはE28 mode/CONTROL/FEATURE_RECEIPTS/親子statusへの実配線、実行前評価、None parity→
+候補生成→公式CV。CLIはまだE28 modeを受けない。物理候補/提出/commit/pushなし。
+全worker終端、Goal active、E23 incumbent/E27 REJECT、提出0/5、有効未改善1/8維持。
+
+最新継続（実行本体adapter）: 前turnはpipeline接続/合成604testでprogress。
+既存runner WIPをe27_screen_before_appearance.pyへ保全しcmp一致、SHAは設計へ記録。
+Flash session38607の2literal置換でexecute_baseline_coreにappearance_loader=Noneを追加。
+指定時だけpipelineへ同一callbackを渡す。非callable/E27 prior同時指定は本体処理前に拒否。
+旧None経路・イベント/予算/serializer/モデルloader/CSV/統計検証は不変更。
+同Flash作成の2直接testを既存test_e27_baseline_coreへ追加し、同一callback転送と不正入力の
+無副作用拒否を確認。初回core/runner/supervisor39 passed/1.04秒。Ruffのlambda表記1件だけ
+機械修正。科学コードの親代筆や検証期待値の緩和はない。
+
+独立Sol/high e28_runner_minimal_designは既存runnerへのe28_none/e28_appearance明示mode
+追加を推奨。新wrapperはstatus/parity/__file__ bindingがE27固定で、global monkeypatchや
+大規模共通化が必要なため採用しない。親はE28専用CONTROL/status、prior非混合、12動画の
+正確なfeature receipt/file再検証、None CSV一致、既存予算/cleanup維持を設計へ固定。
+prepare_inputsの返却契約拡張案だけ退け、既存_loadで固定reference/auditを再利用する。
+現時点ではcore callback adapterのみ実装済みで、E28 mode/receipt/CLIは未実装。
+SHA runner=2e0ff5655d414fe929b2bfcaf971c9c46c80e23c017acbc7e7006f9bf4b86e3d、
+test_e27_baseline_core.py=3684c98cc1cff5273778f907a6e9590d24d7be4dd5abc5dcaf75e5cdd8de8ef5。
+実packet/GT/モデル読取・物理生成・提出・commit/pushなし。Qwen/nativeは全終端。
+Goal active、E23 incumbent/E27 REJECT、提出0/5、有効未改善1/8を維持。
+
+最新継続（pipeline接続）: 前turnはloader実装と合成52testでprogress。pipeline既存WIPを
+outputs/local/e28_appearance_20260913/pipeline_before_appearance.pyへ同bytesで保全しcmp一致。
+保全SHA db4c47aa14f02daee374ea0682996d5fc6e6a7dbf981f25eca1ed1df91f7cd9c。
+Flash session7311の一意literal置換を適用し、run_postproc_core→filter_output_graph→
+pre_linefit→motionのappearance optionalを接続。新差分45追加/1削除のみ、旧WIPを保持。
+callbackはraw読込後/centroid前、node dictコピーを受け取り、1動画filter後に特徴参照を解放。
+E27 prior併用・motion無効・重複stem・非callableは出力作成前拒否。callbackのNone/空など
+動的な不正返却はraw読込/CSVヘッダ作成後・filter前に失敗する（全処理が無副作用とは主張しない）。
+
+Sol/high e28_pipeline_wiring_reviewは具体的不具合なし。Noneの旧call shape維持、copy隔離、
+呼出順序、参照解放、E27併用拒否をsourceで確認。テスト不足を指摘したため直接testを追加。
+Flash session80448初稿は架空feature形式/realfilter2回/kwargs省略等で不適用。
+session39241修正版は実装APIは合うが期待値に誤り（spy回数/割当/失敗時期）が残り不適用。
+session40315の2個literal修正で事前契約どおりの期待値を固定して適用。
+tests/test_appearance_pipeline.pyは実filter・motion・CSVwriterを使い、GEFF読込だけ合成に置換。
+10 passed/0.91秒: 省略/None/ゼロ補正CSV byte一致、b→a順序、外観による1→3への実割当、
+rawcopyへの変更隔離、次動画loader開始前のweakref解放、不正返却4種、事前不正設定4種を検証。
+Ruffとgit diff --check PASS。関連7testfileまとめて604 passed/2.02秒。
+SHA pipeline.py=2ae1380a91299e427649f95d280c8729634097ce27122f3a2e185cd67979e988、
+test_appearance_pipeline.py=1d46264b1f33bbd4d7cc17932725bd4196b4cca5ec255199254657316d28e50e。
+
+開発接続は合成検証済みだが、実known12 feature読込/固定E23 CSV再現/候補CVは未実施。
+次は既存e27 execute_baseline_coreのイベント/境界/CSV検証を再利用するE28実行adapterを
+最小追加し、入力receipt・新source binding・予算を凍結してNone対照→候補を直列実行する。
+既存E27のmodeやE27 CONTROL名を偽装してappearance実験を記録しない。既存g.run_baselineは
+appearance_loaderをまだ受け取らず、候補生成を行ったことにはしない。
+新GT/実packet/モデル読取、物理実行、提出、commit/pushなし。全worker終端。
+Goal active、E23 incumbent/E27 REJECT、提出0/5、有効未改善1/8を維持。
+
+最新継続: 前turnはmotion合成3test等の追加でprogress。今回は1動画feature loaderの
+契約を設計へ追加し、既存Reader/read_packet/detector_lookupを再利用する新module
+src/biohub/appearance_inputs.pyと直接必要なtests/test_appearance_inputs.pyを実装。
+Terra/mediumは固定audit→returned/pre/observer/pair manifestの既存SHA鎖をmetadataだけで
+確認。stage JSONのinput binding不足を報告したが、このloaderはstage/GTを使わないため
+stage readerや新しい認証鎖frameworkは追加しない。runnerは固定SHAのaudit/referenceと
+既存prepare_inputsによるpost/raw signature照合を再利用する責務を負う。
+
+Flash session88278初稿はbytesへの_sha呼出、detector_lookup引数、source/target混同等で
+不適用。session96133修正版はread_packet root誤指定とpacket.arrays alias保持が残り不適用。
+2回不適合・新しいfeature入力の由来/メモリriskをtriggerにMAX session74981で1回評価。
+DO NOT ADOPT、上記2点と明示的なrow所属検査不足を確認。MAXの「99packet制限」「非active
+frameを出力しない」「packet_count99」への異議は既存固定100frame契約と全99file検証に
+反するため親が退けた。packet_countは出力frame数でなく検証packet数であり、active出力数は
+receipt.framesで区別できる。GT/model/prior leakageはこのsourceには見つからず。
+session24741の5個のliteral置換を一意一致で適用。root/alias/row検査を修正し、featureは
+advanced-index copyだけ保持。親の機械的Ruff整形でimportと文字列書式を修正。
+
+直接test初稿session98764は架空戻り値/キー/誤ったfeature連結等で不適用。
+session45490の修正版を採用し、未定義fixture_nodesの束縛とbinding件数を親が機械修正
+（事前契約4metadata+99packet=103。4へ検証を弱めない）。testは実PairCapture/Reader/
+read_packetで99合成NPZを作成/検証し、mockでvalidatorを迂回しない。
+単体7 passed/0.50秒、関連packet reader/math/motionを含む52 passed/1.54秒。
+Ruff・git diff --check PASS。2**53超ID、raw部分集合、source row並べ替えとtarget列選択、
+片側件数差、98個のempty側packet、全103binding、座標端数/時刻/空raw/boolID拒否、
+returned/packet file改変拒否を確認（空側packetはt1〜98の98個）。
+SHA256 appearance_inputs.py=39dab9a1c483bdfab0bfe081ab3e09ebf712fa827a726cceeec0f6c0a839cce4、
+test_appearance_inputs.py=8ec59ecb517865e7720c958d24a376733bcba03141e2b9ee51bf53e0bc9aa58f。
+採用範囲は開発用loaderの合成検証まで。pipeline/実runner接続、実feature正規化成功、None
+CSV byte parity、実候補CV/再現性/CPU/形式/来歴/採用前評価は未完了。pipeline既存WIPは
+今回も不変更。実データpacket/GT/モデルの今回読取、物理実行、提出、commit/pushなし。
+全worker終端、Goal active、E23 incumbent/E27 REJECT、提出0/5、有効未改善1/8を維持。
+
+最新再開: Qwen Cloud qwen3.8-flashのauthoring routeでmotion optional testを再開。
+前回session96686のframe helper/graph_ops optional加算は作業中sourceに存在し、従来34testを
+再確認してPASS。pipeline既存WIPはこの再開で変更していない。
+session10483初稿は誤import/距離単位/添字/架空stats/無効frame keyで不適用。
+session58140修正版も文章混在・未完成Pythonのため不適用。全test一括checkpointを棄却し、
+同一prompt再送ではなく具体的ケースに分割。session53083の最終source部分だけ選択適用
+（先行draftの常真assertを含む部分は不適用）。assignment切替とgate不変の1test PASS。
+session94849のNone/relaxed test案は戻り値tuple等の架空APIで不適用。実API差分を示した
+session88027の修正版を適用。親によるapplication/testロジックの代筆はしていない。
+
+最終focused suite: 37 passed/0.91秒、Ruffおよびgit diff --check PASS。
+新3testは実Hungarianを使い、penalty差[[2,0]]、gate外6001不変、距離/確率telemetry不変、
+None/ゼロpenaltyの全edge・全stats一致、velocity履歴、relaxed部分集合での正しい全frame
+index参照とframe penalty計算1回を確認。これは合成動作検証であり精度改善ではない。
+独立Sol/high reviewはNone/ID/relaxed/gate加算に具体的欠陥なし。空nodes+空framesが
+空結果になる境界を指摘。親はactive transitionなしのhelper挙動として保留し、実候補loaderの
+空動画拒否を必要条件として設計へ記録。ID/時刻/欠損拒否の直接test、実packet→raw写像、
+pipeline接続、None CSV byte再現、実CV、候補採用前MAX評価は未完了。
+SHA256 appearance_cost.py=3440f73429bd45520897ed1bfb09248e297d662720f9554a5649ecc1c9ab2946、
+graph_ops.py=3c87b68a10c50c909cd580208277b3240dc4383aa9f181c1b1fd15804d8d73e9、
+test_motion_appearance.py=86d440bc7cda04543e5c7a3125d17b9fcd2b1bed1ba64608d36bd4050c0aaecf。
+Qwen/nativeは全終端。新規物理候補・GT読取・提出・commit/pushなし。
+Goal active、E23 incumbent/E27 REJECT、提出0/5、有効未改善1/8を維持。
+
+以下は設計開始からpure helperまでの時点記録（当時のhash/未実装範囲を示す）。
+
+前turnは固定2arm cost診断と直接因果を確認したprogress。現sourceとIssue #9終端結果を
+再確認し、既存featureの意味を追跡。実observer_off.pyの_index_featuresがW2のUNet出力から
+32Dを抽出してpredict_edgesへ渡す位置と、stageの独立pre公式対応の保持を確認した。
+最終CSV対応をそのままpreへ移さない。新しいGT/matrix成績は読んでいない。
+Issue #10作成後、同canonicalをcodex/issue-10-e28-appearance-costへ切替。既存WIP保持、
+checkout追加/commit/pushなし。analysis/e28_appearance_cost_design.mdを親が作成。
+一因子案はE23 motion costへの両seed内cosine距離平均×固定1.0um加算。E27 prior追加とは
+合成せず、既存fused/reverse係数の再探索もしない。特徴は同モデル由来で独立性を仮定しない。
+現在はレビュー対象で実装/数値成績/新提出なし。固定CV gateと提出0/5、有効未改善1/8を維持。
+
+Sol/high e28_design_reviewは条件付きADOPT-DESIGN。親は最終assignment costだけへの
+加算と、edge改善をdivision/node調整改善から区別する解釈条件を設計へ反映した。
+Flash session45929でappearance_cost helper/test初稿を受領し検証用に適用。
+9PASS/1FAILは矩形2source×1targetを誤って拒否する実装不具合。RuffはPASSだが未採用。
+限定修正session18601は_check_structureの戻り値Noneを配列扱いし、featureをcentroidと
+誤記したためsource不適用。2回不適合をtriggerとしてMAX session73443を1回実行。
+MAXは同じcross-side count defectを確認しDO NOT ADOPT、式/float64/他guardには
+重大欠陥を挙げず。親は全sourceを示した2箇所のliteral correctionへ範囲を絞り、
+session94916で全四入力の先行型検証と誤ったsource=target件数条件の除去を依頼。
+式・係数・seed・CVを変更せず、checkpoint全体の無根拠再生成はしない。
+
+session94916のexact2置換を一意一致で適用し、source/target件数を独立に扱うよう修正。
+session18601の有効な追加test3件を選択適用。未定義fixture定数Dだけ親が既定32へ機械修正。
+最終13 passed/0.02秒、Ruff/diff check PASS。矩形1×3/2×1、片側空0×2、同一/直交/反対方向、
+seed別平均、スケール不変、readonly不変、ゼロ/NaN/inf/型/次元/seed件数不一致拒否を確認。
+invalid_target_containerというtest名は実引数上secondary containersの拒否を検証している。
+他sideも同じ全四入力_check_structureで先行検証されることを親がsourceで確認した。
+親はpure helperだけ採用。MAX指摘のcross-side同数制約は除去済みで、同一reviewを再送しない。
+helper SHA e6cb57615dd1f0d5ffe7522bbf09b4c362c61e1b5375068d3ea52460fa638f98、
+test SHA fb132272e8f0fa05fa5e9459ee087eba3b7efd9df3a9a5dd2f6f48ecb8bfd34b、
+design SHA e1aca5ed1892509cada2d8dc17235257cde966595000886bdaf748b101a60ad4。
+この検証はID/window/packet→raw写像や実tracking/CVをカバーしない。次単位で既存Reader/
+detector_lookupを使う1動画feature入力とmotionのoptional経路を接続して検証する。
+既存graph_ops/pipelineは今回変更していない。新モデル/学習/GT追加/物理候補/提出なし。
+本turnはE28の一因子設計・独立レビュー・pure helper合成検証までprogress。Goal active、
+全workerはterminal、採用候補未確定、提出0/5、有効未改善1/8は維持。
+
+### 2026-09-13 Issue #9 — 固定099/frame94 motion cost実診断の実行登録
+
+実行結果: selected session8910、recorded session4837は両exit0、各parent status
+DIAGNOSTIC_SUPERVISED_NOT_CANDIDATE。selected child35.539061秒/RSS1,698,742,272bytes、
+parent36.036988秒/出力114,000bytes。recorded child32.936157秒/RSS1,631,649,792bytes、
+parent33.362618秒/出力114,034bytes。両stderr/stdout空、ERRORなし、所定99frames/28806edges。
+初回親起動だけPYTHONPATH未指定でModuleNotFoundError、child/output作成前に終了。
+4directory未作成を再確認してPYTHONPATH=srcで起動し直した（source修正/同一artifact再利用なし）。
+
+親readout: 全数finite、tight/relaxed順序、ID/pair一意、allowedへのmatch所属/値一致、
+raw<=gate、cost=motion+0.05raw−1.0probの誤差0（基準abs1e-12）、tight非空を確認。
+両CONTROLの差はmode/priorだけ、source/extra/reference/input/config/runtimeは一致。
+全source closureと成果物59fileを実readout後にSHA/bytes照合して一致。
+
+| frame94 tight | selected_only | recorded_prior |
+| --- | ---: | ---: |
+| source / target数 | 280 / 286 | 280 / 286 |
+| allowed / matches数 | 302 / 276 | 302 / 276 |
+| 29878→30184 prior | 0 | 0.71791011095047 |
+| 29878→30184 cost | 2.850006712610811 | 2.132096601660341 |
+| 29878→30187 prior | 0.8932602405548096 | 同じ |
+| 29878→30187 cost | 2.4786431937794005 | 同じ |
+| 29878の割当先 | 30187 | 30184 |
+
+tightのsource/target/allowed集合・全source位置・predecessor位置は完全一致。
+302pair中で変更があるのは29878→30184のpriorとcostだけ。raw=3.7827367704835564、
+motion=2.660869874086633は両arm同値。delta cost=-0.71791011095047=-delta prior。
+割当もこの1件のみ切替。他targetや別sourceとの競合・履歴差で説明する必要のない
+当該frameでのprior項による直接切替を支持する。relaxedの未割当target集合は切替に伴い
+変わるが、両arm allowed/matches=0で追加割当なし。選んだtargetの保存priorが低いこと
+だけではバグとは言えない（baselineで代替targetのpriorが0だったため）。
+下流short-trackでのexact component変化、GT TP同一性、private/CV改善はこの診断で未証明。
+E27既存公式REJECTは維持し、今回を新しいCV改善実験や提出と数えない。
+独立Sol/high readoutも同結論。さらに30184/30187へのtight許可incomingは各々29878から
+一本だけ、29878のallowed outgoingも当該2本のみと確認。当該固定Hungarian内の直接
+因果切替は支持されるが、frame95以降/下流/最終TP/他動画への一般化は支持しない。
+
+次ループ設計判断: E27を係数/閾値の再調整で救済せず閉じる。既存E11/E13/D2での
+同fused情報だけの剪定・探索の小効果を踏まえ、追加の識別情報があるかを先に確認する。
+Terra/medium next_signal_availabilityへ、受入済みknown12収集の既存manifest/sourceだけで
+per-seed forward/reverse logits・appearance/encoder特徴の有無/定義/写像/被覆を調査依頼。
+GT追加露出・全matrix読出し・Kaggle取得/実行・モデル追加/学習はしない。
+存在が確認できても独立性や予測利得は未証明。得られる別情報が無ければ同一確率の
+再包装を新仮説にせず、既存HOLDや凍結gateを維持して別の検証可能な案を設計する。
+Terraの可用性調査完了: known12 groups00–02の1188pair/100,430,084denseに
+primary_forward_logits・primary_reverse_logits（source×targetへ転置済み）・
+secondary_forward_logits・mixed_logits・mixed_probabilities、両seedのsource/target
+32D featuresが保存されている。secondary reverseは無い。確率だけsource軸softmax、
+raw logits/featuresは再正規化なし。detector indicesとpre graph IDsの写像が存在する。
+根拠は受入collection_run/RESULT・reference・group00–02/RESULTとpair manifests。
+これはmetadata/sourceの棚卸しで、全binary特徴の今回再検証や独立予測情報の証明ではない。
+親はそのままbranch順位を再掃引する案を選ばない。既存strategyにforward/reverse順位バー
+未達とE22のbidir再掃引禁止があるため。次の設計余地は未利用32D特徴の実定義・
+deployment候補での識別力を確認すること。学習や既存E17の代替モデルへ自動移行しない。
+過去GTの最終CSV対応をpre graphへ流用せず、既存known12 graph-stageの公式対応を再利用
+可能か確認してから、新しい一因子の数値契約を登録する。追加24GTは開かない。
+本turnは固定2arm実診断と直接因果の確認までprogress。native/Qwen/物理processは全終端。
+CV候補は未確定、E23 incumbent/E27 REJECT/提出0/5/有効未改善1/8を維持。
+CONTROL/COSTS/RESULT SHA selected=2b722a1a749f4e9d39a9f4d9dd41df39b44c727fb0eb1cbeb279f3dad13fb6fa/6bf552cbf609191581ed4b291e54a979190a5272521460b0c09535d77f35c4eb/de46b55cff952c2a3b7935e530f05a76f3550b1d3e95db147d00ccbb674b8168。
+recorded=993079efc9e0db2683bf5660b2b5e195e30c9fef18c4c23acf4c0056792cbe3e/2a75ee09042c4e4ea28da1a09cd69408df37a04674ef0f8f90d50c50fba3fd0e/12f4b401d7d902b4a7e3f0f77a2d879eb388089f3db14c46e104e246d2abdaae。
+SUPERVISOR SHA selected=5fb8b6512096bcdac13dd04bcd654f862389fbe61ed63849887bc1492bfa2d15、recorded=edb48bd042278be31936a32625ccbe3ea41b09bafaee9e244f8aab45b4338530。
+
+前Goal turnはprogress（driver/9合成testを修正・検証）。独立Sol/highの
+motion_driver_actual_reviewが現sourceを確認し、実prefix実行を止めるshowstopperなし。
+fresh allowlist確認numeric=[]/env_equal=true、pipeline signature・停止位置・prior SHAと
+入力前後照合が一致。CONTROL/COSTS本文は親readoutまで未受理とする。
+親判断: 既存probe4test、driver9test、実source境界レビュー、先行MAX評価とその指摘への
+限定修正を根拠に、driverを診断専用に限定採用。候補/科学的改善の採用ではない。
+同一機能のsynthetic subprocess frameworkは追加せず、以下の固定実child実行で入口を
+確認する。失敗ならERRORを保持し、同一出力を再利用せず、原因証拠なしに再試行しない。
+
+仮説は既登録の099親29878/frame94→95でのprior cost寄与の機序診断だけ。
+selected_only→recorded_priorの直列2arm、出力先はそれぞれ
+outputs/local/e27_motion_cost_selected_20260913_v1 と
+outputs/local/e27_motion_cost_recorded_20260913_v1（各_supervisorが監督receipt）。
+4directoryが未存在であることを確認。最初のarmの終端と本文整合性を確認してから次へ進む。
+driver SHA d5b961ae225db3b7bc806459c11f1c06e0ce3132ed218f7cf8b1273acd4ca67f、
+probe SHA302ad6cd99470ce8a2b66000229d2ec2db24b71241b7826c24b282c59a43fadeを固定。
+元g/e/source/input closure/priorは既存receiptに結合し実前後照合。両arm間source変更禁止。
+各arm1800秒、子self peak RSS8GiB（境界計測）、親子出力合計128MiB。
+CPU seed0/threads1/allowlist新process、GT・モデルload・後段CSV生成・提出なし。
+採否は既登録の99frames/28806edges、2pass、finiteJSON、binding、cost式abs1e-12、
+allowed/matches整合と両arm CONTROL比較。直接cost効果と履歴/全体割当による間接効果を区別。
+この単一動画診断は新しい有効CV仮説数や提出件数には加算しない。
+
+### 2026-09-13 Issue #9 — ユーザー再試行依頼・Cloud接続成功、driver案は不採用
+
+後続Goal: 前turnは不採用を確定し再生成checkpointを止めたためprogressと分類。
+MAX評価session65357 exit0、MOTION_DRIVER_BOUNDARY_EVALUATION_*。triggerは
+Flash複数回の不適合と未検証driverの再現性リスク。親判定は引き続き未採用。
+MAXの「逐次呼出で復元済signal handlerが壊れる」「setitimerの標準2-tupleが不安定」
+「source確認がRESULT読取より後」は現行実装/標準契約と不一致で不採用。
+CPU affinity新要件、既にfail-closedのsource不一致を成功扱いするかのような指摘も
+固定条件へ追加しない。確認できたdriverテスト未整備と親の既知cleanup/binding/
+post-receipt検査不足に限定する。まず所有processの停止・reapを小関数に分け、
+TERM成功/消失race/KILL昇格/最終reap失敗のsyntheticテストをFlashへ依頼。
+実データを使わず危険な実signalを送らないことを採否条件にした。
+
+限定修正: Flash cleanup unit session82436のhelperとexcept統合のみ採用。初稿testの
+os.killpgをlistへ戻すfixtureは不採用、修正session7929でmonkeypatch管理と同一event列へ
+是正。cleanup6件PASS/0.01秒、Ruff PASS。None/既終了/TERM成功/消失race/KILL昇格/
+最終wait失敗を検証。Flash receipt unit session8853は7つのexact置換が全件一意一致し適用。
+childの初期化前・prepare前・prior構築後・RESULT後の予算確認、timer解除→復元、
+parent RESULTの読取前後binding照合と親receipt後予算検証を追加。Ruff/py_compile成功。
+driver全体は未採用。supervisor synthetic3経路testを追加検証中。
+session80621はread-only禁止のpatchを試みsandboxで拒否、作業ツリー変更なし。
+返却textにも失敗testを否定するfixture後処理があったため適用せず、具体的fixture修正のみ
+session26142へ依頼。Qwen exit0をテスト成功とは扱わない。
+
+supervisor3testの修正session26142は適用。初回8PASS/1FAILは共有json.loadsのpatchが
+writerのreparseにも作用したfixture原因（CONTROL作成中に未作成RESULTを触った）。
+session90066のPath.read_textに限定するhook部分だけ採用、返却案の架空supervise(env)/
+誤ったERRORパス/期待statusは不採用で既存正しい実呼出・assertを保持。
+最終cleanup6+supervisor3=9 passed/0.04秒、Ruff PASS。親RESULT読取中の改変を
+binding driftで拒否し、親receipt後CAP超過はERRORを残して拒否することを実確認。
+driver SHA d5b961ae225db3b7bc806459c11f1c06e0ce3132ed218f7cf8b1273acd4ca67f。
+この9件は合成parent/cleanup契約であり、childの実prefix成功や科学的改善を証明しない。
+次の不足はchild orchestration/実prefixの確認。最終CONTROL/COSTSの内容検証と
+両arm固定条件照合は既存の親readout採否ゲートで必須（supervisor単体成功は不足）。
+全Qwen sessionはterminal。実データ診断・評価・提出なし、0/5・有効未改善1/8を維持。
+
+MOTION_COST_DRIVER_RESIDUAL_RESULTを確認し、process groupではなく単一process停止、
+strのbinding pathにread_textを呼ぶ不備、timer修正漏れを確認。具体的原因を渡した
+MOTION_COST_DRIVER_RETRY_TASKを正規入口から送付。session79028 exit0、実行ログは
+mode=subscription-cloud-only / route=cloud / model=qwen3.8-flash / automatic_retry=0。
+Qwen Cloudへの接続と応答取得は成功。RESULT/STDERRは既存
+outputs/local/e27_prior_prepare_flash_20260912/内のMOTION_COST_DRIVER_RETRY_*に保存。
+しかし返却全体は不採用・未適用。子のRESULT作成前bindingが再発し、親のread前bindingも
+未実装、既存post-exit budget検証を削除、ProcessLookupError時にwaitを飛ばす修正だった。
+同じ完成driver再生成checkpointは打ち切り、同一packetを再送しない。次は段階別の小さな
+契約テストを先に固定して検証可能な単位へ分割する。既存driverは引き続き未採用・実走禁止。
+既存probe/observerの回帰検証session53653は22 passed / 0.89s（driver検証ではない）。
+実データ診断・新規精度評価・提出は今回実施していない。科学的REJECT数と提出0/5は不変。
+
+### 2026-09-13 Issue #9 — E27_RECORDED_PRIOR_V1の有効な棄却結果
+
+score session12113はexit0。親status SCREEN_REJECT_EVAL12、returncode0、killpg[]、
+reap_errorなし。子評価/親の全binding・保存row再集計検証まで成功した科学的なREJECTで、
+過去の技術失敗と区別する。SCORE_RESULT SHA7946a781f8f5bfd0ca61f318740c86e27949515bf9e354370096a339ed925a25、
+SCORE_CORE SHA0f4dcbe44bdd13036cf572f1ce9622021e7a0ddebae307d22fb461da0def44c2、
+親SUPERVISOR SHA9eeb6ae2de708232190fcc9de819a5a78c8febc79940f3db4480a961aaac655b。
+子wall37.93946429109201秒/self peakRSS1,062,895,616bytes、親elapsed67.21275887521915秒、
+親子出力62,866bytes。保存先outputs/local/e27_recorded_prior_score_20260913_v3。
+
+fixed eval12 paired mean +0.0000922075088769329（必要+0.005の約1.84%）、median0、
+worst -0.000007837246844388801。5動画改善/2悪化/5不変。first_failure paired_mean。
+他5gateは通過だが、全条件のANDなので採用しない。閾値を事後緩和しない。
+
+| 公式eval12全体集計 | selected_only対照 | recorded_prior候補 | 差 |
+| --- | ---: | ---: | ---: |
+| adjusted edge Jaccard | 0.915484208574 | 0.915739126363 | +0.000254917789 |
+| division Jaccard | 0.117647058824 | 0.117647058824 | 0 |
+| combined score | 0.927248914456 | 0.927503832245 | +0.000254917789 |
+| edge TP / FP / FN | 7253 / 370 / 338 | 7254 / 369 / 337 | +1 / -1 / -1 |
+| division TP / FP / FN | 4 / 16 / 14 | 4 / 16 / 14 | 0 / 0 / 0 |
+| predicted nodes | 250465 | 250425 | -40 |
+
+全体aggregate差と動画単純平均paired差は異なる集計であり混同しない。
+node recallは0.983701512198933で不変。44b6 aggregate差+0.000012640867351310092、
+6bba差+0.00035142125604115115、両系統のdivision差0。
+
+| 動画 | combined score差 |
+| --- | ---: |
+| 44b6_12dfb391 | -0.000007837 |
+| 44b6_267148e4 | +0.000055501 |
+| 44b6_2a2eff9f | -0.000001549 |
+| 44b6_341df25f | +0.000000000 |
+| 44b6_587a1e22 | +0.000034677 |
+| 44b6_5f15d135 | +0.000014172 |
+| 6bba_062c8d37 | +0.000000000 |
+| 6bba_07e24132 | +0.000000000 |
+| 6bba_085bf656 | +0.000000000 |
+| 6bba_09961292 | +0.000985162 |
+| 6bba_0e7c0d07 | +0.000026365 |
+| 6bba_12665c0e | +0.000000000 |
+
+edge TP/FP/FNが変わったのは6bba_09961292だけ。残りの微小差は公式のnode数調整を含む
+adj_edge値であり、辺修復の成功件数と同一視しない。未対応nodeを一律FPと解釈しない。
+Sol/high独立診断e27_score_failure_diagnosisは終了し、保存armsから公式集計とgateを
+再計算して棄却を支持。CSV同ID集合の直接比較では10/12動画で辺集合が変化、
+候補の辺+360/-394、node+56/-96。44b6_341df25f(+4/-4)、6bba_07e24132(+3/-3)、
+6bba_12665c0e(+1/-1)のように純辺数/score差0でも交換がある。
+「公式TP/FP/FN集計の純増減が1動画だけ」は確認できるが、他動画のTP identity不変は
+未証明。099の利得は全paired利得総和の89.0349%、残り11動画平均+0.0000110298062679。
+親の別テレメトリ照合ではmotion辺件数の純増は全体+1だけ、gap node追加-3、
+short-track除去node+37で最終node-40と整合する。ただし件数だけで辺集合/原因を断定しない。
+残り24GTへ拡張しない。現在のE23 incumbentを維持し、この候補は提出しない（0/5）。
+新規の有効な採用基準未達結果はE27の1件を追加。対照再現/技術失敗/同候補v2→v3を
+別実験と数えない。get_goalのcreatedAt1789209475は2026-09-12 10:37:55 UTCで、
+E25/E26の終端はこのGoal開始前。現Goal内の有効な採用基準未達はE27のみ1/8。
+微小な正の点差は記録するが、採用可能な改善達成として停止条件をリセットしない。
+
+### E27棄却後の次ループ設計 — 後段の短track除去境界を固定診断（統合検証中・再生前）
+
+親は独立提案を採用し、次の仮説を「priorによる接続変更の最終的な差は、短track成分の
+生存/除去境界で増幅・消失している」と固定する。これはE27の原因診断であり新しい
+精度候補ではない。E27のbonus/geometry/thresholdを試し直さず、棄却結果を変更しない。
+
+観測点は同IDの辺/端点集合を、(1)motion直後、(2)gap/safe-division後かつshort-track直前、
+(3)short-track直後で記録する。間の修復処理と短track除去を一つの段階として混同しない。
+対照selected_onlyと棄却候補recorded_priorを固定入力で再生し、観測だけを追加する。
+最初の対象は099（唯一の公式辺カウント純改善）、44b6_12dfb391（worst）、
+44b6_341df25f（score0でも辺交換）の3動画。選択は結果観測後の機構診断であり、
+独立CV/代表標本/次候補の採否集合とは呼ばない。次の科学候補は従来の全12gateを要求する。
+
+必要な前提: 元sourceを変更しない新しい観測入口、固定入力/重み/config/依存の再照合、
+observer有無で既存の最終CSVと同一になる検証、合成stage順序/入力非変更テスト、
+動画別前後bindingと失敗時の部分出力保持。GTを生成/observerへ渡さない。
+観測者が実行順/配列/状態を変えるなら診断不成立とし、別予測の性能比較にすり替えない。
+実装担当はFlash、親が設計/差分を確認する。観測helperを実装・検証中で、追加再生はまだない。
+
+2026-09-13実装検証: 初稿は構文/遅延snapshot等の欠陥で未適用。R2は4 failed / 6 passed、
+MAXの読取評価はDO NOT ADOPT。正常motion callの誤検出、snapshot形式、NumPy数値型、
+テストfixture/oracleを限定修正した段階で9 passed / 1 failed、Ruff成功。
+残るreorderedテストは空node辞書によるKeyErrorが目的の順序検出より先に発生していた。
+ユーザーの再実行依頼を受け、Flashへ有効fixture修正と例外保持/NumPy/切離し検証を依頼。
+成果物はoutputs/local/e27_prior_prepare_flash_20260912/POSTLINK_OBSERVER_RETRY_*。
+worker成功と観測helper採用、物理再生成功、精度改善は別の判定として扱う。
+
+再実行結果: Flash session67004はexit0、launcher記録はsubscription-cloud-only / cloud /
+qwen3.8-flash / automatic_retry=0。返却テストを選択適用し、親が不足json import、
+空motion戻り値fixture、node synthetic配置を機械修正。edgeにnode flagを置く冗長testは不採用。
+session34047で18 passed / 0.95秒、Ruff成功、git diff --check成功。
+target内例外の同一性/既存profile復元、NumPy数値のbuiltin化、結果参照とsnapshot切離し、
+実graph_opsの小規模非観測/観測比較を確認した。helper SHA
+284576e19ae37f611397896140f95664937903001f331120cb87200fc354e19f、test SHA
+9c3aafc526a1c7499806827b5af828d9ead3cce81ef86ecaacd98950e51dcd2a。
+元依頼の全入力異常をRuntimeErrorへ統一する条件は未達（現状一部TypeError/ValueError）。
+実データ再生のbinding/出力同一性/時間上限は未検証であり、18 testsを物理採用完了と扱わない。
+この再試行では実験再生成・提出・commit・pushなし。提出0/5、科学的採用基準未達1/8は不変。
+
+Terra/mediumの入口調査に基づく再生設計の補足: 既存の12動画専用runnerは変更しない。
+単一動画ごとのrun_postproc_coreを使い、prior mapも当該stemだけに制限する。
+親が実コードを再確認し、initialize_inference_runtimeをprepare_inputsより先に実行する。
+CSVの全体行idはwriter起動ごとに0へ戻るため、既存12動画CSVとの動画単位比較では、
+両側のid連続性を検証した上で宣言済み全体行offsetだけを正規化する。
+node_id/source_id/target_idや他列、順序、数値表記は変更しない。これは診断専用の比較規則で、
+候補採否の同一性条件を緩めるものではない。専用再生runnerとbinding/budget検証は未実装。
+
+次Goal turnの分類はprogress: 前turnでFlash修正を適用し、18 testsの実検証証拠を取得した。
+今回はreplay_singleの統合とCSV比較器をFlashへ分離依頼（POSTLINK_REPLAY_CORE_TASK.txt）。
+親は入力初期化・凍結照合を呼出側の責務として保持し、coreは単一動画/一回の既存pipeline、
+同一cfg/model bundle、固定priorだけを使う。start/raw_stats/finishの完全順序を検査し、
+異常時もevents/raw_statistics/output_bounds、観測成功後はsnapshotsを保存する。
+CSV比較器は全referenceの行id連続性と対象動画block連続性を検査し、当該動画の全列を
+global id offset以外は文字列/順序とも完全一致させる。未完・不一致は診断不成立。
+追加のnative Sol/highレビューは実pipelineに対する観測点の成立性だけに限定する。
+公開APIの無効callable引数がTypeError/ValueErrorで即時拒否される違いは、現用途の
+正しいPython関数identityを固定して呼ぶ診断を阻害しない。全異常をRuntimeErrorにする
+当初の実装上の要望だけは撤回し、処理非変更・失敗検出・例外保持の科学的要件は維持する。
+
+Sol/high e27_replay_acceptanceの独立review完了: 固定6ケースに観測を妨げる実pipeline不整合は
+見当たらない。汎用motionの空戻り値は正常fallbackになり得るが、本診断では保存記録/再生
+raw statsともmotion非空・fallback0を要求して適用範囲を限定する。対象関数はpipeline側aliasと
+graph_ops側objectの同一性を実行前assertする。gap2 synthetic marker欠落も固定gap2無効で
+非該当。中間stageはsingle-parent/child、gap1/2、safe division、任意twin、geometry、pruneを
+含み、node差のprune成分を区別する。保存telemetryで無効と分かるstageを再生時も確認する。
+既存の凍結済みOFF成果物があるため、同一データをOFFで再計算する追加実行は不要と判断。
+ONのCSVだけでなく該当raw_statistics rowも保存済みOFFと完全一致させることを必須にする。
+これは高価な重複再生を省く判断で、由来照合や出力比較の省略ではない。
+
+replay統合の初稿session84166はexit0だが未適用棄却。reference prefix中にreplay行も消費、
+offset逆向き、返却prior receiptを捨てて架空cfg key参照、未定義pipeline引数/テスト等が原因。
+APIと制御順を限定したR2 session26680もexit0だが未適用。対象dataset列をrow_type列と誤認、
+返却件数がreference全体、Path専用APIへstr、event長さ検査前index、loader/予算gate遅延を確認。
+この2稿の具体的欠陥を新しいリスク証拠としてMAXへ一回評価依頼。session70019 exit0、
+REJECT/DO NOT ADOPT、主要7欠陥と未検証を確認。MAXのheader-onlyでStopIterationとの記述は
+正確ではなく、空ファイルが該当する（header-onlyは後段で0件拒否）。親は採用を保留。
+POSTLINK_REPLAY_LITERAL_TASK.txtで7箇所の限定修正とCSV/結合テストをFlashへ依頼した。
+これは同一packetの盲目的再試行ではなく、判明したAPI/制御不整合の是正。科学実験数には加算しない。
+
+限定修正session54950もexit0だが未適用棄却。返却patchはprefix動画を正常にskipせず拒否し、
+旧row_type判定と未定義rowsを残し、無関係returnへ未定義selected_count追加。直接必要なtestsも
+lambda代入構文エラー、prefixまで全て同dataset、非空出力fixture、loader未呼出等があった。
+同じCSV境界誤認がR2/限定修正で続いたため、このreplay統合checkpointを終了し、同じ修正を
+再依頼しない。scripts/e27_postlink_replay.pyとtests/test_e27_postlink_replay.pyは未作成のまま。
+前turnのobserver/helper18 testsのsource SHAは不変。テスト成功や物理再生成功の追加主張なし。
+次の独立した安全な診断として、既存の最終CSVだけで差分辺が所属する連結成分とdivisionを
+Sol/highへ読取分析依頼。これはobserver再生の代替証明ではなく、次の調査対象を絞るための
+追加情報。pre-short原因やGT TP identityは引き続き不明、閾値変更/再採点/提出はしない。
+
+#### 保存済みfinal graphの成分診断（再生成なし）
+
+Sol/high e27_final_component_diagnosisの読取計算完了。各動画で両armのnode/edge和を
+無向化したWCC（弱連結成分）へ差分辺を割り当て、その内部の各arm最終WCCを比較した。
+以下は最終予測の構造診断であり、pre-short snapshotやGTを使った媒介効果推定ではない。
+
+| 動画 | candidate辺 + / - | 差分endpoint | 差分を含むunion WCC | 片armだけのnode B / C | fork B→C |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 6bba_09961292 | 13 / 23 | 45 | 10 | 16 / 3 | 47→47 |
+| 44b6_12dfb391 | 17 / 12 | 35 | 9 | 0 / 5 | 103→104 |
+| 44b6_341df25f | 4 / 4 | 12 | 4 | 0 / 0 | 21→21 |
+
+099のB-only nodeは4本の鎖: [4152,4511,4834]、[14737,15041,15355,15677,15988]、
+[26040,26339,26617]、[30187,30487,30830,31111,31412]。C-onlyは
+[30184,30484,30793]。最後のB5/C3は同じunion30-node領域の代替であり、残り3本の
+B-only鎖と合わせ、removed component142→145(+3)、removed node551→564(+13)に整合。
+12dfのC-only鎖は[26112,26619,27109,27591,28077]で、Cでは25582からつながる59-node成分。
+removed component371→370(-1)、removed node1411→1406(-5)と一致する。
+新fork25522の成分は26nodeで、division例外がなくてもmin6を通る。
+341は4領域全てnode保持の純rewireで、removed component/node/edge=48/175/127は不変。
+
+影響下の最終WCC最小node数は099 B14/C16、12df B11/C12、341 B8/C9で、size<=6は0。
+最終成分がdivision例外で救われたという説明は支持されない。一方、全exclusive nodeが
+3/5-node鎖となり除去数差に一致することは、短track境界による増幅と整合する。
+反対armでpre-short時点にも独立WCCだったか、どのstageで分離したか、099のTP+1が
+どの接続に由来するかは未証明。閾値を下げる/上げる判断には使わない。
+
+次の一つの診断は5局所領域・6本のexclusive鎖のcut-certificateを固定すること。
+保持armで外部接続を仮想切断した時に3/5-node WCCとなるかを、予測ファイル無変更で検査し、
+その接続辺の保存済みprior/選択状態へ照合する。実際の辺削除、パラメータ変更、再採点はしない。
+この順序なら不合格の新replay統合を使わず、接続決定の調査対象を既存証拠から限定できる。
+診断用subsetを新たなCV採用集合に変更しない。E27 REJECT・現Goal提出0/5・有効未達1/8は維持。
+
+cut-certificate読取計算も完了。全6鎖とも外部接続は下表の1本だけで、仮想切断後の
+WCCが対象鎖集合に完全一致し、forkは0。実際の予測には変更を加えていない。
+
+| 動画・保持arm | 唯一の外部接続辺 | 切断後WCC node数 |
+| --- | --- | ---: |
+| 6bba_09961292 B | 3773→4152 | 3 |
+| 6bba_09961292 B | 14427→14737 | 5 |
+| 6bba_09961292 B | 25696→26040 | 3 |
+| 6bba_09961292 B | 29878→30187 | 5 |
+| 6bba_09961292 C | 29878→30184 | 3 |
+| 44b6_12dfb391 C | 25582→26112 | 5 |
+
+親/子で元成果物hashを再照合: B CSV d4c976c69f850f3f1738523482a272d3468eaf8c99082e128069b9f690ff42a9、
+C CSV f1749803ddb9a84ca37a25b4473453ee7ac26007884c6180ed0700a065da8d7b、
+B raw stats 70df692ecd3768b1a73b830f269aad5b05a1677c6a3368de017d26f349632959、
+C raw stats 4fb23c6e6d0e733d989bcf5498114ed33ddc32a7694d99a9e7a74a2a87adf0bf。
+次turnはこの6接続の保存済みpre-ILP probability/選択状態・競合候補を、記録済みID対応で
+照合する。未記録pairを確率0にせず欠測扱いとし、同一親29878の代替接続を優先する。
+GTや新たなパラメータ探索なしで、どの情報が接続決定へ届いたかを先に診断する。
+現在の未解決: pre-short実graph、公式TP identity、入力probabilityが最終costへ与えた寄与。
+本turnはprogress（不適格実装の棄却と、既存graphから新たな局所構造証拠/cut-certificate取得）。
+物理再生成/採点/提出/commit/pushは0、全ワーカー終端確認済み。goalの成功条件は未達でactiveを維持。
+
+#### 次Goal turn: cut接続の保存prior照合完了（読取診断）
+
+前turnはprogress。今回Sol/high e27_cut_prior_lookupが対象2動画のpre/post NPZ4本だけを
+Readerでhash検証し、全post-nodeのpre位置との一致、Reader.recheck、audit前後SHAを確認。
+新しいGT/画像/matrix読込、推論、学習はない。各親の保存pre候補は正確に2本で、下表が全候補。
+各cut対象への保存pre流入候補は1本。p>0.48の保存集合外は検閲され得るため真の確率0としない。
+
+| 動画・親 | Bで残った子 / pre確率 / post選択 | Cで残った子 / pre確率 / post選択 |
+| --- | --- | --- |
+| 099・3773 | 4152 / 0.8738567233 / yes | 4100 / 0.6573399305 / no |
+| 099・14427 | 14737 / 0.8319835663 / yes | 14732 / 0.6124718785 / no |
+| 099・25696 | 26040 / 0.7115268707 / yes | 25976 / 0.6923413277 / no |
+| 099・29878 | 30187 / 0.8932602406 / yes | 30184 / 0.7179101110 / no |
+| 12df・25582 | 26055 / 0.9105587602 / yes | 26112 / 0.5802745819 / no |
+
+6 cut辺の保存確率は全て存在。099の4本のB cut辺はpost選択済み、C cut29878→30184と
+12df C cut25582→26112は未選択。前者の保存edge_distは1、代替は2だが、この保存値は
+refined物理距離/motion costと異なるのでそのまま現コストへ代入しない。
+099の優先領域(t,z,y,x): 29878=(94,1,92,136)、30187=(95,1,96,136)、30184=(95,1,84,136)。
+
+親が実コード/CONTROLを確認: bonus1.0、velocity0.5、tight6um/relaxed10um、costは
+motion_distance + 0.05*refined_raw_distance - bonus*prob。tight/relaxed別の全体Hungarianで
+決め、predecessor位置を次frameへ伝播する。BではILP未選択対へのbonusがなく、Cでは
+その対にもpだけcost低下が加わる。したがってCが保存pの低い方を選ぶこと自体は矛盾でも
+実装不具合の証拠でもない。現行単因子E27を変えず、距離/速度/割当競合との寄与を区別する。
+直接bonusだけで変わったか、他対の競合/履歴伝播が必要だったかはまだ未確定。
+
+参照SHA: script49a9d8ad4d3d67c1ba6d26a046075aff04857e909422a70048affe2990e2cfd9、
+audit e56db2ab1d9a79a94d8ed97d1b02d9d6391713caf842a2672a0777419391e70a、
+099 pre16179bc7539c80309504e0f178d31124aeb9c42b970ee5ed02a1cfc00d821d37 /
+post c84c5d16bbb3b6c3e5198139e3c63506141e0fcd2bc1a75f84abe7bf4ee73060、
+12df pre29026d2b249820a5609a0a0f629be3a45b8230c388d0e4dc3c5df65c8629c8e8 /
+post5c846f8fdf7e341f1be66ed075ca878dcd523f501c93fcd0e854c84d75525ba9。
+CSVは前節のB/C SHAと再一致。今回も採否基準/成果物無変更、提出0/5、有効未達1/8。
+
+次の限定診断設計: 099の親29878・frame94→95に絞り、実pipelineのcentroid→motion prefixで
+両armの実assign_pass cost、predecessor、tight/relaxed所属と割当を取得する。最終CSV再生成や
+新しいCSV比較器を必要とする不合格checkpointは再開しない。既存prefix関数をそのまま使い、
+motion完了で意図的に止める専用の診断を別に設計する（未実装・未実行）。
+ここでの停止は候補生成成功ではなく、後段gap/DeepCenter/short-trackを実行しない診断専用。
+source/input/prior/CPU/budgetの事前固定と検証、既存関数非変更、取得内容の合成検証を要求する。
+当該frameだけを単独実行すると前frame由来の速度が欠けるため、既存motionの履歴を省略しない。
+観測済み候補で係数探索/閾値調整はせず、結果から次科学仮説を一つに限定して別途事前登録する。
+
+次Goal turnはprogress継続（前turnで6接続のprior/選択状態を新たに確認）。新診断は
+MOTION_COST_PROBE_TASK.txtでFlashへ依頼。これは棄却したCSV replayの再試行ではなく、
+既存pipeline prefixをmotion正常returnで意図的に中断する1関数で、CSVを一切作らない。
+099・frame94→95のtight/relaxed両passについて、全許可pairの実cost/raw/motion/probと
+実割当、source/predecessor物理位置を detached finite JSON として取得する。
+1親だけの最低costを見て全体Hungarianを説明しないため、該当frame内の全許可pairを保持。
+過去frameは通常どおり実行し、未来/後段は候補として評価しない。
+既存profilerがある場合は実行前拒否、他の例外は保持、固有BaseExceptionのみ診断停止として
+捕捉し、profilerを必ず復元。正常停止/所定2pass/有限値が欠けた出力は診断不成立。
+合成検証と必要MAX確認を経てから、同一099の2armをfresh CPU環境で直列に実行する。
+予定予算は各arm全体1800秒、self peak RSS8GiB、出力128MiB（常時OS RAM上限とは呼ばない）。
+元source・raw/image/prior入力を実行前後で照合し、1動画診断をCV改善/提出候補と呼ばない。
+
+Terra/medium e27_motion_prefix_entryの入口調査完了。fresh childでinitialize_inference_runtime→
+prepare_inputs→verify_prepared_materials→build_prior_inputs(mode)→099のfresh GEFF load→
+filter_output_graph_pre_linefit(cfg,nodes,raw_edges,dataset=099,association_priors=map[099])を使う。
+bundle=Noneでmotionまで実行でき、通常return捕捉時点はpipelineの結果代入より前。
+重心補正は全frame画像を読みnodesをin-place変更、edge距離も追加するためarm間reuseは禁止。
+各arm独立processで画像/入力確認も予算へ含め、モデルloadはしない。
+
+Flash cost-probe初稿session33412は返却。one-sided-empty pass、missing predecessor、
+非有限costを黙ってskipする挙動、BaseException捕捉、停止受理位置を親が指摘し、
+session96441の限定修正を選択適用。元例外でmotion return Noneの場合は既存のreturnを維持し、
+そのケースでもsentinelを投げる返却案は不採用。最初の2つのテスト稿は架空API/返却key等で未適用。
+現helper全sourceを文脈に追加したsession1062の1件に絞ったテストとmissing predecessor修正は
+採用。親がnode fixtureを実APIのID-keyed dictへ機械修正、未使用importを除去。
+session83733で新規1 test PASS/1.09秒・Ruff PASS。session35040の追加3失敗経路testを適用し、
+session50584で新probe4件+既存observer18件=22 passed/0.92秒、Ruff/git diff --check成功。
+実graph_opsの割当一致、一側空pass、finiteJSON、後段未実行、既存profile保持、元例外同一性、
+runによるsentinel握り潰しの拒否を検証した。実データprefixは未実行。
+新しい再現性リスク（意図的中断と実cost観測）の採用前評価としてMOTION_COST_PROBE_MAX.jsonを
+一回送付。旧CSV replay MAXとは異なる新source/acceptance/test証拠であり重複評価ではない。
+
+MAX session52391はexit0、Conditional Adopt as Diagnostic Helper Only。親は限定helperを採用し、
+物理実行の承認はdriver/binding/予算検証まで保留する。指摘を次のように照合した:
+- nested assign_pass変更が「silent/guardなし」との指摘は現codeと異なる。probe_motionはrun前に
+  _find_assign_pass_codeを呼び、個数!=1なら即時拒否する。加えて実実行driverで元source SHAを固定する。
+- locals欠落はcallbackのtry/except Exception内でcapture_errorとなり、正常motion終了で停止後に
+  pass不足またはprobe_data_invalidで拒否される。raw KeyErrorが成功出力へ抜ける経路はない。
+  MAX自身も本文でこの捕捉を訂正。エラーメッセージの細分化/二重のimport時guardは追加しない。
+- run中の別profiler導入/PyPy互換は未検証。用途を既存CPython環境・固定sourceのprefixに限定する。
+  real dataでの有限性、取得costの整合性、計測overheadはまだ未検証で、実診断時の必須確認とする。
+helper SHA302ad6cd99470ce8a2b66000229d2ec2db24b71241b7826c24b282c59a43fade、
+test SHA332c71b661667be2c56b62c81e0538ebe725bd6bbaab1407a21d583e46504d5e。
+本turnは新しいコスト観測helperの実装・合成検証・限定採用までprogress。
+全Flash/MAX/native作業は終端、元生成/採点sourceとCSVは不変。新規物理再生/採点/提出なし。
+次はfresh子processの実診断driverをFlashで統合し、099の2armを直列実行する。
+採用候補未確定、goal active、提出0/5、有効な科学的採用基準未達1/8は維持する。
+
+次Goal turnの分類: 前turnはprogress（新cost probe4件+既存18件検証・限定採用）。
+MOTION_COST_DRIVER_TASK.txtでfresh子processと直列1arm監督の入口をFlashへ依頼。
+固定099/frame94、selected_only→recorded_priorの順序とし、各runを新規outputへ分離する。
+子は実prefixの前にCONTROL、取得直後にCOSTS、入力/source再照合後にだけRESULTを保存。
+親はCPU allowlistで新processgroupを起動し、1800秒/親子出力128MiB監督、失敗時TERM→5秒→
+KILL→回収、ERROR保持。自己RSS8GiBは子の境界検査であり常時OS制限とは呼ばない。
+採用済みprobe SHAを明示固定し、新driver自身も既存source closure外のextra bindingとして
+前後/親子照合する。元画像/重みinventoryは検証するがモデルload/GT/後段CSV生成は行わない。
+保存両arm099に一致するmotion_frames99・motion_edge_count28806を局所整合条件にする。
+これらの件数だけでcost正確性/科学的因果を証明せず、取得後の数式/割当再照合も必須とする。
+
+Sol/high e27_cost_driver_gateの独立設計レビュー完了。取得後の親readout条件を実行前に固定:
+各passの許可pair一意、matchesが許可pairの部分集合で値一致、raw<=gate、全costを
+motion+0.05*raw−bonus*probで再計算して絶対誤差<=1e-12、tightに候補/割当各1以上を要求。
+両CONTROLのmode/prior以外のsource/extra/reference/input/config/dataset/frame条件を一致確認。
+該当frameで実probの異なるpairが存在しなければ、当該frameへの直接介入証拠は得られなかったとする。
+共通pairのraw/motion/位置履歴が一致する場合のみΔcost=-bonus*Δprob（同許容差）を
+直接prior寄与と呼ぶ。割当結果の直接帰属にはpass全体の候補ID/gate/許可集合/非prior costも
+一致が必要。tight変更に由来するrelaxed集合差やpredecessor変更は間接/競合効果として分ける。
+監督終了直後・receipt後のwall/CAP確認を追加し、ERROR不存在と全artifact/log/hashを親再照合する。
+この診断でprivate/CV改善や最終edge因果を証明したとは呼ばない。
+
+判定は各差分辺についてmotion発生/中間修復で発生消失/short-trackで消失を区別し、
+対応端点・成分size・既存除去理由を記録する。short-track前後で両arm差が不変なら、
+その差分に対する短track媒介仮説は不支持とする。最終score差だけから原因を逆算しない。
+このgraph-only診断は099のTP+1のGT identityをまだ確定しない。必要なら既知3動画の
+公式matching identityを別途hash固定で照合するが、未使用24GTへは拡張しない。
+次候補の変更はこの診断結果から一因子に絞って別途事前登録する。採用/提出は依然未達。
+
+### 2026-09-13 Issue #9 — v3生成と監督検証が正常終了、公式採点開始
+
+前Goal turnはprogress（別版統合/127 tests/MAX/登録/新規生成開始）。今回は同一session7289を
+終端exit0まで追跡、子PID71627消失、外側GENERATED_NOT_SCOREDまで確認した。
+子status E27_RECORDED_PRIOR_GENERATED_UNSCORED、親E27_RECORDED_PRIOR_SUPERVISED_UNSCORED、
+returncode0、killpg[]、reap_errorなし。CSV25,545,323bytes、
+SHAf1749803ddb9a84ca37a25b4473453ee7ac26007884c6180ed0700a065da8d7b。
+予測は旧退役v2と同byteだが、新規生成の由来を持つv3だけを採点する。旧v2を復活させない。
+子wall851.6061461251229秒、self peakRSS4,643,192,832bytes、子出力35,099,762bytes。
+RESULT SHAbc2ac00238f3b9be7fbd3100428e0b0c64e1f4b5b0cd9c749d0d69eb3a03171d、
+CONTROL SHA92e95469f4d5257b2bbe51f491783b3f4233939d87c8515047abb7e89ca62f1f、
+親SUPERVISOR SHA78ee12d7c6d150553a43452230b35d14bbd6732a447f7443dbcd5f8156bb7b80。
+生成wrapper内のPLAN/事前receipt/全成果物再照合も成功。既存sourceとPLANを継続凍結。
+次はe27_prior_score_v2 scoreをe27_recorded_prior_score_20260913_v3へ1回起動し、
+固定known12のbaseline→candidateを直列採点する。未だ科学的改善未判定、提出0/5。
+
+### 2026-09-13 Issue #9 — v3実生成開始確認
+
+実generate session7289を起動し、45秒の同一handle待機でもliveを確認。
+子PID71627、STARTED UTC20260912185344+0000（JST03:53:44）。
+PREGEN UTC20260912185329+0000はそれより前、
+SHA3a2bca92437143af0e7061678760fa18fdef26b0ba483ca9915da5f4dffcb114。
+CONTROL/STARTED/inference/deepcenterが生成され、CSVは初期0bytes、まだ結果なし。
+この時点で失敗/改善を判断しない。source/PLAN/予測を凍結し、同一sessionを追跡する。
+終端生成受理後に新moduleのscoreを直列起動する。提出0/5、採点未開始。
+
+### 2026-09-13 Issue #9 — 実入力preflight成功、MAX確認後に新規v3を登録
+
+前Goal turnはprogress: Flash実装の環境helperとfresh processを含む66テストが完了。
+今回は旧Qwen scorerを別path scripts/e27_prior_score_v2.pyへ版分けし、Flash session85170の
+literal差分だけを適用。SHA6ee60a77b4b263ff77636416eb4a74ea5daba94a4227692857c5e9e808ada970。
+新契約analysis/e27_prior_scoring_v2_design.md SHA6f9425426b8ccb43fefbf5d0a615f2065f77a75c23bc3b0344f60cf4370c707a。
+差分はschema/子module識別、helperと依存source/libtcc binding、起動envとimport追加値の
+分離記録/親照合だけ。旧科学契約/旧scorer/旧v2成果物、生成closure、公式数値処理は不変。
+
+Flash session68823の新module lifecycleテストを、session91981で訂正して適用。
+親レビューで誤ったRESULT_V2想定/RESULTへの不存在field期待、およびcorrupt receiptの
+fake子exit1が親の値検証を迂回してしまう欠陥を発見。FlashがRESULT_V1、STARTEDだけの
+field検証、corrupt receipt時exit0+具体的error照合に訂正。親は未使用変数代入だけを削除。
+127 passed (6.70秒): 新helper/child/supervisor90件+旧変更なしreader/core/登録37件。
+Ruff/diff check成功。合成lifecycleテストを物理採点の証拠にはしない。
+
+別fresh process session58626 exit0で実verify_plan(before_generation)/実selected_only
+verify_generation/seed0/環境検証/公式score_submissionのimport/再環境検証を完了。
+GT意味load関数をraising sentinelにしたまま成功、採点呼出し0。
+63 source refs、known12 GT opaque inventory12、strict JSON19,263,192bytes、対照CSV
+d4c976c6…不変。outputs/local/e27_scoring_v2_preflight_20260913_v1/READOUT.jsonに記録。
+
+新しい実障害の修正と再現性境界の変更を理由にMAXを1回評価（session2963 exit0）。
+結果ADOPT conditional、重大欠陥なし。固定Python3.12/macOS/venvへの依存を親が明記して
+このローカルscorer修正を受入。環境移行時は再検証/新事前登録が必要、Linux/Kaggleの
+実行保証ではない。MAX記載の「66 subprocess tests」は誤り（66件中fresh subprocessは1件）、
+JSON263,192bytesも誤記（実測19,263,192bytes）。親は実結果を一次証拠とする。
+
+最終PLANはoutputs/local/e27_eval12_plan_20260913_v3/PLAN.json、
+SHA82aadf60ac16edaf974e7cc979fa5c8dbd3cca43a579fd9e90afbbd27dcad0de。
+候補output e27_recorded_prior_20260913_v3 は新規、旧v2の再利用禁止。
+ここからgenerate wrapperの事前再照合/PREGEN排他記録後に直列生成する。
+実生成開始・完了は別途実プロセスとSTARTED/RESULTで確認する。採点/提出まだ0、提出0/5。
+科学的仮説・採否基準はE27既定のまま。技術修正を有効不改善実験数へ加算しない。
+
+### 2026-09-13 Issue #9 — Cloud Flash再依頼、次版の環境検証単体はfresh processを含む66件成功
+
+Qwen実装session61229/84610/63161は全てexit0。各入口はsubscription-cloud-only、
+route cloud、model qwen3.8-flash、automatic_retry0。実装とテスト本文はFlash出力、
+親は設計・出力レビュー・適用とimport配置/パスfixture/非hashableテスト入力の機械的修正を担当。
+初稿のPath厳密型比較はPosixPathを拒否するためFlashが訂正。親のnonempty環境値要求も
+CUDA_VISIBLE_DEVICESの意図した空文字と矛盾し、fresh regressionで発見してFlashに修正依頼。
+既知追加3値の完全一致、未知追加/既存キー変更/欠落拒否は維持し、環境を書き換えない。
+
+新規 scripts/e27_score_environment_v2.py SHAd518253be08dafb8dbc098791ba7d1deb80997e217eccdfdfb7e0bb2cdf5b0e6、
+tests/test_e27_score_environment_v2.py SHAd811108e05c2dc0215ffa796a32381065e052645434bb051459ccae6caa39b6b。
+同テスト66 passed (0.26秒)、Ruff/diff check成功。fresh subprocessは厳密起動環境で
+threadpoolctl/polars/blosc2を実importし、正常値の受理と未知追加の拒否を確認した。
+旧scorer SHA d59018b0…と旧設計SHA4189dd85…は不変。GT意味読取、再生成、採点、提出なし。
+このhelper単体は依存由来証明ではなく、まだ旧/新scorerへ統合していない。
+次は別版scorer/契約へ組込み、PLANにhelper・依存source・libtccのhash/固定pathを束縛し、
+実際の入力検証import経路を含めて検証後に新規事前登録/生成する。旧v2を後付け採点しない。
+物理採点前の高リスク統合レビューも未実施。科学的改善未確認、提出0/5、commit/pushなし。
+
+### 2026-09-13 Issue #9 — score v2は開始前に失敗、ライブラリ内部環境追加を特定
+
+score session95750はexit1で終端、親/子ERROR、killpgなし、reap_errorなし。
+score出力にはERROR.jsonだけでSCORE_STARTED/arm結果/SCORE_CORE/SCORE_RESULTは無く、
+公式採点・_check_stage_gtには到達していない。未採点でありCV改善/棄却の結論は出さない。
+score子ERROR SHAdd8a2ddbfbdf945cbae53b1a04bfd2bcdc56cd484f99050ab2fc366d052fd251、
+親ERROR SHAfecc319a4f242cf231aceb914f2d51e8546bb09719540f4bea260ae8aa69920d。
+生成v2は正常完了のまま保持。スコア失敗を生成失敗/再送許可/提出成功に読み替えない。
+
+ファイルを書かず採点もしないfresh allowlist processで、入口→verify_plan→verify_generation→
+seed設定までを切り分け、各入力照合の成功を確認。既定環境キーの欠落/値変更は0、
+追加キーはKMP_DUPLICATE_LIB_OK、ME_DSL_JIT_LIBTCC_PATH、_RJEM_MALLOC_CONFの3件。
+ローカル依存コードで由来を確認: threadpoolctl.py:48のsetdefault、blosc2/__init__.py:69の
+同梱libtcc path設定、polars/__init__.py:44-46のallocator設定。秘密値の表示/認証変更なし。
+MAX指摘後に追加したSCORE_STARTED直前の完全環境一致検査が、正常なimportによる内部設定を
+拒否する接続不備。合成child fixtureは既に数値依存がロードされたpytest過程を使用するため、
+fresh依存importの追加キーを再現できていなかった。実GTデータの障害とは診断しない。
+
+scorerは依然SHAd59018b0…、PLAN v2/生成入力/成果物/公式metricは不変。
+ガード削除、動的未知キーの無条件許可、実行中のenv書換え、失敗した同じscore出力の再利用は
+行わない。Sol/high独立監査は終端し、旧pathのbytesを保存したまま技術的失敗として
+永久未採点で退役させ、別版scorer/契約/PLAN/新規生成へ進む扱いを採用した。
+退役記録 outputs/local/e27_v2_retirement_20260913_v1/RETIREMENT.json は22ファイルを束縛、
+SHA40b28539f53ce7b61410da99cb5d5879df321c085795dead901146768316e1f4。
+旧候補の後付け採点・再利用は禁止。旧scorerと旧設計のpath/bytesも保存する。
+必要な修正設計は、起動時allowlistを維持し、依存importの既知追加項目だけ由来/値を固定検証し、
+未知追加/既定値変更は拒否すること。fresh processで3依存のみのimportを再現し、
+KMP値True、allocator値dirty_decay_ms:500,muzzy_decay_ms:1000、libtccは固定venv内
+blosc2/lib/libtcc.dylibとなること、未知追加と既定値変更が0であることを確認した。
+次版への統合前にFlashへ副作用のない厳密検証関数とfresh process回帰テストを依頼する。
+まだ再生成・採点は開始しない。提出0/5、科学的な有効不改善実験数は増やさない。
+
+### 2026-09-13 Issue #9 — recorded_prior実生成完了、固定eval12へ移行
+
+generate session7795はexit0、子PID16506/親PID8756は終端。子status
+E27_RECORDED_PRIOR_GENERATED_UNSCORED、親E27_RECORDED_PRIOR_SUPERVISED_UNSCORED。
+12動画全件、CSV25,545,323 bytes/SHAf1749803ddb9a84ca37a25b4473453ee7ac26007884c6180ed0700a065da8d7b。
+nodes250425/edges240818/rows491243（対照250465/240852/491317）。予測差は存在するが、
+節点/辺の増減だけを改善と判断しない。prior receipt SHAa667b969…、eligible2596は登録どおり。
+子wall853.6011404159945秒、self peakRSS4,640,997,376 bytes、親wall854.0256923749112秒、
+親子出力35,111,036 bytes、returncode0、killpgなし、reap_errorなし。制限内。
+CONTROL SHA1a461f187bd9537f3139af215523d09aea5c2fddaade841f7747aa9893aeed60、
+RESULT SHA4150128b44dc7c24cb8292aa66a5c48474d6a161924f4387a578f4fef734a7ce、
+SUPERVISOR_RESULT SHAcfba6a52ce1864c46a9105c172d1f5282ec4038c51fc944aaa55275f7c668be8。
+outerの生成後PLAN/全入力/成果物/CSV検証も完了し、GENERATED_NOT_SCOREDとして返却。
+
+同じ凍結PLAN v2 SHA34d2706d…とPREGEN receipt SHA33641be5…を使い、
+score session95750を起動。出力outputs/local/e27_recorded_prior_score_20260913_v2、
+親監督は同名_supervisor。公式baseline→candidate採点はknown12のみ、1800秒/8GiB/256MiB。
+今は採点の成否/改善は未確定。eval12棄却なら残り24GTを読まず停止する。
+source/PLAN変更なし、提出0/5、commit/pushなし、Issue #9 Open。
+
+### 2026-09-13 Issue #9 — v1は生成前JSON境界で停止、実record回帰テストで修正
+
+最終PLAN v1のgenerate dispatch（session42188）はexit1/E26Errorで終了。
+PREGEN_PLAN_VERIFIED.jsonは作成済みだが候補ディレクトリ/候補supervisorは存在せず、
+g.supervise_baselineの起動前に停止。候補予測・GT採点は一度も開始していない。
+v1 PLAN/事前receipt/dispatchログは保持し、同じreceiptを再利用しない。
+原因診断はverify_plan返却値の型だけを走査し、checked.baseline.shapesの12件がtuple、
+他の非JSON型は無しと確認。e._json_bytesが意図どおり拒否していた。合成outer fixtureが
+shapesを持たないため既存51テストでは露出しなかった実recordの接続不備。
+
+Flash SCORE_SHAPES_JSONでverify_generationの返却shapesだけlist化。内部CSV/bounds検査に
+渡すtuple、寸法値、生成処理、固定gateは不変。親はテストの実schemaキー/import/未登録markを
+整合。保存済みselected-only実recordを丸ごとstrictJSON往復する回帰テストを追加した。
+全52 passed / 6.59s、Ruff/diffcheck成功。scorer SHAd59018b0897adfe894e6c745373c3388b5260655cab87f8a717a42be98a7e33c、
+test_e27_prior_score SHA2890a81256d84b0315b2de2f4b1efdad5f96aa5a3565b6d21ef9d83710a5962a。
+これは既知表現不整合の局所修正であり、新しい科学仮説/閾値変更/有効な不改善実験ではない。
+追加の同一範囲MAXレビューは行わず、実入力回帰結果を親が採用。
+
+別fresh PLAN v2を作成し、candidate_outputもe27_recorded_prior_20260913_v2へ分離。
+outputs/local/e27_eval12_plan_20260913_v2/PLAN.json、
+SHA34d2706dc9253e934f23154facd82fb8eeaa8e7a25e1f077e6e14e2eecd04e06。
+実before_generation照合と返却全体のstrictJSON変換を成功させてから生成へ進む。
+旧PLAN v1はscorer hash変更で失効し、旧記録を後付け承認しない。科学的E27仮説は同一。
+提出0/5、commit/pushなし、Issue #9はOpen。
+
+v2実生成開始: generate session7795、親PID8756、生成子PID16506の生存を確認。
+子STARTED UTC20260912181042+0000（09-13 03:10:42 JST）、mode recorded_prior、exact v2出力。
+現在はRUNNING/UNSCORED。前v1は子未起動の失敗であり、この開始と混同しない。
+凍結source/PLAN変更なし、途中成果物を採用や提出成功として扱わない。
+
+### 2026-09-13 Issue #9 — 外側監督/CLIと最終PLANの実入力検証完了
+
+前turnは採点子/採点後照合と39テストのprogress。Flashでrun_registered_generation、
+supervise_score、CLIを接続。生成前PLAN検証→排他的PREGEN_PLAN_VERIFIED記録→再検証→
+既存recorded_prior生成を1回→生成後同一PLAN照合を実装。採点側はfresh CPU子を1回だけ
+起動し、5ファイル/seed0/環境/公式再集計/各bindings/計測予算を検証、親記録を確定する。
+timeoutはTERM→必要ならKILL→wait、失敗時は成功記録を.failedへ退避しERRORを残す。
+registered生成5テスト、supervisor7テストを追加し、全51 passed / 3.95s、Ruff/diffcheck成功。
+監督テストはPopen/killpg/入力verifierをmock、実exclusive保存/hash/tree照合を使用。
+実監督の全規模成功や精度改善をテスト結果から推定しない。
+
+Flashの未適用/訂正履歴: registered初稿/R2の属性形式、事前read、既存receipt容認、
+架空キーを修正。supervisor初回は説明だけでsource無し、R2の架空import/例外/キー、
+audit作成順、固定seed、binding比較、自己参照record、reap処理をR3のliteral patchで修正。
+test初稿の別module/API/誤保存先/無効assert/fixture未接続は不採用、狭いfixture/casesへ分割。
+親はFlashの訂正を適用し、fixture名/既存JSONキー/成果物path・import/styleを機械整合。
+CLIの__main__呼出しを関数定義後へ配置。既存生成runnerは一切変更していない。
+
+実fresh score-child smoke: e.generation_environmentで新規processを起動し、意図的に古い
+preflight PLANを渡すとexit1・RuntimeErrorのERROR.jsonのみ保存し、採点成果物なし。
+outputs/local/e27_score_smoke_20260913_v1/。初回診断コマンドは親側PYTHONPATH不足で
+子launch前に停止、PYTHONPATH=srcを明示後の1回が上記smoke。実GT採点ではない。
+
+MAX外側レビューを新規実行順/監督リスクとして1回実施（session42519、exit0）、
+SCORE_OUTER_MAX.jsonl SHA86a77e9133a0cd1991ba848e1def52e118e6a0853ca2a2ed0abf027244e013da。
+親判断: 正常exitで無条件にkillpgする提案は不採用。現在の採点子/公式metric/ローカルIO/
+tracksdata graph・metricsの調査に明示的な子process生成はなく、直接子はwait済み。
+任意の子孫process全体やOS連続RAM制限を保証するとの主張はしない。部分成果物の全退避
+要求は既存設計「失敗時ERROR・部分出力保持」に反するため不採用。採用可能な終端recordは
+取り消す（テスト済み）。audit未初期化の指摘はレビュー自身も認める未来の仮想refactorで、
+現コードではaudit作成後にしかcheck_budgetを呼ばないため現阻害条件ではない。
+未実施の実生成/実採点は次の評価そのものであり、合成PASSで代替しない。同一MAX再依頼なし。
+
+最終PLANを旧preflightとは別に新規作成し、before_generation=Trueで実入力照合成功。
+outputs/local/e27_eval12_plan_20260913_v1/PLAN.json、
+SHA6bbb96f60c9e9b4c1562116cd8efc33776a1cad243a44b9881aeae040e4e3d5f。
+known12 opaque GT inventoryのみ12件照合、候補出力とそのsupervisor双方未存在を確認。
+scorer SHAcc6ffe826633386a490d4a2afac7d3157081cbc9eef62b791698dbb8a1fb70ce、
+設計SHA4189dd85b30c769d99d664415e73642cd66ed8ad71d0abbc16efde9da9792546。
+registered tests SHAa805edb58d0f9ce9da3dd270f5081ee15ee66b9b30f5332adeb20d69576d7296、
+supervisor tests SHAc991a488633c299f3a05c6fb007687a740eb91ff70bd64f92d3980341554847c。
+次はこのPLAN/コードを凍結してrecorded_priorを直列生成→公式eval12固定gate。
+新仮説/閾値変更ではなくE27単一仮説の実評価。生成中・未採点中は凍結sourceを変更しない。
+提出0/5、commit/pushなし、Issue #9はOpen。
+
+### 2026-09-13 Issue #9 — 採点後再照合と採点子の失敗処理、39テスト成功
+
+前turnは採点coreと23テストの完了でprogress。今回はFlashでverify_score_coreと
+run_score_childを追加し、基準/候補それぞれの保存rowを公式再集計・paired全項目と照合、
+plan/入力/生成成果物を前後再検証。再採点や残り24GTの意味的読取はしない。
+子はfresh環境入口、seed0、1800秒alarm、selfRSS8GiB/出力256MiB境界検査、事前記録と
+STARTED照合、部分成果物保持、失敗時のSCORE_RESULT.failedへの退避とERRORを実装。
+OS全体の連続RSS上限や親watchdogの完成とは主張しない。
+
+Flash初稿の欠陥も保存: SCORE_POSTは未定義eと候補recordの基準への誤使用/階層誤り/
+旧IDのpaired返却があり不採用、R2で修正。SCORE_CHILD初稿/R2の未定義import・架空API・
+測定RSSの欠落・ERROR条件・signal所有権をR2/R3で修正後に統合。
+新テストはpost境界8件、child境界8件。初期child testのsignal対象/tuple index/既存dir
+仮定を修正。strict環境入口をmockしたため親環境が混入するfixture不備は、テスト内で
+生成allowlistを用いるよう修正し、実環境の値を記録しない。
+環境再検証追加後の4失敗はpytest.runnerがcall段階でPYTEST_CURRENT_TESTを追加するため。
+ローカルpytestソースで確認し、mock runtime入口だけallowlistへ再設定。実処理は緩和せず、
+入口後に未知keyを加える負例が記録前に拒否されることも確認した。
+最終39 passed / 3.90s（既存19+core/post12+child8）、Ruff/diffcheck成功。
+postテストは実公式再集計/実bindingを使用するがplan/gen verifierはmock。
+childテストはruntime/signal/予算/scorer/verifier境界をmock、実ファイル排他保存を使用。
+これらは実fresh process/GT採点/親監督/精度改善の証拠ではない。
+
+Terra/mediumの独立仕様確認で、既存STARTED/SUPERVISORにPLAN参照がない点を確認。
+外側同一呼出しのbefore_generation検証→専用事前receipt→生成という順序を設計へ追記。
+既存生成runnerは変更しない。事前receiptは第三者署名ではなく実行順の追跡用。
+MAX評価を新規再現性リスク/Flash初稿の具体欠陥に対して1回実施（session2095、exit0）。
+SCORE_POST_CHILD_MAX.jsonl SHA96cceaf16d958573f53eb3b560d37d5cf3f0b9276999bd924e580977fff1f7f9。
+条件付き評価。親は環境情報を保存直前に再検証しallowlist snapshotのみ記録する指摘を採用、
+Flash SCORE_ENV_REVIEW_FIXで実装・負例追加。コメント番号の飛びは欠落処理の証拠ではなく
+阻害条件として不採用。旧candidate-IDのschema変更懸念は固定source照合が既に拒否し、
+hash seedは既存generation_environmentのPYTHONHASHSEED=0で固定されている。
+同じ評価の再実行なし。MAX評価は実データの改善/提出許可を意味しない。
+
+scorer SHAd7164ec825b7116e7aa98243d3ebbb311973a3d063b451ca9088cdb739922b0b、
+core/post tests SHAdf7dafc1888996f0521d4071cdb2425e6c81470287965bdf1f5deeff8539e572、
+child tests SHA89f8db55f444c1912e55e9cf3442e2866c1124158cfdb5eab74e12a813e189dd。
+生成runner SHA49a9d8ad…は不変。次は外側の生成前receipt作成/直列launch、採点の親watchdog/
+CLI/終端照合、対応する実プロセス検証、別fresh最終PLAN登録。その完了前はrecorded_prior
+生成を開始しない。候補生成・実採点・提出なし0/5、commit/pushなし、Issue #9はOpen。
+
+### 2026-09-13 Issue #9 — Cloud再実行・eval12採点coreの合成境界テスト完了
+
+Qwen Cloud qwen3.8-flash / subscription-cloud-only、effort none、retry/fallback 0で
+前回未統合のテストを再開。SCORE_CORE初回は計画のみで不採用、R2の採点coreを統合済み。
+親が実CONTROLのsource_bindings/association_priorsへキーを整合し、スタイルのみ修正。
+公式score_submissionと既存公式集計・固定paired gateを接続。E26の数値判定は変更せず、
+結果のcandidate_idだけE27へ変換しrule_implementation_candidate_idに元IDを保持する。
+最終seal/外側監督は未実装であり、この関数単体で候補を承認しない。
+
+旧SCORE_CORE_TESTは判定キー誤りとexclusive保存先再利用があり未適用。
+Flash R2（session11787、exit0）は複数草稿のうち最後の完全コードのみ適用。
+4テスト本体は成功したが、意図的config変更をfixtureが変更検出するteardown errorが1件。
+実測エラーに限定したR3（session91928、exit0）で変更後入力の非改変を照合しfinally復元。
+親はimport整列のみ機械修正。tests/test_e27_score_core.pyの4ケースと既存19ケース、
+計23 passed / 3.85s、Ruff・git diff --check成功。
+公式scorerとGT preflightの入口はmockで、集計/paired gate/排他的JSON保存は実関数。
+これは合成API境界検証であり実CV改善、GT安全性全体、提出成功の証拠ではない。
+scorer SHA bc6a0aeb9916883415e38a0bb2db43b65d6794c2dbadbcca5f8c1d0fbd4c89f6、
+新test SHA a721855f5b554611222eab3dcf0765f42a0fca2299500cbfbd9bae77521e91d0。
+旧preflight PLANはscorer変更で意図どおり失効し、旧テストもsource drift拒否を確認。
+次は外側の実行監督・採点後再照合・最終登録と独立レビュー。凍結生成runnerは不変。
+recorded_prior実生成・実GT採点・提出なし、0/5。commit/pushなし、Issue #9は継続。
+
+### 2026-09-13 Issue #9 — plan/材料/known12 GT opaque照合を実入力で確認
+
+前turnは生成成果物/CSV verifierと17テストを完成したprogress。
+Flash61954のverify_plan初稿は架空import、誤source集合、candidate sibling、prior schema、
+manifest/path key、remaining24選択と連鎖不等号の誤りがあり未適用。
+7552のliteral訂正後に統合。57 source refs（生成closure+scorer/設計+公式package）、
+clean固定official、baseline receipts、依存/同じgeneration inputs、checkpoint/manifest/raw、
+known12画像/GT inventory/metadata、collection reader/metadata bindings、最後のplan/source/
+legacy再照合を実装。GT graphやestimated-node-countの意味的読取はしない。
+
+親が実既存metadataと再確認したrecorded prior receiptから動作確認用planを作成。
+outputs/local/e27_scoring_preflight_20260913_v1/PLAN.json、
+SHAa914f4c4f583aa3f2252afe9076aa2f4b3fd4b0fca91fd2bb4e6f5112a384691。
+これはPREFLIGHT_VERIFIED_NOT_FINAL_REGISTRATION。candidate未存在、prior SHAa667b969…、
+selected-only baseline、GT inventoryはexact12でbefore_generation検証成功。
+公式scoring本体がまだ無いため、このplanで候補生成を開始しない。
+今後scorer source追加でこのpreflight source bindingは意図どおり失効する。旧planの
+上書き/黙ったSHA更新はせず、最終版は別fresh登録で凍結する。
+
+Flash95133の2テストを追加し、未定義SHAを同出力が指示した実literalへ親が置換。
+GT graph loader/estimated_number_of_nodesを禁止するspy下でplan検証成功、
+verify_inventoryのGT対象がknown12だけであること、誤plan SHAの拒否を確認。
+全19テスト成功9.70秒、skipなし、Ruff/diffcheck成功。残り24GTの意味的読取なし。
+source SHA081fd4cae7a4e895cdca54b47de4107f81f0b3d42d10ad5f1d5acad8a70b42c9、
+tests SHA261b745367a23b28febd4fe39feac1cb7aeebf67c7aeb70257413570534d62f8。
+次の実装ではpreflight固定テストを適切な合成fixtureへ移すなど、source追加で旧planを
+黙って承認しないテスト境界を維持し、公式eval12本体/終端監督/最終登録へ進む。
+recorded_prior生成・公式採点・提出なし、0/5。既存生成source不変、commit/pushなし、Issue #9 Open。
+
+
+### 2026-09-13 Issue #9 — 生成成果物/CSV検証を接続、実保存対照と17テスト成功
+
+前turnはreceipt読取と12改変検出テストを完成したprogress。
+Flash92685のverify_generation初稿はCONTROL.status、prior receipt構造、after.docs等を
+誤認しており未適用。既存監督のreceipt検証を提示し88603のliteral差分で訂正して統合。
+候補arm/status/falseflags/run/path、親returncode/回収状態、期待source/prior一致、
+全子artifact membership/hash、CSV binding・12構造/件数、bounds、known12motion-on統計、
+最後のreceipt全再読とartifact/source再照合を接続。selected_onlyは固定参照CSV一致を要求。
+expected_prior/sourceは呼出側が事前登録する前提で、独立した登録/GT/材料検証は別途未完成。
+
+保存済みselected_onlyをreadonly実検証し、250465nodes/240852edges/491317rows、12動画で成功。
+テスト初稿65968はAPI/配置/戻り値の誤認があり不採用。26861の最終agent_messageを採用
+（先行messageはファイル閲覧意向のみ、利用可能toolなし、実際のファイル操作なし）。
+親は明示されたcopy importを追加。元receipt3件のSHAを固定した実成果物positiveと
+source/prior SHA/novel/boolcount異常期待の拒否テストを追加。
+17テスト成功3.15秒、skipなし、Ruff/diffcheck成功。保存済み競技GTや予測自体は変更していない。
+scorer source SHA5191db69b365cdf18e0ddc11574ee03a7ff6f0795a158fe2bdbfdf49e27e4431、
+tests SHA882cc162490b82f1afeaa6e5513598a411960db08d438a0043648ac30fe9fbf5。
+
+次は事前plan/known12 GT opaque・材料・採点source照合、公式eval12集計と終端監督を接続する。
+現関数は提出可やCV合格を発行しない。公式採点/recorded_prior生成なし、提出0/5。
+既存生成runner/対照run不変、commit/pushなし、Issue #9はOpen。
+
+
+### 2026-09-13 Issue #9 — 採点用receipt読取を実成果物で確認
+
+前turnはscoring設計と2初稿/MAX不採用の原因を確定したprogress。
+新APIでverifier全体を書き直すcheckpointを止め、既存g._binding_for_pathを直接使う
+read_generation_receiptsだけをFlash69326で抽出。失敗file検出のPath.suffix誤用を
+82493の明示修正でname.endswithへ訂正。scripts/e27_prior_score.pyへ統合した。
+この関数はcanonical child/sibling、ERROR/failed不存在、親子出力上限、3receiptの
+前後bytes/SHA、親→子→CONTROLとparent logsのbindingを読むだけで、full verifierではない。
+実selected-only成功物を読取実行し、親67d6c12e…/子4de09bccc…/CONTROL ab9a90e…の
+元終了時bindingと一致。競技GT/新推論/採点はなし。
+
+テスト初稿82493は保存先/API/戻り値の誤りがあり不採用。実sourceとexact treeを提示した
+95359版を採用し、未使用importだけ親が削除。12テスト成功0.06秒、Ruff/diffcheck成功。
+CONTROL/RESULT/log改変、両treeのERROR/failed（nested含む）、logkey欠落の拒否を確認。
+source SHAc7570f21ef60e7a7c3ad45161843637d710127983203ffe04fbbe9e6d1867fc8、
+test SHA901b22424d02b69fee5a329f2e5a3b420fd0ece168b176115ade1df812aba447。
+残り: arm/status/source/prior/all-child-artifactと実CSV検証、生成前plan/GT opaquebinding、
+公式eval12と終端再照合。新moduleはまだCLI/採点機能なし。
+既存生成sourceと対照成果物は不変。recorded_prior未生成・未採点・未提出0/5、
+commit/pushなし、Issue #9はOpen。
+
+
+### 2026-09-13 Issue #9 — 採点境界を事前設計、verifier初稿2件は不採用
+
+前turnはselected-only完全一致と親監督PASSを確定したprogress。
+analysis/e27_prior_scoring_design.mdにE27専用plan/GT opaque事前照合/公式採点/終端再照合を
+登録。生成runnerとE26ソースは変更しない。既存数値gateを再利用し、E26固定candidate_idは
+rule実装の識別として保存、E27評価IDと区別する。対照CSVは同sourceのselected-only成功物。
+E26元GT登録SHAf2842591cfa6750a443aae0d6d2ffd44616b1c0d7ad3bb93cb0f6a83a662b3b1、
+public登録SHA5abd92bd3ccd6533769a66e71e44f61b4b0a7b88d5d8228c0dbd195a43d1aa02を
+metadataから確認。GT graph内容は未読。candidate生成前の新plan保存・照合はまだ未実装。
+
+Flash55246/84874のverify_generation初稿2件はどちらも未適用。
+架空supervisor名、siblingをchild自身へ誤設定、bound-read API引数不足/順序逆、None返却を
+bindingとして扱う誤り、selected entriesとnovel件数の混同、stringでlistをindexする誤り等。
+実データへ不正な検証を適用せず、testsも未実行。2回失敗を理由にMAX51735へ1回読取評価。
+MAXはHOLD、親も上記具体欠陥により不採用。MAXの「source verifier返り値を捨てることが
+欠陥」という指摘自体は採用しない（raise-on-mismatchなので戻り値の使用は不要）。
+次は新APIの組合せを再生成する形をやめ、既存監督の実binding比較部分を最小抽出し、
+保存済み対照で入口を確認する。数値gate変更・別モデル実装へのfallbackはしない。
+SCORE_VERIFY*.jsonlに不採用出力を保持。新scorer sourceは未作成、既存71テスト対象source不変。
+recorded_prior生成・採点・提出は未実施、0/5。commit/pushなし、Issue #9はOpen。
+
+
+### 2026-09-13 Issue #9 — selected-only対照12が完全一致で終了
+
+session13266/PID98791を同じhandleで監督継続、exit0で終了。全12動画/36events完了。
+子E27_SELECTED_ONLY_PARITY_PASS_NOT_CANDIDATE、親E27_SELECTED_ONLY_SUPERVISED_PASS_NOT_CANDIDATE。
+CSV25549191bytes、SHA d4c976c69f850f3f1738523482a272d3468eaf8c99082e128069b9f690ff42a9
+で凍結参照・baseline v2とbyte完全一致。prior SHA4891e86e7e6cab22ab662cd937dced1dbda549ac0e24a7395c9e4e8b98fad619、
+選択済み240884件・eligible unselected0。生成前後の入力辞書/receiptと材料/source/control、
+CSV/bounds/known12統計、親の全artifact検証が成功。ERROR/RESULT.failedなし、TERM/KILLなし。
+子wall855.5693051249254秒、self peakRSS4662394880bytes（約4.34GiB）、
+親elapsed855.9601878749672秒、親子出力35114951bytes。固定予算内、再起動・延長なし。
+
+保存先outputs/local/e27_selected_only_parity_20260913_v1と同名_supervisor。
+RESULT SHA4de09bcccda68a31adb864b2d5305f6eb76aa11386b4f580c42128ec021504e6、
+CONTROL SHAab9a90e99e0159c90a2ee4810d44e018b89b07ca022192b365227a1a002ef535、
+SUPERVISOR_RESULT SHA67d6c12e88e8bf937d5df8a73c02d7cc326d22512efdb326fb7340e78427eb95。
+元run/source/designは実行中不変。これは入力接続の対照受理でありCV改善・候補採用ではない。
+
+並行の読取調査e27_scoring_boundaryで、E26 score_screenは固定E26 candidate/run/sealに
+束縛されE27に直接使えないと確認。公式score_submission、_score_arm_record、
+_paired_score_recordの数値処理は再利用可能だが、evaluate_gateの返すcandidate_idはE26固定。
+E26凍結source/既存登録を変更・偽装せず、E27側の明示評価識別と数値gate provenanceを
+設計する。候補生成より前にGT opaque bindingと採点sourceを登録し、semantic GTはeval12だけ。
+selected_onlyを改善候補として採点しない。次はE27 scoring境界を整備してrecorded_priorへ進む。
+新規候補生成・採点・提出なし、0/5、commit/pushなし、Issue #9はOpen。
+
+### 2026-09-13 Issue #9 — mode統合・71テスト・評価完了、selected-onlyを実行準備
+
+前turnはprior helper統合と実known12対象2596件確認のprogress。
+Flash21856初稿は未定義_MODESと親子status取り違えを検出し未適用、44318で訂正して採用。
+coreへのoptional辞書、CONTROL/RESULT/親監督modeとreceipt、生成後再構築比較、CLIを接続。
+baselineはNone省略を維持。selected_onlyだけでなくbaselineも参照CSV一致を要求し、
+recorded_priorのみ一致比較を免除（参照自体のhash照合は維持）、子/親ともUNSCOREDを明記。
+形式/統計/材料/source/budget/ERROR撤回は維持。固定科学設定とE26側は不変。
+
+Flash59569/42353/40984/14670が直接必要な監督・runner・coreテストを作成。
+誤API・mode名・receipt階層などの不適切初稿を棄却し、親は既存Flash版との統合と
+実際の辞書キー/戻り値参照・reset defaultを修正。途中52pass/1fail、63pass/7failは
+古いmockに新しいarm/defaultがなかったテストfixture失敗で、最終71pass（3.11秒）。
+Ruff/diffcheck成功。新core testは非None辞書が実run_postproc_core呼出しへ一度渡ること、
+既存baseline testは引数省略を確認。合成fixtureを実推論/CV成功と混同しない。
+
+独立Sol/high e27_mode_reviewは差分を読取レビューしblockerなし。
+新しいmode/再現性の採用リスクとFlash反復失敗を理由にMAXを1回読取評価（54401）。
+重大欠陥なし、selected-only対照実行に限定CONDITIONAL PASS。core受渡しテスト欠落を
+指摘したため上記1件を追加して通過。親は対照実行だけを採用、候補採用/提出は未承認。
+MAX出力SHA5c47c639f71d7c4729ed13d1d24104a1af9067460a988cf634249b97e9b59f7a。
+
+新source SHA49a9d8ad4d3d67c1ba6d26a046075aff04857e909422a70048affe2990e2cfd9、
+実行前design SHA9f56ff671a571d14232243615183ac27edab8304595a04cff0dfabd26263fed3。
+fresh e27_selected_only_parity_20260913_v1を事前登録。CLIは
+PYTHONPATH=src .venv/bin/python -m scripts.e27_association_prior_screen --supervise
+--mode selected_only --output canonical/outputs/local/e27_selected_only_parity_20260913_v1。
+30分/selfRSS8GiB/親子256MiB、CPUfp32seed0threads1、同12順/参照byte一致、再試行延長なし。
+起動直前に同E27 python process不存在を確認。以後source/design凍結、実行結果は別記録。
+未採点、提出0/5、commit/pushなし、Issue #9はOpen。
+
+### 2026-09-13 Issue #9 — Flash再実行、prior入力helperを部分統合
+
+ユーザーの再実行指示でsubscription-only qwen3.8-flashを明示指定して再開。
+R2(session11020)のexactdict/None分岐検証不足を修正し、R3(session30725)の
+build_prior_inputsだけを受理。R2/R3のテストには正常系を異常扱いする期待値、架空module、
+誤ったnode ID型などがあり、それらは不採用。R2から妥当な4テストだけを採用し、追加の
+3テストを限定依頼(session39440)。親は構文・辞書アクセス・zip strictの機械的修正を実施。
+新helperは3mode、元入力非変更、選択辺の重複/確率整合、既存prior validator、modeを含む
+SHA receiptを実装。まだcore/CLI/親監督へ接続していないため実験runner完成ではない。
+
+直接7テストと既存core/known12/outer/supervisorの計53テスト成功（3.34秒）、Ruff成功、
+git diff --check成功。新helperの全異常入力組合せを専用テストで網羅したという主張はしない。
+実known12のprepare_inputsとhelperを読取専用で実行し3mode成功、model/GT未読・推論なし。
+recorded_priorの元確率258434件に対し、残存endpoint・隣接時刻・未選択の対象2596件。
+selected_onlyは240884件・新規対象0件。17550未選択辺すべてが有効対象ではない。
+この件数は正誤/CV改善の証拠ではなく、生成前入力の確認に限定する。
+
+receipt SHA: baseline_none 298ff63dab423b248b940d12d21d84060eb709d940847b09540dd4517b1c6d26、
+selected_only 4891e86e7e6cab22ab662cd937dced1dbda549ac0e24a7395c9e4e8b98fad619、
+recorded_prior a667b969b1fad4e5b50c3e57ffd24965bd2f6f0d09137bc994570b13029de571。
+runner SHA677fb27dd3d9606d147a9357b43d54485503494ce169bb39ced20707ee244f27、
+test SHA8f47fb53dfa5166f950184ff9f4da613bf2378d6739f71be30dd408552290f3d。
+次は3modeを既存core/CONTROL/RESULT/親監督へ最小接続し、selected_only同値確認を先行する。
+新規物理生成・採点・提出・commit/pushなし、提出0/5、Issue #9はOpen。過去runは不変。
+
+### 2026-09-13 Issue #9 — 次の確率入力経路を事前設計、初稿は未適用
+
+baseline v2とMAX限定受理は前turnのprogress。private repoのIssue #9にE27単一仮説、
+selected-only同値→recorded-prior候補の順序、固定gate/予算、安全境界を生成前に登録。
+codex/issue-9-e27-prior-comparisonへ同一checkout/WIPを保持して切替。
+Issue #8承認済みcommit b01ec28のMAX上限撤廃diffを2指示fileだけ同期し、ローカルの
+Issue-first等を維持した。評価はリスクと新証拠で判断し、同じpacketを理由なく繰返さない。
+baseline v2元source/設計をBASELINE_V2_screen.py/BASELINE_V2_design.mdへ保存し、
+SHA2851f385…/e949846a…がv2時と一致することを確認。
+
+Flash session90767はexit0だが、新helperだけという依頼に対して架空STEMSの再定義と
+多数の不要helper、テストの未定義tmp_path/余計なraw edgeを含む全体コードを返した。
+固定datasetの改変になるため全体を未適用。次は既存STEMSを再定義せず、既存2APIを直接
+利用する限定functionへ修正する。候補生成・新規提出なし。更新Goalの提出枠は0/5。
+
+### 2026-09-13 Issue #7 — baseline v2が完全一致・全検証・親監督PASS
+
+session95989を同一handleで継続監督し、PID38625が全12動画を生成してexit0。
+子RESULT E27_BASELINE_PARITY_PASS_NOT_CANDIDATE、親SUPERVISOR_RESULT
+E27_BASELINE_SUPERVISED_PASS_NOT_CANDIDATE。生成後のknown12統計/CSV/bounds、全材料と
+source/control/参照照合、親側の起動前source一致・全artifact/RESULT再照合まで成功。
+ERROR/RESULT.failedなし、TERM/KILLなし。再起動・実行途中のsource/design変更なし。
+
+CSV25549191bytes、SHA d4c976c69f850f3f1738523482a272d3468eaf8c99082e128069b9f690ff42a9
+で凍結参照およびv1生成物と完全一致。250465nodes、240852edges、491317rows。
+子最終receipt wall853.6144790831022s、self peakRSS4557946880bytes（約4.25GiB）、
+親elapsed854.0446084579453s、親receipt時出力計35113128bytes。30分/8GiB/256MiB内。
+これはknown12 baselineの再現確認で、hidden200本のCPU保証やCV改善・候補採用ではない。
+
+RESULT SHA d9b7c64cc64b948938983ede6d7e15c860741465f6fadc0df4488ba935b51b94、
+CONTROL SHA808dd4f3a75214d833361ce0cf797bac9846fba7ff628616f64a7e125dfa656b、
+SUPERVISOR_RESULT SHA0373814e76f6f3666f1c8880683a7c26ced0c26be31ac3bdfb8991a2dfa8fd6e。
+保存先はoutputs/local/e27_baseline_parity_20260913_v2と同名_supervisor。
+実装上のbaseline生成単位（準備/core/outer/watchdog/12validator）はここで初めて検証完了。
+fragmentや訂正回数を数えず完了実装下限19→20、MAX実施3はまだ不変。科学改善数は不変。
+採用前の再現性/評価adapter差分に対するMAX評価を準備する。Goalの候補確定は未達。
+Issue #7は未commit/pushのためOpen。既存依存WIPと無関係変更を一括stage/pushしない。
+
+MAX評価事前記録: known12 adapterの評価/再現性差分が実v2まで安定したため、既存3評価に
+加える4件目を読取専用で依頼する。baseline単位完了20件に対し4/20、ローカルに残る20%上限
+にも収まる（上限撤廃の別task通知は受信したが現ファイルは未反映であり、今回は依存しない）。
+packetはadapter全文、接続差分、実成果物test抜粋、関連test/実v2結果と制限だけに限定。
+秘密/競技payloadなし。判定対象はknown12 baseline検証の受理で、改善候補の採用ではない。
+
+MAX session88501はexit0、重大欠陥なし、baseline known12 validator限定ADOPTを推奨。
+親はこの限定範囲で採用し、Issue #7の検証修正とbaseline再現手順を受理する。
+評価は提出候補/CV改善/残り24/hidden runtimeを証明せず、それらは未検証のまま。
+「baselineという引数だけで候補昇格を防げる」という一般保証には依拠せず、親がsource/
+control/prior=None/実出力由来まで一致した本baseline対照だけを受理する。
+評価完了件数は4。記録KNOWN12_MAX.jsonl、packet KNOWN12_MAX_EVALUATION.json。
+選択済みpriorのみの同値確認、E27候補生成と固定CV、再現・提出条件は後続作業。
+Issue #7のcode/testは未commitで、依存する既存未追跡WIPもある。無関係な11件aheadや
+既存変更を包括pushせず、Git単位/権限が確定するまでIssueをOpenに保つ。
+
+### 2026-09-13 Issue #7 — known12専用adapter統合、実保存統計の検証成功
+
+前turnはv1終了・誤適用原因・CSV byte一致・事後材料照合を得たprogress。
+既存v1sourceをBASELINE_V1_screen.pyへ同一SHAで保全してから修正した。
+Flash初稿11694は架空module/E27Errorと誤ったtestのexport/JSON schemaを含み未適用。
+literal49787/57457で実API・exact sourceを提示して訂正。E26Errorと既存の鍵集合/型検査を
+再利用し、E27ローカルvalidate_known12_statisticsをSTEMS12/baseline armへ固定。
+他のcounter/type/ratio/CSV/motion/optional-key規則は変更せず、E26側を一切変更しない。
+
+作業中にIssue-first運用更新を受信したため、後続の適用前にprivate repoへIssue #7を作成。
+既存WIPを保持してcodex/issue-7-e27-known12-validationへ同じcheckoutで切替。
+新フォルダ/worktreeなし、commit/pushなし。親だけがIssueを作成、子は操作していない。
+当初Flash brief/保全は規則更新前、修正適用はIssue作成後。遡及的に完了とは扱わない。
+
+new validator+core32 passed in3.25s（実保存raw/CSV/CONTROLのhash-pin機能testはskipなし）、
+outer/supervisor14 passed in0.13s、Ruff/diff成功。実CSV250465nodes/240852edges/491317rowsを
+本物のCSV validatorと本物のknown12統計validatorで検証。元runFAILは書換えていない。
+E26 source SHA2a01ef18a325159ce9a78d4c15547ba950a4b652cb62f233789099427c47514cは
+v1 CONTROLと一致。修正runner SHA2851f3852feecf69f0ffe78b3e8c34c674896b1e5a294ce2423b9008aeebb08e、
+new test SHA837c2182ac173bf96690c954919e1c1874d69b787ac82cbea65bacbe6bb0373a。
+独立Sol/highへ差分レビュー依頼。v2は同じ予算/固定入力/None対照で事前登録し、レビュー後のみ
+fresh実行。科学改善数・完了実装下限19/MAX3は不変。Issueは未検証実行/未pushのためOpen。
+
+独立レビュー完了: armをbaselineへ限定、対象をSTEMS12へ固定、到達不能なcandidateの
+motion-all-zero分岐除去以外の実質差分なし。型/有限値/符号/CSV整合/motion/optional規則保存を
+確認し、重大な緩和/contract mismatchなし。実成果物testは別環境ではskipする点を明記し、
+canonicalでは実行済み。v2自体は未検証なので、同じ予測処理のfresh対照を開始する。
+v2 design SHAe949846a0a0ec8c6a71fc7b1752965d83af529d8ed9ad4c67fa6789b4f817f31。
+以後は物理実行の終了・検証まで束縛source/designを変更しない。
+
+### 2026-09-13 E27 baseline12物理対照 — CSV byte一致、runは検証adapter不備でFAIL
+
+前turn群はsession9787/PID88991を同一handleで追跡したverified wait。再起動・source/
+design変更なし。最初の親CLI起動だけPYTHONPATH未指定でbiohub import前に失敗し、
+出力/監督directoryとも未作成を確認後、親へ明示srcパスを設定して初めて子を起動した。
+これは生成の再試行ではない。子は既存generation_environmentの完全allowlistを使用。
+
+outputs/local/e27_baseline_parity_20260913_v1は12動画・36eventsの生成まで完了。
+session9787はexit1、子88991も終了/回収済み。直後のvalidate_raw_statisticsがbaseline armを
+固定EVAL36へ割り当てるため、正しいknown12のCSV reportをdataset order mismatchとして
+拒否した（src/biohub/e26_screen.py:675-685）。raw統計内容の検査より前で停止した。
+既存36本validatorを12本runnerへそのまま再利用した親設計/統合の誤りであり、初期mockが
+この関数を置換したため590testsでは実cardinality契約を検出できなかった。
+成功RESULT/SUPERVISOR_RESULTは発行されず、子ERROR=E26Error、親ERROR=RuntimeError。
+親elapsed854.9108635829762s、最後の動画終了時wall852.1793283750303s、
+self peakRSS4561977344bytes、当時output35035371bytes。30分・8GiBの上限超過ではない。
+
+生成CSVは25549191bytes、SHA d4c976c69f850f3f1738523482a272d3468eaf8c99082e128069b9f690ff42a9
+で凍結参照に完全一致。事後のread-only診断session99066 exit0で、実source前後照合、
+prepare_inputs→verify_prepared_materialsによる全対象材料再照合、実CSV validatorと
+output bounds validatorを通過。12datasets、250465nodes、240852edges、491317rows。
+この診断は元runの1800秒内success sealではなくPASS_NOT_RUN_SEALであり、失敗runを
+成功に改名しない。GT採点/候補生成/提出は未実行、科学的改善・非改善数を進めない。
+
+CONTROL SHA85131ef96333b910c89becddce6fade9c2e14d827d4000592a2f85bbe888f315、
+raw statistics SHA70df692ecd3768b1a73b830f269aad5b05a1677c6a3368de017d26f349632959、
+events SHA76ffa09126f5d87e0a37b073677e5022500349e190adbb051c66ce723a3928e2、
+bounds SHA7711c12826937e20218f9129184680e8ffcb88e83e5ee356311e3665b2dbdef1。
+束縛source/designは前entryのea2c0c9e…/0e5caa5a…から変更していない。
+
+次はE26 validator/36本契約を変更せず、同じcounter/type/CSV整合/motion規則を維持した
+E27 known12用adapterをFlashで著作し、実保存raw/CSVを使う非mock検証と異常系を先に実施。
+動画数だけを正確に12へ固定し、36本への水増し・ダミー値・事後閾値緩和はしない。
+新しい物理実行はこの原因に対する修正・テスト・事前記録後だけ。盲目的再試行はしない。
+Goal active、完了実装下限19/MAX3は維持、commit/pushなし。
+
+### 2026-09-13 E27 baseline core接続・再開確認 — 576 tests PASS、実生成なし
+
+同日続行: 前turnをprogressと判定し、baseline outerをFlashへ依頼。一括初稿
+（61415）は未定義import、環境書換え、CPU初期化順、cfgのdict誤認、CONTROL前のmodelload、
+CSV path/出力directory混同、timer奪取、artifact再照合欠落があり未適用。
+path/hash helperとrun関数に分け、actual cfg/c schemaと呼出順を明示した修正版（99226）を
+統合。新CONTROLをmodel前に保存し、初期化→準備→材料確認→生成→材料/source/control/
+参照CSV照合→artifact二重照合→RESULTを実装。失敗時はRESULTをfailedへ移してERRORを残す。
+source/ref helperを実ファイルへread-only実行し47 source files、参照25549191bytes/
+d4c976c69f850f3f1738523482a272d3468eaf8c99082e128069b9f690ff42a9、前後source一致を確認。
+
+outerの模擬テスト初稿（22146）はcfg objectをJSONへ入れるfixture不備、budgetイベントの
+順序比較混入、timer recorder期待値違い、pin前のcontrol変更、aliasを渡さないテストがあり
+8 failed/1 passed。Flash限定訂正（59850）後、outer9件+core5件で14 passed in1.00s。
+正常、core例外、source変更、CSV不一致、RESULT後budget失敗、事後材料失敗、control変更、
+active timer保護、親directory alias拒否を確認。全てmocked orchestrationで実CVではない。
+sourceの親alias検査/全関数計時開始位置もFlash著作訂正、Ruff/diff成功。
+親watchdogは次の未完部分。新実生成・CV・提出なし、完了実装19/MAX3は維持。
+
+続いて親watchdogも統合。初稿75196は失敗時ERROR/RESULT撤回不足、修正版84935も
+未定義変数/placeholder/回収例外の握潰し等で未適用。literal89500/83604で実装を訂正し、
+TERM→KILL→wait、終了確認後だけ成果物に触れる規則、例外型のみERROR、起動前sourceと
+child source一致、親でCSV/control/全artifact/RESULT再照合、成功記録後の出力上限検査を追加。
+source例外chaining/UTC aliasは親の機械的lint修正。mock supervisor5件も成功し、
+全関連590 passed in1.56s、Ruff/diff成功。実際のSIGKILL・物理予算はmockでは証明しない。
+source SHAea2c0c9e28a2b87319a17486ec2d8d07952c2ed7e2795bd5604f1b6911ac24ed、
+outer test SHA05296b58d1965411bfab09462d23cd5178b53cf42eca3269f5360bb3509263e0、
+supervisor test SHA7abd53573d58a5892f1f015219dfce257a304f95dd92afa1f344e07fe4c41a90、
+design SHA0e5caa5adc4f99a613a277bc22e9a9271d47308f442a70314fded1d05e9edd8e。
+
+独立Sol/highは指定した初期化順/control/model/事後照合の修正を確認した。
+失敗receipt内にPASS文字列が残る点を重大扱いしたが、親は元receipt保全と成功受理の区別を
+設計に明示し、正確なRESULT.json+failed/ERROR不存在+親再照合を受理条件とした。
+*.failed.jsonは監督で成功に読まないため、文字列残存だけを採用阻害欠陥とはしない。
+実CV/物理予算/strict model/CSV一致が未検証という指摘は維持する。
+
+次の物理対照はfresh outputs/local/e27_baseline_parity_20260913_v1、親ログは同名
+_supervisor。known12 baseline_noneだけ、1800秒/selfRSS8GiB/output256MiB、再試行なし。
+起動前に同系runner processなし、新出力不存在、空き192GiBを確認。以後束縛source/designを
+固定し、既存予測と25549191bytes/SHA完全一致を検証する。候補生成/採点/MAX採用/提出は別。
+この実行開始だけで実装完了数や改善数を進めない。Goal active、commit/pushなし。
+
+Flash著作のexecute_baseline_coreを統合。既存coreへprior引数なしで一度だけ渡し、
+cfg identity/loader一回/12動画のstart→raw_stats→finish順、既存CSV/bounds/raw検証、
+件数整合、成功・失敗時の部分JSON保存を接続した。生成全体の成功RESULTは発行しない。
+取得待ちだったCORE_TEST_WORKER session63594はexit0を確認し再起動していない。
+親レビューでテストのJSON snapshotがPath/tupleを変換する不具合と、存在しないprior引数の
+検査を発見。実テストは当初1 failed/4 passed。Flashの限定訂正でdeepcopy、正しい引数名、
+異常別の例外型、raw hook未実行時の空記録を確認するよう修正。親はimport整理と返却JSONの
+二重escapeの機械的復号のみ。訂正session27674/48364もexit0、全worker終端。
+
+対象5件はcore/validatorをmockしたorchestration-onlyテストであり、実CSV/精度の保証ではない。
+関連motion/core/既存postprocを含め576 passed in 1.52s。対象Ruff、git diff --checkも成功。
+source SHA3270147c8d36e216608b373831b0c6667637c6cd1b599437b11822ef2674a63c、
+test SHA21a704ee976d0d933da631229622f1b85dd4e8fd39fd4c936534e047ca6fc8e4。
+成果物はoutputs/local/e27_prior_prepare_flash_20260912のCORE_*に保存。
+
+独立Sol/highレビューは、現helperだけでは現source/参照CSV/出力上限/成功sealが未束縛と指摘。
+旧E26 controlは入力・config由来専用で実行controlへ流用不可。次の未完部分はfresh childで
+signal→CPU初期化→入力検証→strict model一回→core→全材料再照合→byte parity→sealを
+管理するouterと親process-group watchdog。1800秒/8GiB/256MiBとno-retryは維持する。
+実生成、CV改善判定、学習、提出、commit/pushは行っていない。生成単位未完成なので
+完了実装下限19/MAX3は不変。科学非改善数は進めずGoalはactiveのまま。
+
+### 2026-09-13 E27実材料・CPU初期化確認 — baseline生成は未開始
+
+前turnはgeneration-only入力準備成功というprogress。親が旧baseline controlの固定SHAを
+確認し、既存verify_dependency_binding/verify_inventoryで依存・checkpoint・manifest・
+raw inventory・known12画像全filetreeを照合。session13020はexit0、計5193734010bytes、
+12画像、5.149651sで成功。GT payloadなし、モデルはロードしていない。
+E27 known12 baseline再現予算を生成前に1800秒/selfRSS8GiB/output256MiBへ固定。
+時間は前後検証を含み、上限超過で自動延長しない。根拠/参照CSVはE27設計に追記。
+
+Flashのbaseline一括run関数（session97277）は未定義helper/定数、間違ったimport、
+loader/hooks引数、inventory階層、control前後検証の誤りを含み、全て未適用。
+先に実材料検証を独立した関数として著作依頼した。初稿（63892）は
+generation_input_bindingの階層違い、残り24をskipせずreject、shapeへstemを混入する
+誤りがあり未適用。literal訂正（29288）後にverify_prepared_materialsを統合した。
+既存prepare_inputs→新verify_prepared_materialsの実呼出し（5658）はexit0、12動画、
+5.049802sで成功。画像の実shape/scale/dtype、prepared shape、厳密baseline configの
+roundtrip、依存・画像・重み・raw・metadata/NPZ bytes/SHAを確認。モデル/生成なし。
+親はimport整理と未使用loop変数名の機械的修正のみを実施、application logicはFlash著作。
+
+さらにgeneration_environmentの明示allowlistで新規Python子processを一度起動し、
+既存initialize_inference_runtimeがexit0。Python/NumPy/Torch seed0、Torch initial seed0、
+intra/inter-op threads1、CPU要求を実確認した。モデル推論/学習は実行していない。
+起動環境を緩和せず、秘密情報やユーザー環境変数を子processにコピーしない。
+Ruff/diff check成功。新異常系test/全baseline生成/CSV parity/候補採点は未完。
+現準備source SHA15d50d8bdd45fd78d3d84c99ed5cc2f9a326362e316a0c1b9a7b46d45c078533、
+E27設計SHA616a6e443731f0b65b4e4ab6a88ebbf3ca568636c91f90a383a59874118878b0。
+Flash全process終端、記録はe27_prior_prepare_flash_20260912のBASELINE/MATERIALS/FIX。
+E27生成単位は未完成のため完了実装下限19/MAX3は不変。科学非改善数は進めない。
+Goal active、提出・commit/pushなし。次は同一の材料検証を前後に呼ぶbaseline core実行を
+小さな固定APIで接続し、最後に成功seal/例外保存/監督を完成させる。
+
+
+### 2026-09-12 E27事前設計・実入力準備成功 — 生成runnerは未完
+
+前turnはcore接続完了というprogress。新しい一因子候補E27を
+analysis/e27_association_prior_design.mdへ登録。E23の幾何/bonus/他処理を固定し、
+ILP未選択pre候補の既存prior追加だけを比較する。従来None/selected-only再生成の一致後に
+候補を生成し、既存段階CV/数値gateを継承する。旧E26登録を書き換えない。
+
+Flashがscripts/e27_association_prior_screen.pyのprepare_inputs部分を著作。
+初稿はgroup stage/group_id混同、NPZ key誤り、座標整数丸め、post辺集合をpre全体と
+同一視する誤りを親レビューで検出して未適用。actual schemaを示したliteral訂正で修正。
+canonicalへ適用後は既存12動画すべての実入力準備が成功した。
+status INPUTS_PREPARED_NOT_GENERATED、258434prior、raw paths/shape各12、
+graph bindings24、metadata bindings3。GT/画像payload/重みは読まない。
+準備source SHA0da18c929355928e7787cb553c308bc8257d0ab1800dc450db5eb7a74b7f5eec、
+事前設計SHA23ec4c9b2debb1498777e5c59ef0a265eaad37b72a07e95c7620884b18633bee。
+Readerによるgraph前後SHA、固定metadata前後SHA、raw/post/referenceのsemantic一致、
+pre/post node座標の完全一致とpost辺値のpre部分集合性を確認して返す。
+
+metadata_bindingsは当初briefのlistではなく相対名→path/bytes/sha256のdictで返却された。
+未接続APIであり既存Reader.bindingsと対応が明示できるため親はこの形を採用し、
+今後の生成側ではこのdict schemaを明示して使用する。実験gateの緩和ではない。
+group00–02の存在/stageとSTEMS各ownerのdiagnostic12所属を検証。グループmetadataは
+固定SHAで束縛済み。未固定の任意group入力を受け入れる一般APIではない。
+
+Ruff（import整理のみ親実施）/diff check成功。新synthetic negative testsはまだ追加していない。
+既存Reader/canonical/signatureの検証部品と実12件happy pathの成功を確認しただけで、
+生成runner全体の異常系保証を主張しない。source/testの対応は今後の実行controlで固定する。
+Flash session18907/58766は終端exit0。TASK/WORKER/FIXは
+outputs/local/e27_prior_prepare_flash_20260912に保持。既存データを再取得していない。
+これは未完成のE27生成単位の入力準備で、完了実装分母は19/MAX3のまま。
+画像全payload/重み/依存/新sourceの前後検証、CPU初期化、budget、baseline byte比較、
+候補生成/採点/再現/採用前MAX/提出は未完。科学非改善数は不変、Goal active。
+
+
+### 2026-09-12 coreの動画別prior接続完了 — 571 tests、known12 raw/post実物一致
+
+前turnは実motion合成検証を閉じたprogress。今回Flashがrun_postproc_coreへの
+association_priors_by_dataset=Noneを著作。指定時は外側dict/文字列dataset key、
+GEFF stem一意性と対象集合完全一致、内側dict/key/valueを出力・loader・hooks前に検証する。
+各動画のdictをcopyして呼出し中の元入力変更を隔離し、欠落をmap.getで黙認しない。
+元E26 runner/採点/科学configは変更せず、新候補が今後明示的に使う任意入力だけを追加。
+
+Flash session32293は終端exit0。返却testsのimport pipeline/from pipelineは実packageに
+解決できないため、親がbiohub.public_postprocへのimport経路を機械的訂正して適用。
+コードの試験内容・application logicはFlash著作のまま。新17caseと既存554caseの
+571 tests成功（1.48s）、Ruff/diff check成功。routing/order、hookによる元dict変更の隔離、
+欠落/余剰/重複/不正値の副作用前拒否を検証。core内filterはspyで置換するテストであり、
+None対空mapのCSV byte一致は合成writer出力に限定する。実competition出力の旧source
+とのbyte同値や候補CV向上を示すものではない。実solverのprior挙動は前turnの別testで確認済み。
+
+証拠はoutputs/local/e23_motion_prior_core_flash_20260912のTASK/WORKER。
+現pipeline SHA db4c47aa14f02daee374ea0682996d5fc6e6a7dbf981f25eca1ed1df91f7cd9c、
+test SHA 4c362aa63c921b9cec712d4747197499d1153df4bc97c8554466105ea7f03f11。
+動画列routing/出力入口の接続を一つの完了実装単位として保守下限18→19、MAX3。
+訂正や個別test数を分母に加えない。第四MAX評価はなお上限超過、科学候補採用なし。
+
+並行して親が既存raw_signature/semantic_graph_signature/Readerをread-onlyで使用し、
+known12の実raw GEFFと保存post NPZと固定reference signatureの三者一致を確認した。
+node IDs/t/z/y/x、edge endpoints/probability/distanceとselected-only性を既存関数で検証。
+全12成功、照合区間0.199207s。pre/post Reader bindings再照合、reference/control SHAも
+既存固定値で確認済み。GT/画像/matrixは新たに読まず、予測も生成していない。
+次はこの既存入力束縛を使う新候補の事前登録/生成経路。旧E26のvalidatorを緩めない。
+実CV/再現/CPU/提出形式/採用前MAX/提出は未完。科学非改善カウンタは不変、Goal active。
+
+
+### 2026-09-12 実motion合成検証完了 — prior API開発受入、候補生成は未着手
+
+前turnはoptional API統合というprogress。棄却した全関数著作を再依頼せず、実在する
+build_config(overrides,test_dir,profile)の定義と成功済みtest呼出しを根拠に、Flashへ
+2箇所のliteral訂正のみ依頼。正常config呼出しとcross集合の厳密oracleを受け取り適用。
+session32736終端exit0、記録は既存e23_motion_prior_flash_20260912配下のLITERAL_ORACLE。
+追加testは実motionを使用しspyなし。2frame/4nodeの合成例で、defaultとselected-onlyの
+nodes/edges/statsが完全一致し、未選択cross prior追加時だけ指定cross2辺へ変化。
+元node/edge入力の不変更とnode集合/座標不変更を確認した。
+bonus=1.0はこの合成fixture内のみで、本番config/科学パラメータは変更していない。
+
+新45case＋既存509caseの554 tests成功（1.48s）、Ruff/diff check成功。
+test SHA83682879d5aa2697d1f15602901589df641c2d7b8a3eb63ebbc39004dc150108。
+pipeline SHAは前turnの9ddc28ee…のまま。今回のliteral訂正は前turnの同一API実装単位に含め、
+この単位の開発受入により完了実装保守下限17→18、MAX3のまま。呼出し数で水増ししない。
+実competition CSVの旧sourceとのbyte一致、精度改善、候補採用を証明したものではない。
+
+並行Terra/medium調査は、固定E26 runnerへのprior直入れは不適切と指摘。
+E26 candidateはmotion OFFなので効果がなく、baselineを変えれば固定比較を破る。
+親はこれを採用し、既存E26 source契約/成果物は変更しない。
+次は新E23由来candidate用の入力接続。run_postproc_coreの既存GEFF loopを再利用し、
+hash束縛されたpre/post NPZとraw GEFFのID/座標/辺を照合してからpriorを明示渡す。
+子のmap.getによるdataset欠落fallback案は採用せず、指定時は対象dataset完全一致を要求する。
+同じくpacket read追加案は不要として棄却。今回利用する閾値以上のpre edge確率は既存NPZに
+保存済みであり、未計測matrixを新たに取得する理由はない。
+新生成契約・固定CV・再現・CPU/形式・必要MAX採用審査は残る。学習/提出/commit/pushなし。
+科学非改善カウンタは不変、Goal active。完了条件はまだ満たしていない。
+
+
+### 2026-09-12 optional motion prior API統合 — 553 tests、実接続差分の検証は未完
+
+前turnは既存pre確率の未利用経路を実測したprogress。このturnはFlashを正規cloud-only
+qwen3.8-flash/Token Plan/effort none/retry0/fallback0で著作に使用。
+pipeline.pyのfilter_output_graph/pre_linefitへassociation_priors=Noneと限定helperを追加。
+元rawの選択辺を上書きせず、未選択で現node両端が存在する隣接対だけをmotion priorへ追加。
+既定Noneで有効化されず、本番CLI/既存生成runnerから新入力は渡していない。
+
+初稿は不正node時刻を受け入れるfallbackと不可能なlist dict-key test、入力schema誤認等を
+親レビューで検出して未適用。訂正版を適用後、33pass/11failを実測した。
+失敗はmissing tがKeyError（契約ValueError）、build_configの存在しないenv keyword。
+Flashの限定literal訂正で解消。テストの存在しない距離設定も実設定へ訂正。
+親は著作返却のレビュー/適用、import整理（Ruff）を担当し、application logicを代作していない。
+
+新tests/test_motion_association_priors.pyは44case。型/有限値/範囲/欠落時刻/隣接性、
+入力不変更、selected-only同値、wrapper転送、距離filterで消えた元選択辺を復活しないことを
+helperとspyで確認。変更前public_postproc509pass（2.25s）、変更後は計553pass（1.44s）。
+Ruff/git diff --check成功。これは旧凍結pipelineとの実CSV byte一致やCV改善を証明しない。
+
+追加の実motion合成test著作は2返却とも不採用。初稿は戻りtupleをdictとして扱い、
+nodes dictをlistへ誤変換、rawへcross辺を入れ、未定義fixture/global envを使用。
+API schemaを明示した第二稿はそれらを直したがbuild_config引数が再び不正で、
+期待cross集合を!=に弱めていた。この全関数著作checkpointは棄却し、同じ依頼を盲目的に
+繰り返さない。未検証testをcanonicalへ追加せず、既存の正しい実motion fixtureを起点に
+最小の差分testを作ることが次の検証経路。実接続計算の新prior有効性はまだ未確認。
+
+著作/訂正/追加testsは同じ一実装単位で、呼出し回数をMAX分母へ加えない。
+この単位は実motion検証が未完なので完了実装下限17/MAX3を維持。高リスク採用なし。
+全5 Flash processは終端済み（78142/50827/34626/80520/65718、exit0は著作返却のみ）。
+証拠はoutputs/local/e23_motion_prior_flash_20260912配下。失敗返却も保持する。
+変更前pipelineの完全snapshot SHA
+2cd9cb759fe7d8b77347ef7bd0787d45b0e8c5c655501217a8ae0a37cb639016、
+現pipeline SHA9ddc28ee956b1ce61203711a0d9f1fc0d65242f45d93e51cacd2867b1747d018、
+new test SHAf09b4447bd6e49266da7957618b4f7b3378325137c7afc41df849d3d373b18a2。
+旧診断結果のsource hashは当時の凍結sourceを指すため、新sourceで同じrunを上書きしない。
+新GT/学習/Loss/実CV/提出/commit/pushなし。科学非改善カウンタは不変、Goal active。
+
+
+### 2026-09-12 後処理ID照合と未利用priorの実測 — 次の一因子候補を絞る
+
+前turnは実診断完了というprogress。今回は保存stage/joinと固定両CSV、24 pre/post NPZ
+だけを用いる親のread-only集計を実行した。新GT/画像/matrixは読まず、新matchingなし。
+使用input/artifact/controlのSHAを前後確認。重複したknown12 matching実験は起動しない。
+
+重要な設計訂正: returned.npzはpredict_video返却の最適化前候補である。
+association_parity.py:videoとassociation_artifact_audit.py:audit_videoの実装で確認。
+前turnのpost→returned→CSV案は不適切なので撤回し、postと最終CSVを直接照合した。
+保持型FN149件の元のpre対応ID対で、E23 finalはendpoint欠落38、両IDあり辺なし84、
+同ID辺あり27。したがって149件すべてが辺の削除ではない。
+gained105の内訳は76辺なし→候補CSV同ID辺あり、22端点欠落→同ID辺あり、
+7は両CSVとも同ID辺あり（対応変化あり）。保持lost21は候補側端点欠落14、
+両CSV同ID辺あり7で、単純な辺の追加だけでは損益を説明できない。
+全post nodes258732中、同IDがE23 finalにも存在する248196件のframe差は0。
+
+独立Terra/mediumの初報にあった「baseline_final_assignment_differences=0がpost由来IDを
+証明」は親が棄却。この値はD2とfinalの同一CSV照合にすぎない。GEFF loader/writerの
+ID保持と、凍結raw由来の別確認が必要。親がbaseline CHILD_CONTROLのraw file recordsを
+path/bytes/sha256へ正規化し、collection REFERENCE_PLAN.raw_inventoryとSHA
+0fbc819805e63a7427b2921a8639e5433282385bcdcc5a0213847888a00974a2で完全一致を確認。
+CHILD_CONTROL SHA f3b6d4ef13d8d2a22cc97474a77235c7287fd0bf1881dd60a66a406767d91aa4。
+既存collection監査のpost semantic signature→reference rawと、このraw inventory一致が
+由来の接続を支持する。io.py/csv_out.py/graph_ops.py/pipeline.pyは凍結source SHAと一致。
+これは生物学的同一性や特定passの原因証明ではない。
+
+次の情報利用可能性probeは確率集計前にstage診断設計へ登録した。
+pre258434辺、post240884辺、ILP未選択17550辺。そのうちE23 finalとの同ID交差614辺
+（12動画すべて正数）、E26 finalとの交差284辺。614辺の記録probabilityの
+min/Q1/median/Q3/maxは0.4810904/0.5559031/0.6572939/0.7637872/0.9635443。
+E23 final240852辺中11527辺はpre集合にない。未記録を真の確率0と解釈しない。
+614件すべてをmotion生成辺や正解とは呼ばない（後段のrepairも含まれる）。
+実例1本以上という情報利用可能性条件を満たしただけで、CV改善は未測定。
+
+現motionはgeometry内全node対を探索する一方、pipelineから渡るpriorはILP後の辺のみ。
+次案は候補集合拡張ではなく、既存pre候補scoreの再利用だけを変える一因子案。
+独立Sol/highレビューはILP競合/分裂制約の迂回と時系列伝播のリスクを指摘。
+親は対照にE23を採用する。レビュー提案のE26対照は不採用で、E26は既存の負の参照に留める。
+selected-only配管のbyte一致、未選択priorだけを追加したarm、凍結CV/worst/追跡gateを
+維持する。新threshold/bonus/短track救済を追加しない。詳細の実装前条件はstage設計末尾。
+このturnはFlash/MAX新規起動なし、application code変更なし、学習/Loss/CV/提出なし。
+新しい科学改善仮説の物理評価はまだないため非改善カウンタは進めず、Goalはactive。
+
+
+### 2026-09-12 known12 graph-stage実診断完了 — 全7591辺、次は後処理の限定診断
+
+Flash作成runnerを独立Sol/high sourceレビュー後に修正・統合。関連85 tests成功
+（2.71s）、Ruff/diff check成功。初稿のGTをfinal予測へ流用する誤り、D2 schema、
+GEFF/ZARR取り違え、入力binding漏れを実GT実行前に訂正した。import前後source照合と
+project import closure束縛も追加。複雑なmock test依頼2回はコード返却がなく不採用。
+小さなguard/fresh-output testsへ限定し、全runner mock検証済みとは主張しない。
+訂正・test呼出しは独立taskに数えず、完了runnerは一単位（実装保守下限16→17、MAX3）。
+
+session87983はexit0、固定順12動画/7591辺/24成果物の全処理を完了。
+結果はoutputs/local/e23_known12_graph_stage_20260912_v1/RESULT.json、
+status KNOWN12_GRAPH_STAGE_DIAGNOSTIC_COMPLETE_NOT_ADOPTION。
+診断区間8.759659s、peak self RSS552370176bytes、最終記録前output110162313bytes。
+起動・事前binding時間はこの診断時間に含まない。終了後も入力/source/control/artifactの
+458bindingsを再照合して成功。RESULT SHA
+d56934295aee62cb2bef3851ce78c8026726315a8e7c045ab24bc64c999dd5ab、CONTROL SHA
+b4ce97f0fc405e143ab65a4a1b665646d3a98f428cb33f3d8c950fa042e69dbb。
+
+D2収支はretained7199/lost54/gained111/shared FN227と完全一致。
+全動画でbaseline-final対応ID差・CSV辺存在差は0。
+E23 FN338の固定pre対応による観測分類は、記録候補なし108、ILP辺除去14、
+ILP endpoint除去14、候補保持149、pre endpoint対応なし53。
+保持149はpre→post対応不変でpostにも辺が存在し、finalは対応あり辺なし102、
+endpoint対応なし47。E26 gained111中105も保持群だが、これだけで後処理の原因や
+hidden改善を証明しない。pre未対応を検出器失敗と即断せず、対応変化と実辺削除を分ける。
+
+次の設計対象は、この149件についてpost→returned→CSVの同一接続の追跡と
+座標変換/ID再対応/辺の除去の分離。先に閾値を変えたり全matrixを取得しない。
+残り24GTは未使用、matrix未読、学習/Loss計測・新CVスコア・提出・commit/pushなし。
+診断完了は科学的精度改善ではない。非改善科学仮説カウンタは進めない。
+
+
+### 2026-09-12 D2 join分割実装受入 — 合成E2Eを含む131 tests成功
+
+Flashでidentity index、残りのstate/完全結合/集計、実API E2Eを一つのjoin実装単位として
+段階実装し、src/biohub/association_stage_diagnostic.pyへ統合。
+新tests/test_association_stage_d2_join.pyは32case。関連stage/readout/D2を含め131 tests
+成功（3.03s、既知の公式empty graph警告2件）、Ruffとgit diff --checkも成功。
+元の診断・公式採点関数は変更せず、親はコード適用とimport/文字列書式/未使用変数の
+機械的整理、返却レビュー、合成実行を担当。実装と直接testsはFlashが作成した。
+
+identity初稿はD2 rootに存在しないendpoint欄を参照し、12pass/3fail。
+両nested armからの正しい取り出しへ限定訂正して15pass。残りjoin初稿はimport不足、
+matched dictのID欠落を許す等の不備を修正し、30pass。test側の既存値と同じ書換え
+（検証にならないno-op）2件と矛盾するfixtureも訂正した。E2E初稿は戻りdictのschemaを
+誤認（実再現KeyError: gt_edges）・transition期待値反転で不採用、実schemaへ限定訂正。
+最終E2E2caseは実diagnose_arm→compare_armsおよびdiagnose_stages→joinを接続し、
+GTの実生成ID/両端完全一致、lost_tp/shared_fn、empty-edge公式short-circuitと診断対応の
+差1件を保存すること、入力不変更を確認。辞書fixtureだけの見かけの成功ではない。
+
+MAX session85445は第三回評価として終端exit0、旧monolithic第二稿をREJECT。
+常時placeholder例外/D2入力未結合の主要指摘は採用。Counter/require未importとの指摘は
+既存moduleへのappend前提と実probeに反するので棄却。MAXは分割後実装を承認しておらず、
+本受入は親の合成開発検証であって科学候補の採用ではない。追加MAX再評価なし。
+全Flash/Max worker終端済み、canonical implementation lockなし。
+今回の六つのFlash呼出しは訂正・E2Eを含む一つの完了join単位で、分母に六を加えない。
+完了実装保守下限は15→16、評価は3のまま（3/16）。
+
+source SHA559e45295b85ff13458e8f7ae038b687dbbeb5ba8d2966faa7bfa02e43cfbb96、
+test SHA20e934e5bdf10e89636cb5057da2341ee9d036c507047cc03260b4b68820468b。
+ACCEPTANCEはoutputs/local/e23_stage_d2_e2e_fix_20260912/ACCEPTANCE.json。
+全入出力はe23_stage_d2_identity_flash/fix、join_remaining_flash/fix、e2e_flash/fix
+（全て末尾_20260912）とe23_stage_d2_join_max_eval_20260912に保存。
+
+次は既存D2の固定GT/CSV入力束縛とcollectionのpre/postを再利用するknown12 runner。
+新joinが動くことだけでは実7591辺を診断したことにならない。動画順差はdatasetで解決し、
+全入力前後SHA・GT座標・件数・時間/RSS/容量を検証し、残り24GTを開かない。
+必要packet計画/実取得は別段階。実測前の仮説採用や閾値探索はしない。
+今回実GTpayload読取・新学習/Loss計測・CV改善実験・提出・commit/pushなし。
+科学的非改善カウンタは進めず、Goalはactiveのまま。最新確認済みE23 public0.924を維持。
+
+### 2026-09-12 Goal継続 — D2 join失敗をMAX評価へ、実装はFlashで分割
+
+前turnは正常Cloud応答と2返却の実装不備を切り分け、次手を変える証拠を得たprogress。
+Goal activeを現認。MAX評価前に使用率を再監査した。独立Terra/mediumの初報は
+古いD3九単位を後発snapshot関連と混同したため、親が時系列の矛盾を指摘して再確認。
+原記録の九単位（capture、bridge、reference builder、collection runner、graph-stage、
+packet reader、stage connector、artifact core、全collection validator）＋namespaceで10。
+その後のlisting、Range、download、snapshot統合、SDK sourceが独立した完了五単位で、
+現時点の保守分母15。初報の「10のまま」は棄却。親も原記録を確認した。
+訂正・テスト追加・失敗joinを分母へ加えない。実MAX評価は2、今回予定の第三回で3/15=20%。
+対象は未採用のmonolithic join第二稿と既知の2回失敗、理由flash-failed-twice。
+MAXは評価のみで代替実装を依頼しない。新しい少量identity helperはFlashで別途検証中。
+
+### 2026-09-12 直接再実行 — Flash接続成功、D2 join初稿・訂正版は不採用
+
+ユーザーの「再度行ってください」で再開。現在のcanonical feature branchとWIPを保持し、
+既存取得成功を確認したため同じ成果物の重複取得はしなかった。親が入力metadataを整理し、
+Sol/high known12_runner_reviewが独立read-onlyでD2結合とGT境界をレビュー。
+reference group順とD2動画順が異なるため位置zipは禁止、datasetで解決する。
+レビューによるGT座標の両arm照合要件はstage診断設計へ記録。実GT payloadは未読。
+
+Qwenは正確なqwen3.8-flash、mode=subscription-cloud-only、qwen_token_plan、
+effort none、automatic_retry=0で2回正常応答・exit0。Cloud接続/認証障害ではない。
+1回目session81582はjoin sourceと合成testsを返したが、helper定義前呼出し、
+未定義名、FalseのCSV状態を拒否する誤判定、公式TPと単なるCSV辺存在の混同、
+未実装の辺一致判定等を検出。不採用。2回目session23742は原因を明示してsourceのみ
+依頼したが、D2入力未使用/結合未実装のまま常にplaceholder例外を投げるコードが返った。
+構文解析は成功するが、valid empty caseもValueError("unreachable placeholder guard")で失敗。
+1回目のhelper定義順エラーも隔離実行でUnboundLocalErrorを再現した。
+このjoin全体の一括生成checkpointは棄却。同じbriefの再送やSOLによる実装代替はしない。
+訂正呼出しを独立した完了実装タスクとしてMAX分母へ加算しない。新MAX評価なし。
+
+証拠: outputs/local/e23_stage_d2_join_flash_20260912/ と
+outputs/local/e23_stage_d2_join_source_fix_20260912/ にTASK/WORKER/candidateを保存。
+どちらも終端済み。application source/testsへは反映しなかった。
+既存stage/readout/snapshot/sourceの関連89 testsは2.74sでPASS、git diff --check成功。
+最初の隔離probeはPYTHONPATH未指定でimport失敗し、指定後に上記application例外を再現。
+
+次の実装はkey/endpoint厳密index、公式state自己整合検証、完全bijection/集計の
+三責務を小さな差分で段階的に依頼し、各返却を受入後に統合する。新frameworkは作らない。
+その後だけ固定known12 runnerへ接続し、全7591辺と入力前後hash/予算を照合する。
+現在のCOLLECTION36_ARTIFACT_AUDIT_PASSは維持。今回実GT診断・学習・精度改善・
+新提出・commit/pushなし。E23の最新確認済みpublic0.924はincumbentのまま。
+
+### 2026-09-12 実取得完了 — COLLECTION36_ARTIFACT_AUDIT_PASS
+
+session81713はexit0、KERNEL_OUTPUT_SNAPSHOT_COMPLETE。前後26pages、全5061filesの
+実Range byte合計6626146745bytes、選択280files＋terminal log64961671bytes、
+wall687.895sで前向き900s/128MiB制限内。既存成果物の取得のみ、Kaggle再実行なし。
+保存先outputs/local/e23_collection_verified_20260912、INVENTORY SHA
+671a9e3feb36a13a443f05cd4b1206ad89e50059e8f9f59f75527451559c81b2。
+署名URLはreceiptに保存せず、全pagepath/log一致・全選択file実byte/SHAを確認。
+
+既存audit_collectionを実成果物へ実行(session61803 exit0、3.436s)し、
+COLLECTION36_ARTIFACT_AUDIT_PASS。全36videos/272bindings、3564pair/341106074dense、
+matrix packet宣言6516624656bytesと実HTTPサイズ・完全path集合が一致。
+collection root6591020961bytes、全出力6626146745bytes。writer511.254s/
+observer601.999sで固定累積予算内。9group直列log、master/reference/25source、
+各graph配列署名と参照・返却/pre/post整合、読後再hashを検証。
+expectedは事前REFERENCE_PLANとPREPARATION、収集開始時master seal観測、
+既に監査済みpublic4の依存/weights/config束縛を用いた。新出力をexpectedへコピーしていない。
+
+監査record: outputs/local/e23_association_collection_audit_20260908/REAL_COLLECTION_AUDIT_20260912.json、
+SHAe56db2ab1d9a79a94d8ed97d1b02d9d6391713caf842a2672a0777419391e70a。
+監査module SHA45483b728a0b933a2409294fce286f90111d7078b0a721d93fc4e0da5829b651。
+matrix_packets_reloaded_locally=0、weights_images_rehashed_locally=false。
+今回のPASSは監査実装が要求するグラフ/manifest/実byte/source/logの範囲であり、
+matrix全量のローカル内容検証、GT正しさ、汎化、精度改善の証明ではない。
+既知の非選択IDやpost追加属性等のcore照合範囲の限界も消えたとはしない。
+
+未完了は既露出12の実GT stage診断runnerとD2個票7591edge突合、必要packetの選択取得/
+SHA・内部配列検証。全24未露出GTは開かず、計測後に次の単一科学仮説を固定する。
+今回学習/Loss計測/推論再実行/新提出/commit/pushなし、科学的非改善実験数は増やさない。
+E23 public0.924は最新確認済みincumbent、E26 public0.922は不採用のまま。
+
+### 2026-09-12 SDK接続受入 — 実出力のサイズ監査を開始
+
+前turnのsnapshot統合/236testsはprogress。Goal activeを現認し、未実装だった
+KaggleOutputSourceをFlashで追加。呼出し側の既存認証済みapiを受け取り、
+kernels_status / list_kernel_session_outputだけを使う。独自認証・更新・再実行なし。
+実SDKのuser_name/kernel_slug/page_size/page_token/file_name/urlとenum7値を確認。
+初稿の未初期化_size/BaseException捕捉/テストfixture不備を訂正し27testsとRuff成功。
+実SDK enumとの完全一致も確認。コードsrc/biohub/kaggle_output_source.py、
+tests/test_kaggle_output_source.py。証拠outputs/local/e23_sdk_source_flash_20260912/、
+e23_sdk_source_fix_20260912/、e23_sdk_enum_flash_20260912/。全Flash終端済み。
+
+実読取でkernel taichiiiii/biohub-e23-association-collection36 COMPLETE、
+全26page/5061paths/3564matrix pathsを確認(23.56s)。非log local271pathsは全てremoteに存在。
+log23250bytes SHA7395707f38dae364fa14b29f38d3440ef6ddc70e141c8d634ea3ba56667ea52e。
+この時点は実サイズ未確認。続いて既存280files(64938421bytes、最大989917bytes)のみを
+選び、snapshotをoutputs/local/e23_collection_verified_20260912へ開始。
+全remote Range実測、4threads、900s、選択download上限128MiB、matrix全量downloadなし。
+実行session81713。開始時空き191GiB。別worktreeでなくcanonical内のfresh検証用出力。
+
+監査のexpectedは今回結果から作らない。既存REFERENCE_PLANの固定SHA08395ca8…、
+収集開始時WATCH_GROUP00_STARTEDのmaster SHA7ae5c6786dc53fa807093346cafecc232bf229ddbb8b378f9632cc7a219c9840、
+事前PREPARATIONのruntime25source pinsを旧取得bytesへ再照合し全一致。
+後続の全artifact監査はsnapshot正常終了・実byte一覧完成後に実行する。
+現在はサイズ監査実行中であり、全artifact PASS/精度改善/提出候補確定とはしない。
+GT読取/学習/推論再実行/新提出/commit/pushなし。
+
+### 2026-09-12 active Goal — snapshot統合と実スレッドfakeHTTPを受入
+
+前Goal turnはdownload実装/213 testsでprogress。今回activeを再確認し、snapshotを
+受入済listing/namespace/Range/downloadへ統合。BEFORE/AFTERとも全pageを列挙し、
+path集合とlog完全一致、署名URLのみの更新は許容。全remoteを実Rangeサイズで監査し、
+選択分はbyte上限を事前判定、保存後にストリームSHA/byte数を照合する。
+全外部境界の固定エラー、進捗callback失敗の伝播、freshroot/予約名保護、
+future.resultの残時間とshutdown(wait=False,cancel_futures=True)を接続。
+旧snapshotのdefault Limits()由来B008も解消した。
+
+Flash初稿は不正構文/未定義helper/size-path対応誤り、訂正版はlog比較の未定義参照等で
+不採用。限定source edits後Ruff成功。初期テスト群も別APIを想定していたため棄却し、
+実APIの小さなfixtureで6 testsから検証、追加oracle訂正後統合22＋既存213=235成功。
+MAX読取評価thread01a095b7-ae44-77c1-9458-09d7472b588eはConditional Adopt。
+事前の完了実装保守下限10/評価1→2で20%以内、訂正呼出し数を分母に加算しない。
+評価対象はsnapshot全文＋既存helper契約要約。全moduleソースの独立監査とは呼ばない。
+外部error receipt書込自体の失敗は既知の診断限界として記録する。成功は実行の正常返却と
+receipt/成果物検証の組合せで判定し、INVENTORYが存在するだけで受入れない。
+MAXの「status2回ともlisting後」「downloadがpool内で書く」という記述は実sourceと
+異なるため棄却。clockはmonotonicを使用し任意callbackの強制中断は保証しない。
+
+不足していた実スレッド確認を追加。実ThreadPoolExecutorの2workerをBarrierで同期し、
+実Range/download関数をfakeHTTPに接続、size2件は別thread、保存2件はmainで直列、
+全4HTTP応答close・実byte/hash・2page往復を検証。実ソケット/Kaggle通信ではない。
+テスト返却の誤API/receipt欄も限定訂正。最終236 tests成功、対象source/tests Ruff成功。
+本体snapshotとtests/test_kaggle_output_snapshot.py、
+tests/test_kaggle_output_snapshot_threads.pyへ反映後も236pass(0.22s)。
+source SHA9f840947ff99985760e6e219565d0687bc9f4667d7e9d196ecca92a16b20c88a、
+統合tests SHAe793756acdb2a745ad85c258d6c3cfd605ae5a39d1c331cab7201ef5b669338d、
+thread test SHAb8b70356fcecf723255ee21afcf44c37d79dd883d21708fc5613a2a2be8de50c。
+
+証拠はoutputs/local/e23_snapshot_integrate_flash_20260912/、
+e23_snapshot_integrate_correction_20260912/、e23_snapshot_integrate_edits_20260912/、
+e23_snapshot_integrate_tests_20260912/（MAX_INPUT/WORKER含む）、
+e23_snapshot_harness_flash_20260912/、e23_snapshot_harness_fix_20260912/、
+e23_snapshot_gate_tests_flash_20260912/、e23_snapshot_gate_oraclefix_20260912/、
+e23_snapshot_threads_flash_20260912/、e23_snapshot_threads_fix_20260912/、
+e23_snapshot_threads_oracle_20260912/。全worker終了、provider retry/fallbackなし。
+
+次は既存collection source adapterと全artifact監査への接続を確認する。
+実成果物の取得/全監査、known12原因分類、固定CV改善、候補確定はまだ未完。
+今回Kaggle通信/実ダウンロード/GT読取/学習/新提出/commit/pushなし。
+インフラ修正の失敗は科学的非改善8実験に算入せず、Goalはactiveを維持する。
+
+### 2026-09-12 active Goal再開 — downloadのdeadline/保存検証を修正
+
+get_goalでactiveを現認。直前のメンテナンスはno-changeで、今回は次の安全な実装を実行。
+ユーザーの更新objectiveに「必要に応じて提出」を確認。科学的採否条件は変更しない。
+Flash/none/subscription-cloud-only/retry0によるdownload単独実装。初稿は有効な
+deadline=Noneを期限切れ扱い、訂正版は未定義boundedを呼んだため局所訂正した。
+本体の外部例外は固定メッセージへ統一、redirect禁止、絶対deadlineを受信/EOF/
+context/close/rename前後で検査。サイズ超過chunkは書込前拒否、実書込byteのSHAを返す。
+既存final/partialは保護し、失敗時partialを保存する。fresh管理root外での同時rename
+競合を防ぐ汎用トランザクションとはしない。任意callbackの強制中断保証もない。
+
+隔離test初回20pass/11failはfakeのNone hook呼出し、generator StopIteration、
+None deadline/tinytimeout/overflow残存byteのoracle欠陥。テスト訂正後31passで
+KeyboardInterrupt class/instanceのoracleがpytestを中断、BaseException型として
+正しくinstance化する限定訂正後、download49＋既存164＝213 tests成功。
+本体とtests/test_kaggle_output_download.py反映後も213 tests成功。
+Ruffは変更外snapshot default Limits()の既知B008のみ、全module lintは未完。
+証拠はoutputs/local/e23_download_flash_20260912/、e23_download_flash_deadlinefix_20260912/、
+e23_download_flash_tests_20260912/、e23_download_flash_oraclefix_20260912/、
+e23_download_flash_kbi_oracle_20260912/。全worker終端済み、provider再試行なし。
+
+次はsnapshotへ受入済listing/namespace/Range/downloadを接続し、取得前後の全page
+照合・全外部境界秘匿・deadline・実byte/hashを一貫して確認する統合単位。
+全transport採用前のMAX評価、実artifact全監査、known12 stage診断、固定CV改善は未達。
+MAX追加評価/外部取得/Kaggle実行/学習/新提出/commit/pushなし。科学的実験数は増やさない。
+
+### 2026-09-12 再度依頼 — Rangeサイズ確認を修正、全transportは未完
+
+QwenCloud qwen3.8-flash/none/subscription-cloud-only/retry0で直列実装を再開。
+前回HTTP一括案はtest構文エラー、未定義helper、残時間の再構成によるdeadline延長、
+context内returnで終了後check欠落のため不採用。Range単独、source単独、privacy、
+context、test wiring/oracleへ原因を分離して訂正した。失敗案は本体未反映。
+証拠はoutputs/local/e23_http_flash_20260912/、e23_http_flash_boundaryfix_20260912/、
+e23_range_flash_sourceonly_20260912/、e23_range_flash_privacyfix_20260912/、
+e23_range_flash_contextfix_20260912/、e23_range_flash_testfix_20260912/、
+e23_range_flash_oraclefix_20260912/、e23_range_flash_exit_oracle_20260912/。
+全worker終了済み。contextfix workerは利用不可request_user_inputを試みた記録あり、
+ツール不許可のまま返却されたコードのみ親が検証した。
+
+隔離testは9pass/22fail/1error（hook未接続等）→155pass/5fail（oracle）
+→169pass/1fail（bodyを読まない416へread expiryを要求）→164pass。
+最後の余分なboundary組合せを指定どおりexitだけに修正したため総数減少。
+本体range_sizeとtests/test_kaggle_output_range.pyへ反映後も164 tests成功。
+内訳Range69、listing33、namespace62。親は返却コード適用とimport/文字列書式整形のみ。
+絶対deadline、各通信境界、206/416、厳密header、固定エラー、cleanupをfakeで検証。
+これは協調的deadlineであり任意callbackを強制中断するhard limitではない。
+Ruffは元snapshotのB008(default Limits())だけ残存、全module lint成功とはしない。
+
+download本体は旧実装、snapshot全ページ前後照合/サイズ取得のdeadline接続も未統合。
+Range補助処理の開発反映であり、全transportや実artifactの受入ではない。
+MAX追加評価なし（前回実評価1/完了実装保守下限10を維持、訂正回数を分母水増ししない）。
+安定した統合revisionの高リスク採用前にreviewが必要。次はdownload単独修正。
+Goal APIはblocked継続を確認、この直接再開依頼の範囲で実施。科学的改善/達成とはしない。
+外部取得・Kaggle実行・GT読取・学習・提出・commit/pushなし。科学的8実験には数えない。
+
+### 2026-09-12 新運用による再開 — listing呼出し前checkを修正
+
+固定Flash回数上限撤廃・安定した高リスクrevision採用前のMAX gateという新AGENTSを確認。
+これまでの失敗/使用回数は保存し、新しい原因証拠付き訂正として再開した。Goal APIは
+開始時blockedのままだったため、この対話の直接再開指示で実装を進めた。達成とはしない。
+
+前回の事後checkによる余計なsource.page呼出しを、毎回の呼出し前page/time checkへ変更。
+Flash orderfixは30pass/3fail、残3件はoracle誤り（clock2回を4回と期待、巨大数をdeadline
+でなくpagesへ渡す、不正Unicodeでなく文字列backslash-uを渡す）。限定test訂正後の
+32pass/1failはtracebackにtest自身の'10 ** 1000'が含まれることを誤って漏出と判定したもの。
+さらに当該1関数のみをFlashで訂正し、listing33＋既受入namespace62＝95 tests成功(0.11s)。
+盲目的再送やprovider retryではなく、各結果から具体的oracle原因を分離した訂正。
+call_external/list_all_pagesとそのtestsを本体に追加。ただしsnapshotからはまだ未使用。
+Ruff B008は元snapshotの既存default Limits()行のみ残存。module全体lint成功とは言わない。
+
+根拠/各入力とworker出力はoutputs/local/e23_listing_flash_orderfix_20260912/、
+e23_listing_flash_oraclefix_20260912/、e23_listing_flash_overflow_oracle_20260912/に保存。
+次単位はHTTP helperの残時間/redirect/例外秘匿。入力はe23_http_flash_20260912/TASK.txt。
+全transport統合・実artifact受入・known12原因診断・CV改善はまだ未達。
+Kaggle操作/GT読取/学習/提出/commit/pushなし。科学的非改善8回のカウンタには算入しない。
+
+### 2026-09-12 CLI読取確認 — 締切と現在順位を更新
+
+画面ロック時の親CLI/API読取許可を受け、既存project Kaggle CLIでentered competitionを
+biohub検索。認証変更/再試行なし、exit0。対象slugはbiohub-cell-tracking-during-development、
+deadlineはAPI表記2026-09-29T23:59:00（timezone suffixなし）、teamCount3420、
+userRank1178、userHasEntered=true。以前の995/3253はSep8観測として保持。
+今回score・quota・competition rulesの全文・CPU条件を新規取得したわけではなく、
+E23の0.924は引き続き前回確認値。提出可否や改善の採用をこの一覧だけで判断しない。
+get_goalはactiveを確認。自動GoalからのFlash利用禁止は解消済みだが、同一取得修正の
+Flash2回失敗/MAX1回済みという上限は残る。追加実装起動なし、checkpointはHOLD。
+学習/ダウンロード/kernel実行/提出/commit/pushなし。科学的改善実験には数えない。
+
+### 2026-09-12 「再度」依頼 — listing案24 tests成功も上限違反でREJECT
+
+全module再送を避け、Flashへ全page列挙/外部例外秘匿の補助関数に限定した訂正を依頼。
+thread01a09559-1025-77d2-92c2-552fe2051995、subscription-cloud-only/retry0、正常終了。
+事前契約analysis/e23_listing_flash_task.md。隔離検証24 tests/0.05s成功だが、親probeで
+pages=1にもかかわらず2回呼出し、deadline10/clock[0,0,11]でも2回目を先に呼出すと確認。
+付属testsが事後例外だけを確認しており、次の外部呼出しを防ぐ要件を証明できない。
+REJECTで本体未変更。Ruff1 B008は未変更の元module既存行で、今回追加のlint失敗ではない。
+
+同じtransport/listing受入失敗2回を受け、Max評価専用を初めて1回実施。
+事前の完了実装下限10/評価0→今回1/10=10%で上限内。元のMax実装は評価に数えない。
+最初の入力はURL guard内のpassword属性と':'を秘密値代入と誤検知してローカル拒否。
+該当1行を省略した事実と正確な条件の要約を明記し再検証。実モデル呼出しは1回のみ。
+Max thread01a0955b-bd72-72d0-99b0-637771d3576eは正常終了、上限check順序をREJECT。
+ただし外部SnapshotErrorを保持せよという指摘は秘匿契約違反で親が棄却。抜粋にない
+testsを不存在とする指摘も、全付属tests照合で棄却。terminal log一致条件は緩めない。
+URL guardは実sourceに存在するがMax packetでは要約したため、当該行の独立確認は未完。
+
+隔離candidate SHA40b277fc48b5d68c37cc4ffb089603639e925e14326fb6c5d7855355ab1e8720、
+tests SHA19d1e68bd7cab4507ff5f0ab1779125a1ed90a07bc6111f493c923ed32ebaaa1。
+証拠はoutputs/local/e23_listing_flash_20260912/WORKER.jsonl、MAX_WORKER_VALIDATED.jsonl。
+次は各呼出し前のpage/time checkと正確なcall-count testsの訂正。本体SHA c6cedd8b…不変。
+Kaggle操作/GT読取/学習/新提出/commit/pushなし。CV改善候補の確定ではない。
+
+### 2026-09-12 8枠更新後の監督付きFlash再開 — transport案REJECT
+
+依頼元の「今この1回だけ監督付き再開」を受け、共有queueのCLOUD_WORKERS=8と
+非待機slot取得を現sourceで確認。グローバル設定は変更せず、未完了transport単位を
+Flash/cloud-only/effort none/retry0で1回起動。thread01a09551-8d2a-7ab3-8ebe-c900286245e8は
+turn.completed/exit0。前回のbusyは旧時点であり、今回は実装応答まで得られた。
+
+しかし隔離fake検証で4 passed/19 failed、Ruff15 findings。取得後の全ページ照合欠落、
+外部SnapshotError内容の漏出、無限seconds受理、微小残時間を超えるtimeout、
+executor終了待ち、Range redirect、log名互換性違反が残るためREJECT。
+親の3純粋probeでも外部sentinel保持/inf受理/timeout超過を確認。実credentialは使用しない。
+初回importで親harnessのPYTHONPATH不足を修正してから上記testsを実行した。
+source/test案はoutputs/local/e23_transport_flash_20260912_resume1/に隔離保存。
+candidate SHA e8b8573737efcdec21d09cf94e770eb1023ec0c77424d1ea9786df482776f204、
+test SHA acd329b93dbe90d819bbcb4c2b14e23baccc73e8dfa37412d8a496926bb004e5。
+本体src SHA c6cedd8b…と採用済namespace SHA d7d53547…は不変更。統合済みとは呼ばない。
+
+独立SOL/lowによるMAX使用率監査: ledgerの9つのD3完了実装単位とnamespaceで
+分母の保守的下限10、評価専用Maxの確認済み実起動0。旧Max実装/busy/模擬testsは
+評価に数えない。1回reviewなら10%だが、既に不合格の案へ追加評価を消費しない。
+今回はFlash実装の受入失敗1回（busyを2回目に数えない）。自動再試行/別モデルなし。
+失敗と次の限定修正単位はanalysis/e23_transport_flash_task.md末尾へ記録した。
+Kaggle/API/GT読取/学習/新規提出/commit/pushなし。精度改善・goal達成ではない。
+
+### 2026-09-12 依頼元タスクからの新条件 — 起動順調整待ち
+
+依頼元01a094e3-2323-7cf2-8f0b-5ccb78d30ec1より監督付きFlash実装の開始依頼。
+固定CV/CPU/再現性維持に加え、不安定CV・不明なルール/データ条件でも停止すること、
+MAX評価は全実装の20%以内・対象変更ごと1回、外部送信/提出/deploy/commit/pushは
+個別明示許可が必要という追加条件をAGENTS/評価policy/gold protocolへ反映。
+過去の目標を完了扱いにせず、get_goalは既存objectiveでblockedのままと確認。
+未完了goalを別の新goalで置換しない。成功条件は新依頼も併せて満たす必要がある。
+
+readonly lsofは共有Cloud lockを開くPython PID95563/node PID95585を返した。
+前回とPIDは異なり、現在の占有処理の内容は未調査。今回はqueue再送・モデル起動0。
+5プロジェクトの同時起動は共有1枠で競合するため依頼元へ起動順調整を連絡した。
+終了したnamespace実装を再実装しない。次は準備済みtransport統合、sourceは不変更。
+MAXの分母/評価件数は起動前に実記録で確定する。採用数だけで分母を水増ししない。
+科学的実験/精度改善/提出は今回なし。既知E23 public0.924、E26 public0.922棄却維持。
+
+### 2026-09-12 取得本体の直接実装依頼 — Cloud枠busyで起動前停止
+
+ユーザーの「Flashで取得本体の修正・統合を進めて」に基づき、現行sourceを読み、
+analysis/e23_transport_flash_task.mdに統合の採否条件を事前固定。namespace再利用、
+deadline、外部例外秘匿、全BEFORE/AFTERページ、HTTP実bytes/SHA、fake境界testが対象。
+現行source付き14,479bytesの最小packetをcanonical親確認入口へ1回送ったが、
+queueが`cloud-only subscription slot is busy; no wait or fallback`でexit2。
+WORKER.jsonlは0bytes、モデルthread未作成。実装生成/統合/テスト成功は主張しない。
+readonly lsofでcloud-worker-0.lockをPython PID52466とnode PID52720が開いていることを
+確認。flock競合の実応答と併せ、単なる古いlockファイルと見なして削除しない。
+他処理の内容・終了時刻・所属は未確認、停止/lock解除/再試行/代替モデルなし。
+本体sourceと既受入namespaceは不変更。Max評価は未起動、Kaggle操作/提出なし。
+証拠はoutputs/local/e23_transport_flash_20260912/のTASK.txt、WORKER.jsonl、WORKER.stderr。
+次の直接監督付き実装は枠解放後。同じ起動を自動goalで再送しない。
+
+### 2026-09-12 対話依頼でFlash入口修正・namespace実装再開
+
+ユーザーの直接依頼でcanonical用`--parent-reviewed`入口を追加。既存WIPを許容するのは
+read-only/no-tool authoringのみ。exact Flash/cloud-only、親確認、feature branch、
+canonical照合、lock、再試行0を維持。旧linked-worktree経路の安全検査は緩めない。
+親が起動設定とそのtestsを修正し、SOL/medium子flash_entry_reviewが独立読取レビュー。
+入口48 tests/Ruff成功。OpenAI公式non-interactive文書のread-only方式を参照。
+
+同入口からqwen3.8-flashを実起動。subscription-cloud-only/automatic_retry=0受付、
+thread01a09538-ec0a-76a0-88ff-b2f32599244f、turn.completed/exit0、agent_messageのみ。
+ソース・testsはFlashのJSON回答そのままを親が適用。今回新規の
+analysis/e23_namespace_flash_repair_task.mdが事前契約で、旧Max taskは再使用していない。
+namespace補助処理の62 tests/Ruff成功。これは実接続とpure helperの検証であり、
+取得処理全体・実GT診断・CV改善の成功ではない。現在の利用枠残高は未確認。
+同SOL子の独立静的レビューも祖先判定・共有directory・temporary分類にblockerなし。
+pure helperとして採用。末尾の再走査は冗長で深いpathに対する厳密な線形計算量の
+説明は過大との非阻害指摘を残す。transport全体の性能/安全受入には拡大解釈しない。
+
+- source src/biohub/output_namespace.py SHA d7d53547f2891263a1a1dbdeb7cfa0d091c12496abb425961cdf1dd8db5cd8db
+- tests/test_output_namespace.py SHA 2211d5c5a71a7af837380ceb6a59b36db9153134e8861841af14fce9239e136c
+- task SHA 44da78af9c6297e4bfcd5f0a43c64875c2e1b4f75773b118e17b647bf5fca578
+- worker証拠 outputs/local/e23_namespace_flash_20260912/WORKER.jsonl
+
+残作業は取得本体のdeadline/外部例外の秘匿/前後の全pagination検証とhelper統合、
+全出力受入、known12のSHA束縛runner。未受入の取得本体へ実remoteを渡していない。
+Kaggle操作・GT読取・学習・提出・commit/pushなし。新しいcheckoutも作成していない。
+自動goalからのQwen起動禁止は維持し、goal達成や科学的改善とは扱わない。
+
+### 2026-09-12 新goalの初回監査 — 候補確定は未達
+
+get_goalで新しい候補確定objectiveのactiveを確認。上記見出しのblockedは旧goalの
+時刻付き履歴。現在は固定CV改善・リーク/追跡/再現/CPU/形式検証を全て通る1候補が
+成功条件で、公開順位だけでは採用しない。gold_loop_protocol冒頭に新objectiveと
+明示承認時のみ提出する境界を反映し、旧Max実装指示を履歴扱いにした。科学gateは不変。
+
+local収集物を再棚卸し: 281 files、180 NPZ/55,121,313 bytes、known12のNPZ60、
+collectionのobservation/pairs NPZ0。取得・stage・readoutのsource SHAは10:27記録と一致。
+独立SOL/medium診断と親のaudit_collection照合で、次gateを明確化した:
+全remote pathのHTTP実bytesと選択済local graph/source/manifestの受入が先。
+全3564packetをローカルでSHA/内部array再読出しする必要はない
+（結果schemaのmatrix_packets_reloaded_locally=0）。独立レビューの当初の全packet
+再読出し要求はcodeと矛盾したため訂正。必要packetのSHA/内部配列検証は後段の別gate。
+graphだけでGT診断開始を認定せず、受入後にknown12 SHA束縛runnerを実装する順序を維持。
+
+現在の障害: 自動goalからQwen起動は禁止、既存Flash launcherはlinked worktree専用で
+canonicalを拒否する。対話での親監督付きFlash実装修正が必要。禁止を回避してSOLで
+実装したり、未受入取得moduleを実remoteへ適用したりしない。新goalの障害確認は初回。
+直前は運用設定/記録のprogressであり科学的改善ではない。今回も設計境界の訂正のみ。
+Qwen/API/GT読取/学習/実験/提出/commit/pushなし。有効な改善実験は今回0、
+8連続不改善の停止カウンタに設定作業や棄却された実装案を加算しない。
+E23 public0.924が最良既知、E26 public0.922棄却を維持。固定CV改善候補は未確定。
+
+### 2026-09-12 10:27 UTC メンテナンス — 運用設定のみ更新済み
+
+直前の対話依頼で、実装をqwen3.8-flash、条件付き読取専用評価をqwen3.8-max、
+最終採否を親Codexへ整理。現行の正本はAGENTS.md。旧タスク19件・旧役割6件は
+履歴／現行起動禁止を明示し、科学的な結果・不採用判断は保存した。
+MAX入口は`.codex/bin/qwen-evaluate --parent-reviewed < evaluation.json`。
+JSONはreason/acceptance/changed_files/diff/test_results/contextの6キー、32KiB上限。
+直前のオフライン検証はMAX46 tests、Flash43 tests成功。実API・Keychainは未使用。
+これは設定・契約テストの成功だけで、ライブ接続・現在の利用枠・実評価成功を保証しない。
+今回get_goalはblocked。取得処理の祖先判定修正、全出力受入、known12実診断は未完。
+診断source3件は前回hashと一致。Qwen起動・Kaggle操作・新実験・提出なし。
+HEAD7368ceb、cached upstream比ahead11/behind0、stagedなし。既存WIPは保持し、
+commit/push/fetchなし。今回の編集はこの台帳追記だけ。旧提出E26は終端済みで再追跡しない。
+
+### 2026-09-11 対話再開 — Qwen pure namespace unit REJECT
+
+ユーザーのサブエージェント利用・継続依頼により、親が設計、SOL/medium子
+`next_loop_review`が独立レビュー、Qwen Cloud qwen3.8-maxが実装案作成を担当。
+既存queueのcanonical read-only/authoring-only経路でsubscription-cloud-only受付、
+automatic_retry=0を確認。worker thread 01a08eb4-6c9c-7e71-b560-04adcbc44ba5はexit0。
+しかし祖先パス検査が階層深さと文字位置を混同し、必須5反例すべてを誤受理した。
+親の隔離実行と子の独立静的レビューによりREJECT。本体sourceは採用・修正しない。
+新規taskは`analysis/e23_namespace_qwen_task.md`、原因・次単位は
+`analysis/e23_snapshot_qwen_revision.md`。次は祖先検査関数と直接testにさらに限定する。
+既存stage/readout40 tests PASS（3.03秒）、対象2module Ruff PASS。
+これは既存部品の回帰確認であり、Qwen案の成功・精度改善・実GT診断完了を意味しない。
+Kaggle操作、学習、提出、commit/pushなし。E23/E26の既知スコアは未更新。
+自動goalのresumeや金メダル達成は主張しない。以下のメンテナンス記録は過去時点。
+
+### 2026-09-08 15:58 UTC 定期メンテナンス
+
+canonicalのみ確認。get_goalはblockedで、resume/worker起動はしていない。
+D3は全36収集COMPLETE、180NPZ/25sourceとmetadataの照合、5061 remoteパスの存在確認済み。
+実HTTP byte一覧・全体artifact監査・既露出12GT診断は未完。修正はQwen対話実装の再開待ち。
+Kaggle API/ダウンロード/学習/推論/新提出は今回0。E26は既にpublic0.922で終端済みのため
+反復API追跡を再開しない。E23public0.924維持、直近公開順位995/3253は14:43時点の観測。
+ブランチfeat/eval36-kernel-recovery、HEAD7368cebe2d445e7eb6d0492133fdfb9aed9e51f7。
+cached upstream比ahead11/behind0、stagedなし。fresh fetchなしでremote最新状態は未確認。
+全diffは親が台帳以外、SOL子が台帳を分担して確認。未完了WIPと固定入力を保護しcommit/pushなし。
+official clean、HEAD075fc5f5a52d11077f9dc2b074644618f26939e2。
+PREPARATIONのsource_files（canonical実装9ファイル）とruntime_source_pins（取得済み実行時Python25ファイル）
+は別集合で、今回どちらも全SHA一致を確認した。分担レビューで対象数を混同しない表記へ明確化。
+検証: 関連collection/artifact/packet/stageのpytest120 passed（7.09秒）、対象5module Ruff PASS、
+git diff --check / --cached --check PASS。今回変更は本台帳の最新状態と履歴境界のみ。
+README・エージェント指示・source・凍結protocolは変更しない。型チェックは文書のみの変更のため未実施。
+
+15:16 UTC 同collection v1のbrowser logを確認。9668.9sでgroup08 exit0、全9group/36動画process正常終了。
+9669.0sのrootログはCOLLECTION36_COMPLETE_REFERENCE_MATCHED。reference/master SHAは固定値と一致。
+実ログtotals: pair_count3564、dense_pairs341106074、packet_bytes6516624656、
+observer_seconds601.9988071989549、writer_seconds511.2542357910603、setup込み9660.141280408秒。
+最大group sampled tree RSSは3653492736 bytes。training_started/gt_scored/generalization_evidenceはfalse。
+これはリモート自己申告ログであり手元のartifact監査PASSではない。browserはRunning for9736.8s、
+notebook/HTML変換終了ログまで確認。Kaggle終端と出力確定はまだ。新しい予測CSV・提出なし。
+前turnはverified wait、今回は全36process終了・root完了ログの新証拠取得。金メダル未達。
+続くCLI statusはCOMPLETEで成功し、従来の認証拒否は現時点で解消（認証設定は変更していない）。
+既存Kaggle CLIのexact-path regexでreference/master/root RESULTの3ファイルとlogのみ取得。
+保存先outputs/local/e23_collection_terminal_20260909/。署名URLは保存/表示せず、全量取得なし。
+referenceは固定local123442bytes/SHA08395ca8615b6eeaaaeec521cd937c62d2212b7a20cf18be1a27478afd4af7acと一致。
+master2297bytes/SHA7ae5c6786dc53fa807093346cafecc232bf229ddbb8b378f9632cc7a219c9840と一致。
+root RESULT3435bytes/SHA5be7027e78d5bbb357f5a352957a7561c4d725b8ab69f675b6270fd20d5417e5。
+log23250bytes/SHA7395707f38dae364fa14b29f38d3440ef6ddc70e141c8d634ea3ba56667ea52e。
+実rootの9group returncode0/36datasetsと参照bindingを確認。graph/source/packet監査は未実施。
+CLIはversion引数をsession取得に使わない実装のため、explicit-version取得とは主張しない。
+不採用のQwen取得moduleは使用せず、追加提出なし。
+15:21 UTC、既存CLIのexact-path regexで9組のplan/split/result/process/progress/logと
+18 observer/pair MANIFESTを同terminal directoryへ取得。累計local bytes9508646。
+固定master→9plan SHA、root→9result SHA、result→18manifest SHAの連鎖を実bytesで確認。
+既存validate_group_result/check_cumulative/pair_manifest_summaryを実ファイルに適用し、
+9組の進捗累計・split順・processとroot一致、3564pair/341106074dense/6516624656packet bytes一致がPASS。
+これはmetadata検証のみ。72 observer graphの宣言サイズ計24238169bytes、最大989917bytes。
+次は180 graph/returned NPZと25 runtime Pythonの限定取得・実配列照合。
+全remote一覧のHTTP実サイズ確認と全体artifact監査、既露出12GT診断はまだ未完。
+前turnは全36完了とroot実取得のprogress、今回は実metadataハッシュ/累計検証のprogress。
+学習・新提出・精度改善なし。Qwenの自動起動/本体コード変更は行っていない。
+15:25 UTC、180 graph/returned NPZ（55121313bytes）と25 runtime Pythonを限定取得。
+25sourceは固定PREPARATIONのSHAに全一致。既存Reader/array_signatures/audit_videoを
+実36動画へ適用し、共通trace配列署名・72observer file SHA/bytes・座標/frame counts・
+returned/pre候補対応・ILP部分集合・post主要semantic列の固定reference一致・読後再hashがPASS。
+実計数: detectors910952、candidate_edges791286、selected_nodes787883、selected_edges730183。
+statusはGRAPH_CORE_CHECK_PASS_NOT_FULL_COLLECTION_AUDIT。matrix packetのローカル実読出しは0。
+SOL/medium子の独立レビューでscopeを限定: 非選択候補/非選択node IDのE23固定再現性、
+postのedge ID/dtype/追加属性の旧参照一致は、このcore PASSでは証明できない。
+expectedは今回outputから再生成せず、固定local reference SHAと実内容一致を確認して渡した。
+GT正しさ/汎化/精度向上や全体artifact監査PASSとは呼ばない。次は全remoteの実byte一覧を
+揃えて既存collection監査を実行し、受入後に既露出12のstage原因分解へ進む。
+前turnはmetadata検証のprogress、今回は実180NPZ/25source検証のprogress。追加提出なし。
+15:28 UTC、既存SDKでterminal session全26ページ/5061パスを読み取り列挙。
+重複/非正規/逸脱path・token cycleなし。全3564packetのパス集合がmanifestと完全一致し、
+取得済み280パス（別fieldのlogを除く）がremoteに存在、ERROR.json/submission.csvなし。
+sorted path JSON SHA b162172a11ebf08399450819d730ba4094259408a89873dbac55d0c14c5aea38。
+statusはREMOTE_PATH_MEMBERSHIP_PASS_NOT_SIZE_AUDIT。signed URLは保存/表示なし。
+この読み取りには15.49秒。前turnは実graph検証、今回はremote membership検証のprogress。
+残る実HTTPサイズ確認は未完。既存list-filesの誤ったsizeやmanifest宣言値を実サイズとして
+代入して全体監査を通さない。Qwen初稿/修正版の不採用は維持、独自SOL実装修正もしない。
+次の修正unitは既に分割済みだが、AGENTSの自動goal/heartbeatからのQwen起動禁止が適用中。
+
+14:43 UTC 公開LBを公式browserで再確認: 自チーム995/3253、最高0.924、最新0.922、7 entries。
+16位0.952にgold icon、17位も表示0.952だがsilver icon。表示値による現incumbentとの差は0.028。
+公開約29%/private約71%なので最終金メダル達成とは別。既存buffer0.002を維持し
+移動する計画目標のみ0.953→0.954へ更新。凍結候補の採否gate・未露出GT制約は不変更。
+前goal turnは同jobのverified wait。今回は目標差の更新根拠取得でprogress、精度改善ではない。
+
+運用更新2026-09-08 14:10 UTC: 最新ユーザー指示で少数サブエージェントを再有効化。
+親SOL/medium、実装Qwen Cloud qwen3.8-max（現行adapter none）、SOL子は既定medium。
+後続の全体effort見直し依頼で、親と子は単純確認low・通常medium・難しい科学課題のみhighへ変更。
+親のultra常用と3roleのhigh既定を解除、全5roleはmedium。稼働中親のeffort切替は未確認。
+短周期ポーリングと過剰な文脈/受領書を抑える。旧単独運用は履歴。以下の採点観測は不変更。
+
+E26提出 **56069885 / notebook v3 / scriptVersionId347872590** は採点完了、
+public **0.922**（E23 **0.924** 比 **−0.002**）、明示エラーなし。
+**E26 terminal recorded — このIDの反復API確認は終了。通常の2時間メンテナンスのみ継続。**
+E26は採用せずE23をincumbent維持。local SCREENは **SCREEN_REJECT_EVAL12** で終端確定。
+公式aggregate combinedは0.9272489144560833→0.9484374561398542だが、9本良化/3本悪化、
+worst−0.01332052562821795が既定−0.002を下回り棄却。eval24/36は未採点のまま停止。
+local/LBの符号差の原因・汎化差は未確定。次は保存物の経路比較と既露出12本の損益診断を設計済み:
+[E26結果とD2設計](e26_screen_readout_and_d2_design.md)。金メダル目標は未達。現在のgoal状態は下記の時刻付き確認を参照。
+保存物のD2A経路比較は完了、[D2診断の証拠表・実装単位](e26_d2_diagnostic.md)へ記録。
+targetのみの境界補正差とdevice方針差、旧raw producerの完全source未保存を分離した。
+D2Bは既露出eval12の全GT edge遷移診断まで完了。111 TP獲得/54 TP損失を全7591辺で監査した。
+[D2実測結果・次のD3設計](e26_d2_readout.md)へ記録。新しい予測・学習・提出は行っていない。
+#### D3の時点付き経過（以下の未完/RUNNING/activeは当時の観測。現在値は冒頭）
+
+D3のupstream棚卸しとlossless観測器を実装し、関連130 testsと最大pair合成保存probeを完了。
+現行raw36は全候補ではなくILP選択済みと確認したため、seed別logit/特徴と全候補graphを
+元の推論に観測hookで追加する。[D3設計と実装境界](e23_association_capture_design.md)を参照。
+CLI接続と直列監督は実装済み、関連151 tests成功。実Kaggleの公開4動画OFF/ON parityはPASS、
+手元の32 NPZ/22 runtime Python/旧E23参照の再照合もPASS。実36本特徴収集は未完。
+旧合成probeの閾値0.10は誤りで、実E23の0.48へ観測器を訂正済み。
+続く[36動画収集契約](e23_association_collection_design.md)と参照計画builderを実装、102 tests成功。
+既露出12先行・4本×9直列groupの固定参照を保存済み。collection runner/監督/notebookも実装し、
+関連139 tests成功。12:33:38 UTCにprivate/offline/T4のcollection36 v1を受付、RUNNING。
+収集完了・原因分解・学習・追加提出はまだ未確認。
+同runのlive logでgroup00/PID78開始とmaster sealを確認。待機中に
+[graph-stage診断](e23_association_stage_diagnostic.md)を実装、合成/既存関連90 tests成功。
+実12診断は36収集受入後。診断専用matchingと公式スコアを混同しない。
+13:01 UTC、group00 exit0→group01/PID122開始をlive logで確認、API RUNNING。
+readerを親単独で実装し、関連238 tests/Ruff成功。公開4先頭packetの実882,357denseと
+pre graph全1,411候補の一致、3,070 queryの確率/順位を確認した。これは計測器の検証であり、
+GT診断・学習・精度改善ではない。証拠は`outputs/local/e23_association_packet_readout_20260908/`。
+前の設定確認turnは科学目標に対してno progress、今回は実reader受入＋同jobのverified wait。
+E23 0.924維持、金メダル未達。新たな提出・commit/pushなし。
+13:09 UTC、stageの実GT対応IDから必要packetだけを選び、実確率/順位を添える接続処理を実装。
+追加22合成caseを含む関連128 tests/Ruff成功。資料は[e23_association_stage_diagnostic.md](e23_association_stage_diagnostic.md)。
+前goal turnは実reader受入とgroup00完了のprogress、今回はstage/packet接続実装のprogressと
+同collection jobのverified wait。実12原因分解、全36受入、新しい学習・精度改善は未達のまま。
+13:17 UTC、受入用coreを実装。関連133 tests、公開4の実20 graph NPZ/396pair manifest照合が成功。
+matrix全量実読出し・全36受入ではない。master/result/process/source/budgetを含む全収集auditは次。
+前turnはstage/packet接続のprogress、今回は受入coreの実装・実artifact検証のprogress。
+同jobは8動画process正常終了→group02/PID166開始。ログ購読のみsession76565へ再接続し、job再起動なし。
+新科学候補・新学習・新提出は未実施、E23 0.924/金メダル未達を維持。
+13:37 UTC、9group/36動画の全体検証器を実装、関連157 tests成功。実収集の受入は未実施。
+公開4のAPI probeで一覧サイズと実GETサイズの不一致を確認し、取得側はHTTP Rangeの
+実サイズ確認へ変更する設計を固定。logは一覧と別fieldのため別SHAを渡す。取得実装は次。
+前goal turnはcore受入のprogress、今回は全体検証器と実API調査のprogress＋同jobのverified wait。
+同runはgroup02 exit0→group03/PID210開始、先行12動画のprocess終了を確認。
+全36完了・実12原因分解・学習・新提出はまだ。金メダル目標はactiveで未達。
+精度/Loss/LB改善ではない。現在の契約は[e23_association_target_parity.md](e23_association_target_parity.md)。
+goalは2026-09-08 14:16 UTCのget_goalで **active**。13:56 UTCのpausedは当時の観測であり、
+親によるresume/停止操作はしていない。Kaggle jobの状態とは別に扱う。
+詳細は下記「2026-09-08 02:07 UTC 定期メンテナンス・E26終端結果」節。
+既存文書のSep7時点PENDINGヘッダは当時の観測であり、この終端記録が現在値を上書きする。
+
+### 2026-09-08 14:16 UTC〜 — サブエージェント実作業・Qwen取得処理実装
+
+14:33 UTC 自動goal継続: 前turnは不採用を決める実test/独立レビューによるprogress。
+同jobをbrowserで再確認、Running for7132.3s/group06/PID342、24/36process終了のまま。
+CLIは同slugのアクセス拒否が継続。job再起動・Qwen自動起動なし。
+取得修正の次unitをpure namespace検証に分割し、衝突/非衝突の受入表を固定した。
+別SOL/medium子が実12診断の入口を監査し、runnerと必要packet物理取得が未実装と確定。
+接続順と不足項目を[e23_association_stage_diagnostic.md](e23_association_stage_diagnostic.md)に記録。
+今回は診断実行境界の確定＋同jobのverified wait。実GT診断・学習・新提出・LB改善は未達。
+次のgoal継続は同jobのverified waitのみ。14:38 UTC browser Running for7458.9s、
+group06/PID342のまま、24/36process終了を維持。観測timeoutによる再起動なし。
+追加の実装/Qwen起動/提出なし。完了・artifact受入や精度改善とは扱わない。
+14:41 UTC、同jobの7533.4sでgroup06 exit0→group07/PID386を確認。
+28/36動画process終了、browser Running for7652.9s。前turn/今回ともverified wait。
+全36完了・artifact受入・実12原因分解・精度改善はまだ未確認。
+14:58 UTC、同jobの8629.6sでgroup07 exit0→8629.7s group08/PID430を確認。
+32/36動画process終了、browser Running for8664.2s。最後の4動画を処理中。
+前turn/今回ともverified wait。新しい学習・提出・artifact受入を意味しない。
+
+直接ユーザー依頼で進行。SOL/mediumの独立2子にQwen経路診断と取得WIPレビューを分担。
+両者完了、重複調査・全履歴fork無し。レビューで全ページの前後一致、内部名衝突、
+stream中deadline、外部例外のsigned URL漏出、B008を修正対象に決定した。
+親が既存queue sourceを確認し、canonicalのread-only/authoring-only経路で1回のQwenを起動。
+qwen3.8-max/subscription-cloud-only/automatic_retry=0を実受付logで確認した。
+exec38038、監督対象PID46743、上限600秒。依頼は[e23_snapshot_qwen_task.md](e23_snapshot_qwen_task.md)、
+生成logはoutputs/local/e23_snapshot_qwen_20260908/WORKER.jsonl。89.72秒でexit0。
+返答を同directoryのcandidateへ隔離し、実pytestは13 passed/8 failed、Ruff4 errors。
+独立SOLレビューも不採用: log自己衝突、再pagination欠落、deadline無効、外部例外漏出。
+正常系未通過と早期失敗に隠れた見かけの成功を分け、canonical srcへは未反映。
+初稿unitをREJECTEDで閉じ、[レビュー後の修正単位](e23_snapshot_qwen_revision.md)を
+同じsubscription-only経路で親監督下に起動。通信自動retry/fallbackなし。
+修正版も113.67秒でexit0だが、隔離pytestは15 passed/14 failed、Ruff1 errorで不採用。
+log自己衝突は集合経由で残存、外部SnapshotError再送とfake最終paginationの欠陥も残存。
+失敗数増加はテスト数21→29の変化を含み、精度低下とは無関係。
+証拠はoutputs/local/e23_snapshot_qwen_revision_20260908/。両Qwen workerは終了済み。
+同じ大きなmodule丸ごとの再生成はここで止める。次は名前空間検証だけの小単位へ分割し、
+正常系・全remote/selected partialの衝突テストを先に固定してQwenへ渡す。
+続いて外部境界sanitize/deadline、最後にpagination/統合へ分離する。SOLへの実装代替はしない。
+canonical取得WIPは未変更、実Kaggle取得には未使用。未検証の変更はcommit/pushしない。
+既存のartifact/collection/packet/stage関連120 testsは7.34秒で成功。
+
+同時にKaggle CLIはstatusアクセス拒否、所有kernel一覧がHTTP401。listener76565はexit0で終了。
+ブラウザの同slug/private/job script348230593はRunning for6191.4s、group04 exit0→group05/PID298。
+14:25 UTCには同browserでgroup05 exit0→group06/PID342、24/36動画process終了を確認。
+artifact受入前。API認証失敗をGPU job失敗と混同せず再起動しない。
+ユーザーへCLI再ログインを依頼（秘密情報はチャットに貼らない）。固定15 filesのhash/bytes一致。
+新規学習・提出・精度改善なし。取得処理の受入後に全36 artifact監査、既露出12の原因分解へ進む。
+
+### 2026-09-08 14:10 UTC — 直接依頼による省コスト委任の再有効化
+
+ユーザー指定の[文脈・手続き軽量化の投稿](https://x.com/ai_depression/status/2097310663022666175)と
+[短周期待機の調査](https://x.com/u1/status/2096890699883123119)を読んで運用へ反映。
+投稿の99%削減や全履歴再送の一般論を当環境の実測としない。後続のQwen3.8指定は、
+以前の明示variant qwen3.8-maxを維持し、親のSOL選択や契約専用経路を変更しない。
+実装は監督付きQwen専用、native SOLの実装代行や自動fallbackは無し。実Qwen実装は未起動。
+
+.codex/config.tomlでmulti_agentとagentsを有効化、子上限2、既定SOL/medium。
+multi_agent_v2のenabled=true、min/default_wait_timeout_ms=120000を設定した。
+設定互換性だけをSOL/mediumの子agent_wait_config_checkへfull history無しで委任し、
+親は別に運用文書を編集。子は正常終了。CLI0.153.4の受理と不正型/大小関係の拒否を確認。
+これは設定parserの証拠であり、稼働中ホストの実120秒待機を測定したものではない。
+親のcodex features list/TOML assert/git diff --checkも成功。上位の待機時間制約があれば優先する。
+
+AGENTS/CLAUDE/gold-loopの現行運用だけを整合し、古い全履歴fork、重複調査、儀式的receipt連鎖を抑制。
+公式設定を確認してapprovals_reviewer=userとfeatures.skill_mcp_dependency_install=falseを追加。
+前者は対象承認のreviewer指定、後者は不足MCP依存の導入制御であり、全ツールの承認agent起動や
+全スキル走査を止める設定とは称さない。[公式設定](https://learn.chatgpt.com/docs/config-file/config-reference)。
+共有設定/認証/フック/プラグインは不変更。科学gate/固定runtime/成果物は保持、commit/push/提出無し。
+
+### 2026-09-08 13:56–13:58 UTC — 定期メンテナンス・取得処理WIPの引継ぎ
+
+本周期はcanonicalだけのread-only確認と、このhash対象外台帳の更新に限定した。
+heartbeat直前13:55 UTCのgoal作業で、同じcollection36 v1のAPI RUNNINGとlistener76565の
+group03 exit0→group04/PID254開始を確認済み。先行16/36動画のprocess終了という観測であり、
+実artifactの受入・全36完了・精度改善を意味しない。本メンテナンス内ではKaggle APIや
+ログ再購読、出力download、学習/推論/提出を追加実行していない。E26終端IDの反復照会も無し。
+
+Gitはfeat/eval36-kernel-recovery、HEAD7368cebe2d445e7eb6d0492133fdfb9aed9e51f7。
+staged空、既存13 tracked変更と未追跡WIPあり。cached upstream比ahead11/behind0、
+fresh fetch未実施なのでremote現在値は保証しない。unstaged全diffは4,683行/359,925bytes、
+変更前SHA515015894bfb6e5b4a58e679bfae1349bfe58ec4cb8217e9952be698a9f078b3。
+全diffの機械検査とsource/設定/最新記録の照合を行ったが、大量の履歴WIP全体の意味的レビュー・
+受入を完了したとはしない。collectionの固定15 files＋REFERENCE_PLANは全SHA/bytes一致。
+officialはclean、HEAD075fc5f5a52d11077f9dc2b074644618f26939e2。固定source/設定/契約は不変更。
+
+直前の実装WIPであるsrc/biohub/kaggle_output_snapshot.pyを静的確認した。
+`.venv/bin/ruff check --no-cache src/biohub/kaggle_output_snapshot.py` は **B008 1件**、
+98行のlimits=Limits()が未修正。対応testとSDK adapter/CLIも未実装なので取得完了とは扱わない。
+次の親単独実装時は、既定引数修正、全ページの前後membership一致、download中の時間上限確認、
+内部receipt名との衝突拒否、異常系test、固定期待値接続、限定した実取得確認を完了してから受入する。
+これは原因調査のための取得処理であって、提出候補ではない。全36受入後に既露出12本の段階診断へ進む。
+
+今回の検証はgit diff --check / git diff --cached --check成功、固定hash照合成功、上記lint失敗。
+code修正無しのためpytest/format書換え/typecheckは実行していない。README/AGENTS/CLAUDE不変更。
+goal pausedを台帳へ訂正し、親が再開したとは主張しない。評価排他・WIP混在・lint未解消のため
+commit（新SHA）/push無し。E17 source/asset HOLD、全36受入/実12原因分解未了を維持。
+E23 incumbent0.924、E26不採用0.922、新規提出無し。メンテナンスの継続文言で実装権限を拡張しない。
+
+### 2026-09-08 12:46 UTC — group00開始確認・graph-stage診断の合成実装
+
+前回goal turnは36収集runtime実装と実起動でprogress。今回同じkernelId133552379/v1を
+API RUNNINGで再確認し、live logはsecondary SHA一致、Tesla T4、master SHA
+`7ae5c6786dc53fa807093346cafecc232bf229ddbb8b378f9632cc7a219c9840`、group00/PID78開始へ遷移。
+`WATCH_GROUP00_STARTED.json`へ保存。CLI個別eventの時刻は未取得なので推論時間を算出しない。
+listener exec17863は継続中、完了groupはまだ未確認。再push/別実行/条件緩和なし。
+
+待機中の単独実装はgraph-onlyの欠損stage診断。公式はedge無しだとmatching前に終了するため、
+その未対応をdetector欠損と誤分類しないよう、同じDistanceMatchingを診断専用に呼ぶ。
+固定pre対応pairの実node/edge生存、ILP後の対応変化、finalの座標一致/曖昧性を分離。
+finalへpre IDを移植せず、matrix未読を確率0にしない。既存D2/公式codeは不変更。
+合成18+既存関連72で90 tests/2.52秒、Ruff/diff PASS、公式空edge警告2件。
+親の自己レビュー。競合GT追加読取・学習・採用/提出は無し。E23 0.924、目標active。
+
+### 2026-09-08 12:35 UTC — D3 collection36実装・private Kaggle起動
+
+前回goal turnは公開4 actual監査と固定36参照の準備でprogress。今回は新group runner・
+累積予算の直列監督・専用10cell notebookを実装。既存public4 runtime/ノートブックは不変更。
+全新source/testの自己レビュー、関連139 tests/3.51秒、Ruff/diff PASS、生成3ファイル再構築一致。
+root-level GT/別画像混入、source/重み/環境/画像改変、途中失敗、runtime/RSS/出力/cumulative超過、
+RESULT欠損や依存差はERRORで止め、次groupを起動しない。自己レビューで独立レビューはなし。
+
+GPU残28.02h、コンペ参加済み、3packの`info.licenses` CC0-1.0、同じ所有slug無しを確認。
+`outputs/local/e23_association_collection_20260908/PREFLIGHT.json`に15ファイルSHAを固定。
+12:33:38 UTCに `taichiiiii/biohub-e23-association-collection36` を一度push、
+**kernelId133552379/version1**受付、exec23763 exit0。API RUNNING。
+timeout14400秒・group3600秒・全出力12GiB・RSS24GiB・累積observer/writer各1200秒。
+累積時間判定はgroup完了境界。画像symlink viewはOS隔離ではなく、competition GTは読み込まない。
+全run出力budgetの対象は収集root。setup/モデルmaterializationや画像viewのKaggle公開処理の
+容量計算とは別なので、実際の最終output一覧でも確認する。
+受付は`DISPATCH.json`へ保存し、current source全10cellとprivate/offline/T4/3pack/競合入力を照合。
+`REMOTE_READBACK.json`に保存。明示version pullを行ったとは称さない。
+返却Docker digestはpublic4と同じ37c64f7d…d461。再push/コンペ提出なし。
+実36完走/精度・Loss改善は未証明で、同じjobを追跡する。E23 LB0.924維持、目標active。
+
+### 2026-09-08 12:10 UTC — D3 public4完走・親の実artifact監査PASS
+
+直前の設定再確認のみは精度へのno progress。今回は完了した同じv1の保存物を検証してprogress。
+Kaggle APIは12:01:57 UTCにCOMPLETE、OFF/ONともexit0、PARITY_RESULTは
+`PUBLIC4_ASSOCIATION_OBSERVER_PARITY_PASS`。再起動/別GPU/提出なし。
+親が共通24 NPZと観測8 NPZを実際に再loadし、dtype/shape/全byte/行順、ID座標写像、
+全候補と選択辺、4動画の旧E23座標/選択raw graph一致を再確認した。
+22 runtime Pythonをplan SHAと照合し、6 payloadもdispatch時のsourceとbyte一致。
+144準備bindingsとnotebook再構築も一致。入力/重みの現地前後SHA、環境/deps/RNGの
+両arm一致をreceiptで照合したが、巨大入力/重みの手元再hashはこの監査で行っていない。
+
+396 pair、dense75,120,102、packet1,396,686,843bytes。全manifestのcoverage/13列dtype・shape/
+軸/単位を確認。matrix NPZは手元未取得で、全matrixのroundtrip/最終hashはSHA一致した
+現地sourceが実行した証拠に限定する。公開4を汎化精度や全36完了とは扱わない。
+OFF1066.247秒/ON1194.206秒、observer133.619秒、writer114.309秒、自己RSS最大4,237,594,624bytes。
+全体PASSログ時刻2855.841秒、既定3600秒/arm・8400秒全体・24GiB RSS・1200秒観測内。
+証拠: `outputs/local/e23_association_target_20260908/PARENT_ARTIFACT_AUDIT.json` と
+同directoryの`audit_terminal.py`。再現は `PYTHONPATH=src .venv/bin/python` に同scriptを渡す。
+自己レビューであり独立レビューなし。次は既露出36の固定参照・分割収集予算を決め、
+既露出eval12の接続欠損をthreshold/ILP/後処理へ分解する。E23 LB0.924維持、金目標active。
+
+同turnで36参照計画を実装。raw36の1,188 files/10,090,215bytesと36座標参照、D2 eval12 set、
+公開4監査証拠を照合し、9group/3564packet/341,106,074denseの計画を保存した。
+`outputs/local/e23_association_collection_20260908/REFERENCE_PLAN.json` SHA
+`08395ca8615b6eeaaaeec521cd937c62d2212b7a20cf18be1a27478afd4af7ac`、再生成一致。
+関連102 tests/2.43秒・Ruff/diff PASS。既存public4 runtime6 files/元notebookは不変更。
+collection用runner/監督/notebookは未実装で、GPU起動・学習・GT追加読取・提出なし。
+未完WIPはcommit/pushしない。次の実装境界と予算は[36収集設計](e23_association_collection_design.md)。
+
+### 2026-09-08 11:14 UTC — D3設定訂正・実Kaggle診断の起動前受入
+
+前回の実験goal turnは計測器欠陥の発見/訂正とbridge/監督の実装でprogress。
+直前のサブエージェント無効化再確認のみは精度上のprogressではない。
+現状態を再確認し、144 bindingsとノートブック再構築一致、151 PASS/2.60秒、Ruff/diff成功。
+E23 cell9と保存ログの実閾値0.48を観測器にも採用。下の10:45節の>0.1は当時の誤った
+合成契約であり、E23実推論との一致を示すものではない。旧source/test/probeは保持した。
+共通seed23826、public4全100frame、OFF→ON直列、private/offline/T4で一回の診断へ進む。
+arm3600秒/全体8400秒/child RSS24GiB/各arm出力12GiB。GPU枠残28.81h。
+上記契約文書と`outputs/local/e23_association_target_20260908/PREFLIGHT.json`に固定値・SHAを記録。
+親単独の自己レビューであり独立レビューではない。新モデル/学習/GT採点/CSV提出はしない。
+E23 0.924維持、金メダル目標active。未完WIPのcommit/pushも行っていない。
+
+11:13:46 UTC、private診断のversion1/kernelId133543583をKaggleが受付。
+`taichiiiii/biohub-e23-association-observer-parity` はRUNNING。current source全10cellと
+private/offline/T4/入力assetsをreadback照合済み。明示版`/1`取得は403なので区別して記録。
+receiptは同PREFLIGHT directoryのDISPATCH/REMOTE_READBACK。実行起動は実測parity成功ではない。
+同じjobを監視し、未公開output/観測timeoutだけで再起動しない。コンペ提出なし。
+
+次のgoal turnで11:17〜11:23に同じkernelId133543583を認証APIで追跡し、現在RUNNING。
+前回turnは実起動というprogress、今回の実行状況確認はverified wait。公開済みlog/receiptは
+まだ無く、OFF/ONのどちらのstageかや残り時間は断定しない。別run起動・runtime改変は無し。
+`WATCH_1123.json`へ最終照会を保存した。E9〜E13の失敗を再読し、seed別情報が既存確率から
+独立という未証明の前提を置かずに追加識別力を調べる[取得後の読み出し方針](e23_association_readout_plan.md)
+を記録。これは新しい学習/精度実測ではない。実parity結果が出るまで全36収集を起動しない。
+
+11:27 UTCの後続goal turnは前回verified waitを再検証。CLI/SDKのlive log経路を発見し、
+同じjobの依存import・support13/3weights SHA・Tesla T4・bidir0.3・plan sealと
+OFF PID71起動を実ログで確認した。OFF開始はlog時刻595.377秒で、最初の約10分はsetup。
+`LIVE_LOG_1127.json`へ記録し、同じrunを追跡する。限定stream観測のtimeoutはjob終了ではない。
+実ON/parity/新精度はまだ未確認。既存runtime/sourceを変更せず、再起動/提出なし。
+
+11:34〜11:42のgoal turnは同じjobのverified waitを継続し、live logで
+**D3 ARM_FINISHED off exit=0 → D3 ARM_STARTED on PID117**を確認した。
+11:42:28 UTC時点のAPIもRUNNING。OFF終端とONへの遷移は実観測、最終parityはまだ未確認。
+`WATCH_ON_STARTED_1142.json`へ保存。通常output APIではRESULT等がまだ公開されておらず、
+全個別artifactの再照合済みとは報告しない。配信側の無通信切断/再接続をjobの失敗と混同せず、
+新Kaggle version、別GPU実験、source/判定条件の変更、提出は行っていない。
+
+11:55 UTC、同じv1はAPI RUNNING、ON側の完了通知はまだ無い。前回goal turnはverified wait。
+待機中の今回turnでは、現行条件を変更せず公開情報を限定調査した。認証SDKのコンペ議論
+738217本文と公式FOCUS-3D repositoryから、dense教師→軽量検出器/接続モデルという
+別の教師信号を用いる候補を確認。[追加公開情報の記録](research_leads_20260908.md)へ
+message ID/投稿日/出典と限界を記録した。コードBSD表記から重み/dataのlicenseを推定せず、
+投稿者の単一動画recallやruntimeを当方の採用証拠にしない。新モデル導入/学習/画像送信なし。
+研究候補が増えただけで精度改善ではなく、D3を途中で置換しない。E23 0.924/goal activeを維持。
+
+### 2026-09-08 10:45 UTC — D3 upstream棚卸し・観測器統合と合成負荷probe
+
+前回実験goal turnはD3の実source/raw監査と保存部実装でprogress。直前のサブエージェント
+停止設定再確認だけは精度上のno progress。今回は単独で次の実装単位を進めた。
+E26退役/E23 incumbent/既存HOLD/GT段階順序は維持。別Agent・Qwen・新worktreeは未使用。
+
+D3棚卸しJSONは47,926bytes、SHA `985128d8f2bbc2c4b14840218b96c65971596ec351e4067a729c3f45f065184d`。
+保存先 `outputs/local/e23_association_capture_d3_20260908/`。support13 Python byte一致、
+現行raw36のnode787883/edge730183はsolution全True、detector910952nodeより少なくILP選択済み。
+未選択候補をrawから復元できない。全36隣接dense候補341106074件、matrix/特徴の未圧縮上限
+7,288,528,904bytes（ID/metadata等別）。未展開15画像tarの内部まで特徴不在とは証明しない。
+
+新`association_capture.py`はfloat32・全dense matrix・window/side別32特徴をlossless保存。
+今回の`association_observer.py`はprimary/reverse/secondary/mixedの上書き前copy、空pair、
+全detector座標、実graph ID写像、ILP前/後graphを保持する。元tensorやgraphを変更しない。
+保存確率からthreshold>0.1の全候補/距離を再構成し、元の戻り候補と全件一致を要求。
+選択graphは元graphの部分集合として検証し、未対応候補を0や負例で埋めない。
+
+`association_instrumentation.py`はSHA固定の前向き再構成textへ14箇所の任意引数/hookを
+追加。追加を除くと元bytes/ASTへ完全に戻る。元モデル呼出しのASTも一致する。
+instrumented source SHA `e2fda47e41d970a2c650bbbbb5fe068b6e1b9667fdd91cb59cc2a3ac8ba95a9c`。
+隔離supportやこの再構成sourceはimport/実行していない。静的一致をGPU parityとは呼ばない。
+source/test6 filesのSHAと再現コマンドは
+`outputs/local/e23_association_observer_d3_20260908/STATIC_INSERTION.json`へ保持した。
+
+初回は14 FAIL/41 PASS。主因はtracksdataのattr_keys指定時にID/t列が暗黙追加されるという
+親の誤った仮定で、node_id KeyErrorになった。全ゼロ検出fixtureにもshape(0,4)生成漏れが1件。
+ID/t/source/target/edge_idを明示取得し、fixtureを実際の予測shapeへ修正後55 PASS。
+追加の候補完備性/改変拒否を含め、関連6module **130 PASS/2.13秒**、Ruff/diff check PASS。
+公式edge無しfixtureの警告2件のみ。未配置GTを必要とする公式全suite成功とは報告しない。
+親が全新source/testを再読して自己レビュー。独立レビューではない。型checker未設定。
+
+負荷probeは事前固定seed23826/最大既知830×822の合成tensor一pairだけ。
+session30364 exit0、dense682260件、threshold後738辺、graphは全候補を選択したfixture。
+wall0.44178620795719326秒、観測区間0.41745379054918885秒、peak self RSS464027648bytes、
+全出力13089910bytes。12GiB/1200秒上限内。モデルload/画像/GT/GPU/ILP最適化なし。
+`PROBE_COMMAND.txt` / `PROBE_RESULT.json`とNPZ/manifestを同出力directoryへ保持。
+この値を36本・target GPU・hidden約200本のruntime保証へ外挿しない。
+
+実装受入の範囲は「静的hook差込み＋合成の完全保存/非変更/graph写像」まで。
+CLIにはobserver生成/finishがまだ接続されていない。次にKaggle用の明示CLI bridgeと
+source/assets/count/coordinate参照を固定し、public4のOFF→ON直列parityを一回測る。
+新学習/実特徴収集/提出はまだ。今回もLB0.924維持、金メダル目標未達・active。
+
+### 2026-09-08 10:01 UTC — D2A保存経路比較完了、D2B単独診断を開始
+
+前回の実験goal turnはD2Aの証拠JSON/再現コマンドを保存し、比較条件の相違を特定したprogress。
+直前のサブエージェント停止再確認だけは精度に対するprogressではない。
+今回ユーザーgoal継続を受け、保存10入力の現在bytesを再照合、全設定対応と不確実性を文書化した。
+追加のモデル/API/旧source取得、E26終端LB反復照会、Qwen/サブエージェント委任はしていない。
+
+D2A JSON SHA `5e3d800aa2fc267d5ecc152268a9fdf4d88635c0cc49e62f1844fb26944fdee7`。
+target比較はmotionに加えE23旧境界writer→E26上下限補正を含むが、local v2は両arm同じ境界処理。
+hidden補正件数は不明。さらにlocal CPU/float32対target CUDA優先、raw v11のdynamic patch後
+完全source未保存という限界を残す。現行raw notebookの0.20をv11ログの0.30へ代用しない。
+81ログ設定のE23/E26差はmotionのみ、101local設定の静的/手動対応を全件JSONへ保持した。
+
+D2Bは新source `src/biohub/e26_edge_diagnostic.py` とCLI、合成test2moduleを作成。
+公式evaluateをそのまま呼び、actual internal IDとsubmitted IDを両方向保持、全pred node/edge、
+GT node/edge、全GT edgeの両arm状態を保存する。各動画の全公式per-sample列一致を必須にした。
+疎GTのFPは公式pred_validだけを使い、GT未対応を一律FPにしない。6状態/4遷移は固定。
+
+親の全新source/test再読と自己レビュー後、Ruff/diff check PASS。
+最初の公式testを含む広い実行は158 PASS/3 FAILで、3件は別動画6bba_c328f2fdの実GT未配置。
+そのデータを追加取得/解析せず、合成・wrapper範囲を明示した再検証は
+**158 PASS/3 deselected/2.34秒**。公式全テスト成功とは報告しない。
+未配置3件以外のfailを除外したものではない。型checkerは未設定。commit/pushなし。
+
+D2Bの1回実行を親が決定。原E26/公式実装/sourceの上書きなし。
+新control `outputs/local/e26_diagnostic/d2b_eval12_202609081001/control.json` は124,082bytes、
+SHA `bb6236f15994f18993f3d7fa8601776e1bfc5aa190f3e565d9ae63fd480a87c8`。
+bind session73202はexit0。12動画だけのGT byte/scale/input/source/依存を固定済み。
+実行session **95176**、出力は同directory下の`result/`。wall600秒/peak self RSS4GiB/
+出力250MiB、CPU・thread1、fresh出力。新画像frame・eval24GTは読まない。
+起動しただけで診断完了とは扱わず、終端結果と全個票監査を次に記録する。
+
+10:02 UTC、D2B初回session95176はexit1で終端ERROR。最初の2動画は公式行一致/trace保存済みだが、
+3本目のnode対応表生成でPolarsの先頭100行型推定がGT IDをNull列とし、後続のInt64値を拒否した。
+ERROR SHA `7da1becdae9ded2ff25ca05d9ce28bda333912cfdf58f687f59492dededb04e3`。
+全12完了/分類仮説の棄却とせず、計測器の保存型欠陥として扱う。途中の値で分類条件は変更しない。
+修正前source/testは同runの`source_before_schema_fix/`へ非実行snapshotを保存し、
+元controlとの完全SHA一致を確認した。失敗artifactの上書きや削除はしない。
+
+前向き修正はnode/edge表のnullable Int64/Float64/Boolean schema明示のみ。
+220個の先頭未対応node・110個の先頭未対応edge・巨大GT ID149000000036を含む
+合成回帰2件を追加し、**160 PASS/3 deselected/2.28秒**、Ruff/diff check PASS。
+親が差分を再読して受入。元の6状態/4遷移・公式採点/入力/予算は一切不変更。
+`d2b_eval12_v2_202609081002`で新controlを固定し、同一12本の診断を一回だけ前向きに再実行する。
+
+10:06 UTC、D2B v2は**DIAGNOSTIC_COMPLETE_NOT_ADOPTION**、session56168 exit0で終端。
+control SHA `3b3819759a402f5f174939cefdec29dae815b4a2eca322a737237964ef3061d8`。
+RESULT SHA `2df2b4c2d4cb3aad978358c52b66a893de147b4428816448b2775e090753d767`（37,489bytes）。
+診断区間10.25451899995096秒、peak self RSS621,985,792bytes、result前出力16,619,405bytes。
+元予算内、全12動画×2armの全公式per-sample列が保存E26行に完全一致、source/input/deps再検証済み。
+全GT7591辺=retained TP7199/lost TP54/gained TP111/shared FN227。
+各動画の完全対応表・全pred node497742行/edge477465行・GT表・GT edge全個票を84artifactへ保持。
+
+親が保存物から別の全件監査を行い、hash、全CSV node値/edge multiset、全GT端点、各armのmatching、
+recallとedge TP/FP/FN、全遷移個票と集計を再構成して一致確認。監査session61238 exit0。
+parent_all_records_audit SHA `25a565890cf6b1b6e25cacd725bd2efa277b99519618ca2ab37624eacb3a451b`。
+損失54の内訳は両端対応済み接続なし35、両端未対応12、sourceのみ3、targetのみ4。
+獲得111は同じ順で88/9/7/7。最悪44b6_341df25fの3失辺はt0→3の4GT nodeの連鎖で、
+基準対応submitted ID30/135/239/342は候補最終出力にすべて不在。個別中間stageの因果は未確定。
+
+E23では338 FN中205が両端対応済み接続なしで、単純な検出増加よりassociationの追加情報を
+次に調べる根拠がある。E26の短track長/motion値を救済調整せず、E17のsource HOLDも維持。
+次はD3として既存upstream source/保存物からpre-ILP候補・seed確率・appearance情報の
+保存可能性を確認し、E23対照の別情報による一因子候補を設計する。
+今回の進捗はD2の実測診断完了であり、LB/汎化/Loss改善ではない。E23 0.924維持、目標active。
+
+### 2026-09-08 07:23 UTC — v1基準生成の終端失敗、全件原因診断、v2境界修正へ
+
+サブエージェント停止設定の再確認だけの直前turnは精度目標に対してno progress。
+今回は元の停止原因を実artifactから再検証し、単独で前向き修正を実装するprogress。
+設定変更を理由に実験を自動再開せず、ユーザーgoal継続を受けてこの作業を行った。
+
+06:50以降の同一run `e26_motion_off_screen_v1_20260908061704Z` は07:11 UTCまでに終端ERROR。
+exec22928の終了コード2、監督13393/baseline23434/public4のPID24494は現在不在。
+baseline stdoutは36本×start/raw_stats/finishの全108hookを記録。coreは36本完走したが、
+最終CSV構造検証が最初の異常動画 `44b6_a21120c2` の座標範囲外2件で拒否した。
+baseline process exit2、wall2584.1039365000324秒、timeout=False（上限5400秒）。
+PROCESS_RESULT SHA `f442b2e37f1bc45b2bf7004e33e1d586904ab63406d6c5475fa54bb068e4518f`。
+GENERATION_FAILURE SHA `868748daf1c66bd4628615d531e003d156842cc971450af0641cd1f8a7eec6b2`。
+候補directory/GENERATION_SEALは存在しない。採点・再提出・新LB・新学習Lossはない。
+
+親がCSV全1,491,393行を再走査し、実際は3動画5nodes（x2件/y3件）が256で範囲外と確認した。
+node760,783/edge730,610、78,391,867bytes。
+CSV SHA `72d2a94c6ee4a9fce37a9f330c7c9d0a7097976d013a511ea6fe4b2b6e383273` は旧E25基準と完全一致。
+これは旧baselineを新実験証拠へ転用したのではなく、既存出力境界の欠陥であるという診断比較。
+raw予測GEFFの同5nodeでは該当座標は全て252.0。後処理で移動したことは分かるが、最終float未保存のため
+centroid/linefitの個別寄与は未確定。GTは意味的に開いていない。
+
+根因はlegacy writerがround→下限0のみで、画像上限dim−1を適用しないこと。
+もう1件の欠陥はraw_stats/eventsをCSV検証後に保存する順序で、失敗した36本の実counter値が未保存。
+hook完了だけから値を作らず、旧E25統計で穴埋めしない。v1は失敗としてimmutable保持、無言retryなし。
+
+新しい前向き契約 [SCREEN v2境界修正](e26_screen_bounds_v2_contract.md) を書いた後、
+既存writer/coreへ省略可能callback、同一上下限補正adapter、全補正float audit、例外時の統計保持を追加した。
+旧default経路と提出済helperを変更せず、E26全3armだけ同じ補正を選ぶ。source closureとv2schemaも更新。
+失敗run時の6source/test filesは小さい非実行snapshotとしてoutputs内に保存した。別worktree/入力コピーなし。
+現在はsynthetic回帰/統合テスト中、まだ実装受入・新規登録・物理再実行を完了扱いしない。
+E23 0.924維持、E26 0.922不採用、SCREEN INCOMPLETE、金メダル目標は未達・active。
+
+07:37 UTC、v2境界修正を親が受入。最初の3module1493 PASS、その後のcore計測区間・E26Error統一と
+callback未使用/3arm補正実測の回帰追加を含む13module **1818 PASS/241.52秒**。
+Ruffは追加import順序1件を修正してPASS、git diff --check PASS。型checkerは未設定。
+24 warningsは合成のedge無しgraphの公式警告。既存ST-R3/E25 adapter利用側も検証範囲へ含めた。
+親が全新adapter/source/test差分を再読。学習条件・追跡アルゴリズム・19gateは不変更。
+
+受入SHA256:
+
+- src/biohub/e26_screen.py: `2a01ef18a325159ce9a78d4c15547ba950a4b652cb62f233789099427c47514c`
+- src/biohub/screen_output_bounds.py: `b97f31d54bd86452862f85b00fea4f698ddb8b352ad02cbeeb21c8d2aba1d11c`
+- src/biohub/public_postproc/csv_out.py: `3e7342a1a4d5e6eff0338c79ed196e5139fc8a4bcb60bc4d9de11fad6158e264`
+- src/biohub/public_postproc/pipeline.py: `2cd9cb759fe7d8b77347ef7bd0787d45b0e8c5c655501217a8ae0a37cb639016`
+- tests/test_e26_screen.py: `922ef4afa5ece9945f02325d07d58e1b6b4914b20da93a6f15b2815163e38f90`
+- tests/test_screen_output_bounds.py: `12865ac07fafcd6c1eeef387452c26f6c217a1573501d36430c9463753d54dba`
+- tests/test_public_postproc.py: `36d16f25960fe9431c3c28e80e720ba1bbbfeb439514b147190658339d8ecafe`
+
+新契約の07:37節で親がv2の1回実行を明示決定。新run `e26_motion_off_screen_v2_20260908073709Z`。
+元予算JSONの同一数値（SHA `2b0c93b53d0a4ba02ccce67e0a5c25a2f7251536142cec1454a4b21bed47103e`）を再固定。
+public4/36arm 1200/5400秒、生成14400秒、score7200秒、self RSS8GiB。上限延長なし。
+以下に新登録pair/実起動と結果を追記する。実装受入を精度改善とは扱わない。
+
+07:39 UTC、v2 preregistrationがexit0で完了（session86235）。最初のCLIはbudget相対pathを
+入口で拒否し、両run directory未作成を確認して絶対pathへ訂正した。生成失敗のretryではない。
+同一IDの初回登録を保存し、入力・重み・source22files・科学契約9files・依存を照合。
+GTは意味解析せず不透明bindingに留める。元dispatch SHAは以下から置き換えない:
+
+- PREREGISTRATION.json: 9,503,802bytes、`5abd92bd3ccd6533769a66e71e44f61b4b0a7b88d5d8228c0dbd195a43d1aa02`
+- GT_BINDING.json: 823,896bytes、`f2842591cfa6750a443aae0d6d2ffd44616b1c0d7ad3bb93cb0f6a83a662b3b1`
+
+保存先 `outputs/local/e26_screen_preregistrations/e26_motion_off_screen_v2_20260908073709Z/`。
+この2SHAでv2 generateへ進める。以後source/科学契約/依存/入力/HEADは凍結し、状態は台帳へ追記する。
+
+07:40 UTC、v2 generateのlive exec session **43110**、監督PID **56478**を確認。
+public4評価process PID **67374**（親56478）、ARM_STARTED時刻 **2026-09-08T07:40:27Z**。
+control SHA `41e7bb34b51cf4da6497c9e1808e036b3f6bda036567159fe4af2517f7a2abfa`。
+新run directoryは `outputs/local/e26_screen/e26_motion_off_screen_v2_20260908073709Z/`。
+開始時はstderr/失敗receipt無し。これは通常の数値処理processで、AIサブエージェントではない。
+public4 parity・36本の生成・generation seal・公式採点はまだ完了していない。
+次は同じsession43110を監督する。観測timeoutだけで再起動せず、実状態を確認する。
+基準完了後の新旧全行比較ではv1の既定5field以外の変化が無いことを確認し、差があれば停止・診断する。
+
+07:48 UTC、同じv2 runの **public4 parity PASS** を親が全artifact/CSV/bounds記録/起動条件の
+再parse・hash照合で確認した。前回goalは修正受入と実起動のprogress、今回も同一live handleの
+verified waitを続け、公開4本の再現性検証を完了したprogress。新worker/再起動/条件変更はない。
+
+- child67374はexit0、timed_out=False。全process wall386.6590279159136秒。
+- core wall338.9750027079135秒、self wall386.1233020420186秒、peak RSS4,403,724,288bytes。
+- CSV12,499,233bytes、240,126rows（122,207nodes/117,919edges）、literal動画順に一致。
+- CSV SHA `33c179b0449b9cdd186f06a653cddc8cf12359f008982f6713cdf30784a52e6a` は固定E23参照とbyte一致。
+- ARM_RESULT 3763bytes、SHA `6c4f7ab2243a9abf3b681b35ee88b0dcb8a2a0be652dce9e0cddacff4761a2cd`。
+- 全bounds auditは `6bba_05db0fb1` の6nodesのx下限補正だけ。max correction1、truncationなし。
+  6件ともlegacy CSV deltaはXYZすべて0であり、新規のCSV差分ではない。上限補正は0。
+- 登録source22files/科学契約9filesも現在byteで再照合して不変。
+
+監督56478はbaseline36 process **63332**へ直列遷移した（開始07:46:55 UTC）。
+baseline control SHA `f3b6d4ef13d8d2a22cc97474a77235c7287fd0bf1881dd60a66a406767d91aa4`。
+実process生存、strict receipt CPU/float32/epoch2/open_count2/fallback0、最初の動画startを確認。
+**live exec session43110**は継続中。候補36/生成seal/公式採点は未完。次もこの同じhandleを監督する。
+public4 PASSは再現性のみで、汎化精度・新LB・Loss改善ではない。E23 0.924維持、E26再提出なし。
+
+07:55 UTC、同一live session43110/監督56478/baseline63332の監督を継続。
+基準側はliteral先頭 **5/36動画**（44b6_12dfb391〜44b6_587a1e22）を生成完了。
+前回goalはpublic4再現性確認のprogress、今回も具体的なlive handleのverified waitを行い、
+完了済みprefixの先行診断を追加した。未完のCSVを最終検証済みとは扱わない。
+
+最初の2動画129,614行は全field一致。その後、完了済み5動画 **253,441行**を旧v1 baselineと
+**改行を含む行byte単位で全件比較し一致**した。元v1 CSVのSHA72d2a94…も全file再照合して不変。
+既定5座標の上限補正以外を一切許可しない比較oracleで、ここまでの5動画に補正対象はない。
+finish hookでflush/fsync済みのprefixだけを読み、処理中の後続動画には判定を付けていない。
+この先行比較は最終36本比較/構造検証/arm receipt/sealの代用ではなく、それらを省略しない。
+エラー・再起動・モデル/条件変更なし。source/科学契約/入力/依存/HEADの凍結を継続。
+候補はまだ未起動、公式採点と新LBは未完、学習Lossは本後処理実験の対象外。
+
+08:01 UTC、同一session43110/監督56478/baseline63332のverified waitを継続し、
+**12/36動画**の生成完了を確認した。7本時点305,153行、その後12本時点 **491,317行**を
+v1基準CSVと改行込みで全件byte比較し、いずれも完全一致。ここまで既定の上限補正対象は0件。
+元v1 CSV SHAも再照合した。source22files/科学契約9files/Git identityは登録と一致。
+12本はEVAL12集合だが、これはbaseline予測の生成確認のみで、eval12公式採点ではない。
+候補生成も採点もまだ始めず、親の固定直列監督が残り24本のbaselineへ進む。
+エラー・再起動・条件変更・提出はない。最終36本比較と全receipt検証を省略しない。
+
+08:10 UTC、同じlive session43110/監督56478/baseline63332を監督し、**18/36動画**が生成完了。
+15本時点638,526行のbyte一致を確認後、18本時点 **745,486行**を元v1と全行byte比較した。
+前回の最初の異常動画 `44b6_a21120c2` では、事前契約の2fieldだけが期待通り変わった:
+
+- row705187（node3048/t12）: x256→255。
+- row712807（node10909/t44）: x256→255。
+
+この2field以外の全byte（ID/t、その他の座標、edge、順序、改行を含む）は一致。
+GT・画像・元CSVの書換えや、失敗出力の修正再利用ではなく、fresh v2生成物の読取比較である。
+比較対象の元v1 CSV全SHA72d2a94…も照合して不変。今回の結果は2/5件の境界修正を実データで確認した
+progressであり、全36本の完了や精度改善ではない。完全なfloat/bounds reportはarm完了後に別途検証する。
+残る3fieldは `6bba_2312ac41` と `6bba_3db54e20` の後半2動画。現在は19本目を処理中。
+stderrは空、source/科学契約/Git identityの再照合もPASS。候補生成・seal・採点・再提出はまだない。
+
+08:19 UTC、session43110/監督56478/baseline63332の生存と進行を確認するverified waitを継続。
+基準 **24/36動画**が完了し、25本目 `6bba_1d0d8384` を処理中。
+21本902,990行、その後24本 **1,027,566行**を元v1と全行byte比較してPASS。
+差分は契約済みrow705187/712807のx256→255だけで、それ以外のbyteはすべて一致した。
+元v1全CSV SHA、登録source/科学契約/Git identityも再照合して不変。
+この24本完了はbaselineの生成本数であり、eval24の採点完了ではない。後半の残る3座標補正、
+全36本の構造/float audit/receipt検証は引き続き必要。候補生成・seal・公式採点は未開始。
+stderr空、条件変更・再実行・上限延長・外部送信・新提出なし。次も同じlive handleを監督する。
+
+### 2026-09-08 08:33 UTC — v2 baseline36正常完了、5座標のみの変更を全件確認、候補開始
+
+前回goalは同じlive handleのverified waitと完了prefix確認。今回はbaseline実検証を完了したprogress。
+session43110/監督56478を継続し、30本1,161,571行時点で3件目の補正を確認した後、全36本が完走。
+基準process63332はexit0・timed_out=False。親が起動条件、全CSV、36 raw-stat行、108 events、
+全bounds audit、各artifact hash、登録source/科学契約/Git identityを再検証してPASS。
+
+- 全process wall **2611.728230750072秒**、core **2558.637462957995秒**、self wall2611.241356333019秒。
+- self peak RSS **4,656,087,040bytes**。固定の5400秒/8GiB予算内。process-tree RAMではない。
+- CSV **78,391,867bytes / 1,491,393行 / 760,783nodes / 730,610edges**。
+- CSV SHA `e271452c60266235e941d30bc0ca6f1b8b427890696e45c8db48e621d0f2ff2d`。
+- PROCESS_RESULT 1885bytes、SHA `78fd5c63fa2a4d881a50665c89e0c94465a47ec6a06ecd913337fb3b8b9145b9`。
+- ARM_RESULT 4209bytes、SHA `e50cdf3971d47968514b457862d883fe32fd763633c564e34d92a75ab34136f4`。
+- output_bounds.json 28,306bytes、SHA `2f83bd25f5ff35542cf15767c9bcacc0924ae6f1ffab791abf6f67cac725911a`。
+
+元v1 CSV全SHA72d2a94…を照合後、全1,491,393行を改行込みで比較。
+**事前契約の5fieldだけが256→255、それ以外の全byteは一致**し、余分な末尾行もない。
+ID/時刻/ノード数/エッジ/行順に変更なし。元v1を修正・流用せずfresh生成したことを維持する。
+v2で保存した5件の最終floatは255.7028479664654、255.96738429187295、255.98887433734478、
+255.7802540049579、255.54067463926754（契約表の順）。全て整数丸めで256となり、上限clampが必要だった。
+これはv2で観測した値で、未保存だったv1のfloatを後から復元したとは扱わない。
+
+bounds auditは **56nodes/56軸**（Z1/Y29/X26）、sample truncation無し。
+うち **51件は従来の下限clipでlegacy CSV delta=0**、新しいCSV変更は上記5件だけ（各1pixel）。
+max correction2の3件も詳細確認: y=-1.5907659093860924（6bba_2819ca14/row1155814）、
+-1.6324680345394282（6bba_3db54e20/row1436762）、-2.4695348046340198（同/row1448759）。
+全て整数丸め後の−2を0にする従来下限clipで新旧CSV差0。report全56件を新規変更5件と混同しない。
+
+baselineのmotion counter合計はframes3564 / tight717009 / relaxed22893 / edges739902 /
+replaced_raw729922 / fallback0 / skipped_large0。各動画の整合性も検証した。
+これらは保存された実raw統計であり、未保存だったv1統計を旧E25から埋めたものではない。
+
+監督56478は候補process **89350**へ直列遷移（**2026-09-08T08:30:35Z**）。
+candidate control SHA `31506c1548e8861b39e06afce49466e85504cd8d6a48d2012d552267e835daac`。
+strict receiptはCPU/float32/epoch2/open_count2/fallback0。08:33時点で **1/36本完了、2本目処理中**。
+stderr空、failure/seal無し。次も同じ **live session43110** を監督し、終了までsource/契約/入力/依存/HEADを凍結。
+基準側の正常完了は評価基盤の修正確認で、motion OFFの精度改善ではない。公式採点・新LB・再提出は無し。
+
+08:46 UTC、同じlive session43110/監督56478/候補89350のverified waitを継続。
+前回goalは基準36本の実検証を終えたprogress。候補は **12/36動画**を生成し、13本目へ進んだ。
+保存されたbaseline/candidateのeffective_configを全key・value・型で比較し、差は
+`OUTPUT_MOTION_RELINK: True→False` の1項目だけと確認。その他の設定を追加変更していない。
+候補はまだ進行中なので、この設定読取を完了armの全artifact再検証で置き換えない。
+source22files/科学契約9files/Git identityも登録に対して再照合PASS。
+stderr空、failure/seal無し。12本の生成はeval12の採点完了ではない。残り24本を同じ条件で継続し、
+候補全体のCSV/生統計/補正記録/receiptと全入力の最終検証、生成seal確認の後だけ公式採点へ進む。
+新しい学習・GT採点・外部送信・提出・条件変更・再試行は無い。
+
+08:55 UTC、同じsession43110/監督56478/候補89350の生存と進行を確認するverified waitを継続。
+候補 **18/36動画**が生成完了し、19本目 `44b6_aaf8b0ea` を処理中。stderr空、failure/seal無し。
+source22files/科学契約9files/Git identityを再照合して不変。新しい条件・学習・再試行・提出なし。
+前回・今回とも具体的なlive handleの監督であり、未完了候補を成功armや採点済みとは扱わない。
+候補と基準のgraph差分は仮説上の変更なので、基準再現時の5field byte oracleを候補へ誤適用しない。
+残り18本を固定条件で生成し、全CSV/統計/補正/入力の検証とseal完成後に既定の公式採点へ進む。
+
+09:14 UTC、同じv2生成session43110はexit0で終了。候補89350もexit0、timeout=False、36本完走。
+直前のユーザー設定確認turnは精度目標に対してno progressだったため、今回は元のlive handleを
+実processで再確認して監督を続け、候補の正常終了・実artifact再検証まで完了したprogress。
+再起動、追加worker、source/契約/入力/依存/HEAD変更、学習、提出はない。
+
+候補の起動条件・全CSV構造・36行の生統計・108 events・全境界audit・artifact SHAを親が再検証してPASS。
+登録source22files/科学契約9files/Git identityも不変。motion relinkの全7counterは全動画で0。
+
+- 候補process wall **2596.6584624589887秒**、core **2542.697016958031秒**、self wall2596.0969817920122秒。
+- self peak RSS **4,670,308,352bytes**。固定5400秒/8GiB以内。process-tree RAMではない。
+- CSV **76,812,827bytes / 1,461,874行 / 748,203nodes / 713,671edges**。
+- CSV SHA `e9aa321502d8c1be40f3cc38d292ab7e3f381dcb22d10e65aef8cb36556a6f27`。
+- PROCESS_RESULT 1892bytes、SHA `a0e35d2afa6a90c5afdfff5464d6a15b7500ef50dbd711f611c2e005bebaf821`。
+- ARM_RESULT 4222bytes、SHA `db32fd6382e6c381f68d7a2c599e1c475fea2d054b3ea2253da5474d0d150f7e`。
+- output_bounds.json 27,925bytes、SHA `8b1d9cb0697ce3a8539cd96d33bf915fc108ba980cdb229314620d506287ddce`。
+
+候補boundsは全55nodesを記録し、そのうち50件は従来下限clip（legacy CSV delta=0）。
+新しい上限補正は5件・各1pixelだが、基準5件と対象を同一視しない。候補の全対象は:
+
+| dataset | row id | node id | t | field | 最終入力float |
+|---|---:|---:|---:|---|---:|
+| 44b6_a21120c2 | 692659 | 3048 | 12 | x | 255.7028479664654 |
+| 6bba_2312ac41 | 1102408 | 5336 | 26 | x | 255.6782174690053 |
+| 6bba_2312ac41 | 1108773 | 12160 | 81 | y | 255.98887433734478 |
+| 6bba_3db54e20 | 1409263 | 10589 | 68 | y | 255.7802540049579 |
+| 6bba_3db54e20 | 1409312 | 10649 | 68 | y | 255.54067463926754 |
+
+丸め後補正量2の3件も全件確認した。44b6_d754aa59/node3240/y=-1.749820028424682、
+6bba_2819ca14/node4390/y=-1.5907659093860924、6bba_3db54e20/node9871/y=-1.6324680345394282。
+全て既存下限clipでlegacy CSV差0。新しい上限補正の増幅や特殊例外ではない。
+
+生telemetryの対比で最終nodes−12580/edges−16939。gap_added_nodesは6633→8827（+2194）、
+safe_divisions_addedは2100→2311（+211）、short_track_nodes_removedは33266→48415（+15149）、
+short_track_edges_removedは24658→36222（+11564）。これらは実経路の変化であり、GT上のTP/FPや
+精度改善ではない。OFFはraw辺保持だけでなく下流のgap/division/短track削除まで影響した。
+GT公式成分と動画別差で確認するまで、特定stageをLB悪化の原因とは断定しない。
+
+生成監督の全3arm検証が成功し、元session43110から以下のsealを受領した:
+`GENERATION_SEAL.json` **3840bytes / SHA `38e7ca8c768d3a4263bbea92687ebde90f8a85a5e7847ff0babcaf7449c55a2d`**。
+監督wall5671.340631915955秒/self peak RSS1,125,924,864bytes。元public/private登録SHAは不変更。
+親の別CLI `verify-generation` は09:16 UTCにexit0、元seal SHAと登録pair、全3arm/入力/実行順の再検証PASS。
+採点前の生成完了をSCREEN合格とは呼ばない。
+
+09:17 UTC、元seal/public/private SHAを明示した初回 `score` を起動し、live session **77264**、
+監督PID **99200**、fresh scorer PID **20340**（親99200）を実processで確認。
+SCORE_CONTROL SHA `a7e8ef1819da7362482a73beab7b93ec33c8995819302a3c7cb640b0ac41173b`。
+既定eval12→通過時のみeval24→保存行eval36、7µm公式採点、固定19gate/7200秒/self RSS8GiBのまま。
+source/科学契約/入力/依存/HEADの凍結を維持。新生成・学習・提出・条件変更なし。
+
+同じ保存済生統計を全36本で照合し、各動画の最終node差が
+`Δgap_added_nodes − Δpruned_isolated_nodes − Δshort_track_nodes_removed` と厳密一致した。
+全体では **+2194 +375 −15149 = −12580**。ノード減少の計数上の経路を説明する証拠であり、
+削除された各ノードがGT上で正しかったか、短track削除の設定を変えれば改善するかは未検証。
+途中の採点結果や単一stageのcounterから採用判断や救済threshold探索を行わない。
+
+09:20 UTC、初回score session77264はexit0。scorer20340/監督99200とも終端を確認。
+共通finalizerと監督側の元seal/登録/入力/source/保存公式行/全subset/gate/実行順検証が完了し、
+**SCREEN_REJECT_EVAL12 / first_failure=paired_worst** を確定した。ERRORやtimeoutではない。
+親も元SCREEN_RESULT SHA、参照先のprocess/result/stage/両arm/subset/source CSVのhash、
+保存payloadからのgate再計算とsource/科学契約/Git不変を確認した。
+
+- SCREEN_RESULT **2038bytes / SHA `ab7476b5eff490229be573ce5e55ef467a0b2a5ddc1c895862eb8548040cd216`**。
+- SCORE_RESULT **2019bytes / SHA `ecb81ff87e08f7c74ab1d4b60357aae2f81373a9f564574bccc4fd9ebeaaac57`**。
+- eval12.json **35290bytes / SHA `0e53e36ae3efb5636a1b8ee46fc2b5cdd1aa3d8090c1c5853daef9ea2eaf45f4`**。
+- scoring PROCESS_RESULT **1868bytes / SHA `5e5ede96e69b5df289dddb84dc7254a88289acc4ce21ed2f8e3104360d7c84d3`**。
+- scorer process wall102.82506479206495秒、self wall102.55116320797242秒/peak RSS1,408,106,496bytes。
+- score監督wall187.49475408392027秒/peak RSS1,201,045,504bytes。eval12 stage16.685311416978948秒。
+- eval24/36結果・eval24 subset・failure receiptは存在しない。以後のGT graphを意味的に開かず停止した。
+
+公式eval12 aggregate combinedは **0.9272489144560833→0.9484374561398542（+0.021188541683770934）**。
+adjusted edgeも同じ差、division Jは0.11764705882352941で不変。
+edge TP/FP/FNは7253/370/338→7310/256/281（+57/−114/−57）、divisionは4/16/14→4/16/14。
+paired mean+0.035353698667888935、median+0.01645282711621321、worst−0.01332052562821795。
+44b6/6bba aggregate combined差+0.021455222700112464/+0.021703176904293686。
+5gate通過でもworst gate未達なので裁量救済しない。最悪44b6_341df25fはedge TP206→203、
+FP1→1、FN3→6、division counts不変。44b6_12dfb391と44b6_2a2eff9fも許容幅を超えて悪化した。
+
+全12本の差、両score成分・公式counts、下流削除の計数診断、未確定原因を
+[結果と次ループD2](e26_screen_readout_and_d2_design.md)へ保存。
+平均の改善をhiddenでの改善と取り違えず、E26 motion OFFは退役。既知LB0.922の再照会/再提出はしない。
+D2Aは保存済local/target source・config・raw生成・weight/deviceの対応表、D2Bは既露出eval12全12本の
+対応edge遷移分類を対象にする。D2B実GT診断のAPI/合成tests/数値予算はまだ未固定・未起動。
+今回は一仮説の直列物理評価と採否確定、原因の一次分解と次設計を終えたprogress。
+新学習Loss、LB更新、commit/push、サブエージェントはない。旧凍結科学文書を事後変更しない。
+
+### 2026-09-08 06:17 UTC — 直列生成/段階公式採点を受入、初回SCREEN予算固定
+
+前回goalで追加したunit03生成処理は実装progress。直前の設定確認turnだけでは精度面の進捗では
+ないため、今回は親が実装受入とunit04接続を進めた。サブエージェント・Qwen起動なし。
+E26提出0.922は不採用、E23 0.924維持。新たな精度・Loss・金メダル達成はまだない。
+
+unit03: generation-only child control、strict loader1回、CPU/float32/epoch2実体確認、
+public4→baseline→candidate直列監督、stream log、timeout時terminate/reap、全CSV/telemetry/
+登録pair/現在source/input/dependencyの再検証とgeneration sealを接続した。合成でparity不一致・
+baseline失敗・候補counter違反・source変更・RAM超過・process重複時に次arm/sealへ進まないことを確認。
+その時点の関連8moduleは1593 PASS/72.13秒。実データでの成功を意味しない。
+
+unit04: `score` CLIは別Python processへ委ね、元generation sealとpublic/private登録SHAを必須にする。
+GT bindingは採点側だけが解析し、36treeを不透明再照合後、現在stageのGT count/明示scaleだけを読む。
+subset CSVはglobal IDのみ機械再採番し、元CSV/hash/ID対応hash/予測値の全行一致を保存・再確認する。
+公式score_submissionを7µmでbaseline→candidateへ適用し、動画別行・singleton・系統別/全体summary・
+count総和とpaired差/全gateを保存する。eval36は前2stageの保存行だけから公式集約し、再採点しない。
+分裂分母0の公式NaNはnullと理由へ変換し、公式combined値を維持。必須eval36 division差の未定義はERROR。
+全REJECT/PASSが共通の再parse/hash/source/input検査を通る。途中の基準側成功もarm別JSONへ直ちに保存。
+
+原因と修正:
+
+- 最初の採点結合testで、eval12 subsetに36本分のshape mapを渡したため既存厳密CSV検査が拒否した。
+  validatorを緩めず、渡すshapeだけをliteral stage集合へ限定した。testの未定義stage変数5箇所も修正。
+- 自己レビューで候補採点失敗時に基準側の成功行がmemoryにしか残らない点を発見。
+  各arm完了時にexclusive JSONを保存し、stage側にそのhashを束縛する変更を追加した。
+- 小さい本物のGEFF fixtureを公式APIで12本×両arm採点し、edge無し予測のscore0とeval12棄却を確認。
+  eval24は不正なopaque sentinelのままでも意味的GT読取りなしで終了。実competition GTは未使用。
+- eval12/24の棄却後にsource/subset/stage記録を改変する試験はERROR。集約重みの逆転で
+  前2stage PASSでもeval36 REJECTとなる試験も通過し、paired meanで公式aggregateを代替していない。
+
+最終検証: 関連9module **1648 PASS/210.19秒**、Ruff PASS、git diff --check PASS。
+24 warningsは合成のedge無し予測に対する公式の既定警告。実データの学習/推論警告ではない。
+親が全追加source/CLI/testを自己レビュー。独立レビューとは呼ばない。unit02までの前半source/testは
+必要なimport/docstring以外が以前の保存textとbyte一致。official/既存postproc/io/validate/evaluateは差分なし。
+official HEAD `075fc5f5a52d11077f9dc2b074644618f26939e2` clean、branch `feat/eval36-kernel-recovery`。
+親HEAD `7368cebe2d445e7eb6d0492133fdfb9aed9e51f7`、無関係WIP保持、commit/push/remote fetchなし。
+
+受入SHA256:
+
+- src/biohub/e26_screen.py: `c9b51aca217ddf768f9b7f55fc26aa26c09a14936d2563077eab4aea93c066f7`
+- tests/test_e26_screen.py: `fd12f8faaa5d4b4480f58357547cccab38b4fd7d0422fd288ed726ecfc68098d`
+- scripts/e26_screen.py: `be2c47f9d1efab07bb2259cdb3fc67ddfeaf18b3747b86633df1ec2521527588`
+
+全実装受入後、[E26設計](e26_motion_relink_off_design.md)の06:17 UTC節で親が初回物理予算を固定した。
+budgetは `analysis/e26_screen_budget.json`。public4 1200秒、36arm各5400秒、生成全体14400秒。
+採点全体7200秒、eval12/24/36は1800/3600/300秒、各self RSS8GiB（境界/receipt検査、OS hard capではない）。
+旧E25 receiptの元SHAと335.59/2499.70秒・RSS4.40/4.47GBを再確認し余裕を確保。本機48GiB、空き192GiB。
+新学習/追跡モデル全量推論/ダウンロード/Kaggle API/GPU枠消費/再提出は行わない。
+
+次は初回run `e26_motion_off_screen_v1_20260908061704Z` の不透明登録→両SHA固定→直列生成。
+登録から採点終了まで対象source/科学文書/入力/依存/Git HEADは凍結し、定期メンテナンスでも
+変更・commit/pushしない。状態の追記はこの台帳だけへ行う。失敗時は出力保持して原因診断し、
+無言retry/上限延長/別ID再実行はしない。生成seal完了後だけ同一登録でscoreへ進む。
+開始/進行/終了の実証はこの節へ追記する。まだSCREENの科学結果は無い。
+
+06:19 UTC、初回preregistrationがexit0で完了した（session95612）。実raw/image/GTの全選択byte、
+元取得証拠、source/科学文書/依存/予算を照合し、GTは意味解析せず登録した。生成runはまだ未作成。
+budget SHA `2b0c93b53d0a4ba02ccce67e0a5c25a2f7251536142cec1454a4b21bed47103e`。
+元のdispatch SHAは以下で固定し、後から置き換えない:
+
+- PREREGISTRATION.json: 9,500,425 bytes、`cefbe0cd6127e1b704010866acfa28f0789fbc081eda7e1bfc2270fcab09be21`
+- GT_BINDING.json: 823,896 bytes、`4ac91d1a2d48cc5e20e58ca871b390453580ebbdfc027bfd60403827dae077ed`
+
+保存先は `outputs/local/e26_screen_preregistrations/e26_motion_off_screen_v1_20260908061704Z/`。
+これら元SHAをそのまま `generate` に渡す。上記の凍結条件を維持し、完成sealまでは採点しない。
+
+06:20:24 UTC、初回 `generate` を開始。live exec session **22928**、監督PID **13393**。
+06:21 UTCの実process照会でpublic4 Python child PID **24494**（親13393）と
+`ARM_STARTED.json`、exclusive stdout/stderrを確認。child control SHA
+`96fcddf4336978d0ddee322c30a7b18454ef9cdbc6bfb6a3c96ed010526feff4`。
+runは `outputs/local/e26_screen/e26_motion_off_screen_v1_20260908061704Z/`。
+現在はpublic4実行段階で、parity PASS/36本生成/seal/公式SCREEN値はまだ未確認。
+次のgoalはこの同じsessionを監督する。観測timeoutだけで再起動せず、完了/失敗の実状態を確認する。
+続けてpublic4のstrict receipt（CPU/float32/epoch2/open_count2/fallback0）と、
+stdoutの `E26 public4_parity start 0 44b6_0113de3b` を確認した。
+登録確認だけでなく、固定重みのloadを通過して最初の実動画のcore処理へ到達した。
+
+06:29 UTC、同じrunの**public4 parity PASS**を親が保存全artifact/CSVの再parseで確認した。
+前回goalの実装・初回実行開始はprogress、この継続は同じlive handleのverified waitと
+再現性検証の完了である。worker/model/条件変更や再実行は無い。
+
+- public4 child exit0、全process wall387.1737932090182秒、core339.64864220796153秒。
+- self peak RSS4,432,101,376bytes、self wall386.677579084062秒。全て固定予算内。
+- CSV12,499,233bytes、240,126rows（122,207nodes/117,919edges）、固定4本のliteral order。
+- CSV SHA `33c179b0449b9cdd186f06a653cddc8cf12359f008982f6713cdf30784a52e6a` はE23参照と完全一致。
+- ARM_RESULT SHA `43768de8230f9787c39d8e6f2ca721042c4e59c47fd362a1a6e5e012a365f398`。
+
+public4 Python child24494は正常終了し、監督13393が次のbaseline36 child **23434**へ直列遷移。
+baseline control SHA `dc77ec2b89c9c1e62b37e369ec3d19fdd686e98fe837a0f2a79851743d057cef`、
+strict receiptと `E26 baseline start 0 44b6_12dfb391` を確認した。
+exec session **22928**はliveのまま。候補36・generation seal・公式SCREEN採点はまだ未完。
+public4は再現性確認だけで、汎化精度や改善値ではない。新LB/学習Loss/提出は無し。
+
+2026-09-08 06:37 UTCの継続監督: 同じexec22928/監督13393/baseline23434の生存を再確認。
+baselineのfinish hookは7/36本まで進み、8本目 `6bba_07e24132` を処理中。
+stderr/FAILURE receiptは無し。直近のcurrent RSS約4.3GBで上限内（peakはarm完了receiptで判断する）。
+前回goalはpublic4検証完了というprogress、本turnは具体的なlive handleのverified waitである。
+source/条件/入力を変更せず、再試行や別processの物理評価は開始していない。
+候補36・generation seal・公式SCREEN値は未完。引き続き同じsessionを監督する。
+2026-09-08 06:43 UTC、同じsession22928/PID23434のverified waitを継続し、
+baseline **12/36本**のfinishと13本目 `44b6_706092f0` のstartを確認した。
+エラー/再起動/条件変更なし。これは予測生成の進捗で、eval12の公式採点完了を意味しない。
+2026-09-08 06:50 UTC、同じlive session22928/PID23434を監督し、基準側は
+**18/36本完了**、19本目 `44b6_aaf8b0ea` へ進んだ。baseline process経過約23分、
+current RSS約4.3GB、stderr/失敗receipt無し。前回・今回ともverified waitとして扱う。
+候補側の起動条件は基準36本の正常終了と全出力検証のまま。採点・新提出・条件変更は無し。
+
+### 2026-09-08 05:26 UTC — 登録pair/CLI接続、raw36取得記録の特定と全選択画像のbyte照合
+
+直前のユーザーturnはサブエージェント停止設定の確認だけで、精度面のprogressではない。
+このgoal turnは実装と実入力の検証を進めたprogress。親だけで作業・自己レビューし、委任なし。
+開始時のsource/testは05:00節のSHAと一致。仮説・動画順・gate・E26提出結果は不変更。
+
+入力取得記録の不足を解消した。旧E25 CONTROLの`initial_inventories.pinned_evidence`を
+**記録の所在を知るためだけ**に読み、raw36の真正な既存取得manifestを発見した。
+`outputs/kaggle/e22_bidir030_eval36_reference/DOWNLOAD_MANIFEST.json`
+SHA `1f567e2520cc75536886296c1b88724ea2c2776cd2aa6b52ceaaac6bca8ac12b`。
+raw本体folderではなくreference側に置かれていた。取得時刻は2026-08-30T09:29:59Z。
+現在の全1188files/10,090,215bytesが既存tree SHA
+`fa34dcf5f20054f240d750bd2225dd08fc6cf645e094cd9596ce2faf4bbf0ca2`と一致。
+旧runのseal/予測をE26の実行証拠へ流用せず、現在hashを過去取得時の証拠として創作していない。
+
+今回実装したもの:
+
+- generation/scoring source20files、科学契約8files、official固定HEAD/gitlink/clean、親Gitの
+  HEAD/branch/dirty状態を登録・再検証する。Python実行fileと環境、直接依存8種を含む全102
+  installed distributionのversionを取得。数値/採点moduleをimportせずfresh processでも一致を確認。
+- canonical raw4/raw36、明示40 image trees、固定DeepCenter checkpoint/manifest、public4参照CSVを
+  完全inventoryへ接続。画像shape/ZYX scaleは実在metadataから取得し、欠損/default fallbackを拒否。
+  raw取得manifest、image READY/content inventory、画像manifestの既存SHAとも照合する。
+  GT名も含む`data/manifest.csv`はbyte bindingだけで、generation側で内容を解析しない。
+- private GT_BINDINGを先、GT tree pathを含まないpublic PREREGISTRATIONを最後にexclusive作成する
+  `preregister_screen`を実装。生成runは作らず、失敗途中のprivate fileも保持する。
+  双方のdispatch SHAを必須にした`verify_registration_pair`はprivate JSONを解析せずbyte照合だけを行う。
+  `scripts/e26_screen.py`に`verify-inputs` / `preregister` / `verify-registration`を接続した。
+  **generate/scoreコマンド、子control、実行監督、generation sealはまだない。**
+- 単独実行の引渡し整理: 既存generation/scoring contractをunit03/unit04の最終実装briefも兼ねるものと
+  interfaceに明記した。別worker用Markdownは増やさず、科学要件は維持する。
+
+自己レビューで追加修正した2点: (1) private JSONをpublic引数に渡した場合に、JSON読込**前**に
+canonical public pathnameで拒否する。(2) inventoryに書かれただけのresolved pathnameへ直行せず、
+明示selected image pathの実alias解決との一致を確認してからmetadataを読む。
+いずれも禁止対象fileを開かないことを回帰testで検査した。metadata入れ子の未知field/type拒否、
+取得manifest不一致時に画像treeへ進まない順序も補強。初回・補強後ともpytest/Ruffの失敗はなかった。
+大きな一行JSONをsed表示してtool出力が切れた探索は完全証拠に数えず、後続の全件構造比較を使った。
+
+最終コードの実入力read-only確認: capture→全件verifyが**37.070511291967705秒**でPASS。
+public4画像408files/1,906,332,008bytes、eval36画像3672files/15,932,872,938bytesを全件hash照合。
+raw4も132files/1,583,021bytesの旧全tree pinに一致。各画像metadata、固定重み/参照CSV/取得証拠を確認。
+これは画像chunk復号/GT意味解析/モデルload/推論/公式採点ではなく、生成runtimeの計測でもない。
+canonicalの実preregistration/run directoryは作成しておらず、実行予算もまだ固定していない。
+
+受入検証: 従来と同じ8 test modulesで **1556 passed in 15.38s**。新3code filesのRuff PASS、
+全関連追加差分を自己レビュー、git diff --check PASS。source/test/CLI SHA:
+
+- `src/biohub/e26_screen.py`: `d1d22b688f517d1e208f275cff79feef4dfa1c3a14a6b7aa8501d791603c7b82`
+- `tests/test_e26_screen.py`: `bb8291039f74da6b98838ed2c4a5d77abe3a6d759b7ecc025f984d53286c00df`
+- `scripts/e26_screen.py`: `5c2ce1a387de61bf7ebe0bc3d99f5e19c9ecd82672d52ecb75807fe367e532da`
+
+次は登録検証を生成専用child controlへ接続し、public4→baseline36→candidate36をfresh processで
+直列監督する。strict loaderの実CPU/float32確認、dataset hooks、全件CSV/stats照合、期限停止、
+失敗保持、成功時だけsealを作る。その後に別processの段階公式採点とcommon finalizerを完成し、
+全体検証・数値予算固定の後で実比較を行う。GT/予測/source差し替えや早期REJECT後のstage停止の
+未接続部分を、今回の部品testで完成扱いしない。
+E26は0.922で不採用、E23 0.924維持、local paired Δと原因は未確定。再提出/学習/GPU/Cloudなし。
+単位全体が未完成なのでcommit/pushなし。金メダル目標は未達でactiveを維持する。
+
+### 2026-09-08 04:24 UTC — E26 unit02受入・親単独実装
+
+前回goal turnはcanonicalに評価source/testを追加したprogress。今回はそれを現物確認し、
+unit02aの不足6テスト定義を修正して受入後、unit02bの統計/段階gateを実装・自己レビューした。
+サブエージェント/外部Qwen/別taskの起動はゼロ。自己レビューを独立レビューとは呼ばない。
+
+- unit02a: 保存rev3のproduction7758bytesを無改変適用。SHA
+  `369469fac4a3bd90bee19948fd9cec60a746a4a99ca47aaae112c97e1e16b84f`。
+  testsの変更ASTは指定6定義だけ。4 pathのbuiltin str、正常戻り値None、片armずつの不正入力、
+  motion/twin8境界、3型違反×両arm、実在する環境変数7個への独立性を補完。
+  受入test SHA `61ef85a93003f135d41b3a91bf67f82dc056cfb5f7097d7c217ec94f6e2e01e6`。
+  関連582 tests PASS（2.57s）/Ruff PASS。初回Ruff I001は空行の機械修正で解消。
+- unit02b: literal EVAL12/EVAL24、fsumによる非丸め統計、厳密なJSON入力検証、全19 gateの
+  順序/包含境界/first_failure、常時submission_authorized=falseを実装。
+  eval24 mean .003の非到達性は閾値を変えず、到達可能な上下値と私有比較関数の境界を分けて検証。
+  診断項目のNaN/infもERROR、eval36の必須division nullもERROR。
+  正常・不正入力と全gate境界の関連1002 tests PASS（1.72s）/Ruff PASS。
+  初回Ruff E501は折返し修正。自己レビューでidentity型チェックを明示し、回帰3件を追加。
+  既存unit02a source4定義/test19定義はAST完全一致を確認。
+- unit02受入時点の`src/biohub/e26_screen.py` SHA
+  `8aee1651d3b427628a59a65575d0632f43dacda5d08c4f7f8fc9542e9cf46ef7`、
+  `tests/test_e26_screen.py` SHA
+  `31ec3439f260febab83f127de58c8a07c9e78b308875311c75468783ac0a3f9b`。
+  後続unit03で拡張する前の中間受入identityであり、最終生成source pinではない。
+
+検証コマンド: `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q
+-p no:cacheprovider tests/test_e26_screen.py tests/test_e26_motion_relink_contract.py tests/test_public_postproc.py`、
+`.venv/bin/ruff check --no-cache src/biohub/e26_screen.py tests/test_e26_screen.py`。
+全関連差分を親が再読。official/は固定HEADでclean、既存WIPとE26 v3物理証拠は不変更。
+unit03の生成監督/CSV・telemetry検証、unit04の事前登録/GT分離公式採点、予算固定と実評価が残る。
+unit02受入だけをSCREEN完成、原因判明、LB改善、金メダル達成とは扱わない。再提出なし。
+
+### 2026-09-08 04:35 UTC — unit03のCSV/生telemetry検証を実装（生成runnerは未完）
+
+unit02受入後、generation/scoring contractとrunner interfaceを全文再読し、既存writer、
+`validate_submission`、`new_stats()`とraw-stat builderを現物確認して、親が次の2 APIを実装した。
+
+- `validate_generated_csv`: 明示された動画/shapeだけを使用。10列header、欠損/整数型/Int64範囲、
+  0始まり連番、連続した動画block順、node→edge順、sentinel、負node ID/重複edgeを検証後、
+  既存Polars構造検証へ渡す。全t/ZYX bounds、重複node、同動画endpoint、t→t+1、入次数≤1/
+  出次数≤2を検証し、0 edge動画は許容。正しいCSVも不正CSVも変更しない。
+  読取前後statと二parserの行数を照合。これは出力内容検証で、完全なsource/input sealや
+  競合に対するOS隔離を証明するものではない。hash/alias bindingは生成監督側の残作業。
+- `validate_raw_statistics`: 現coreの126 counter keyをliteralで固定し、testで全key一致を確認。
+  全必須key/type/order/count、CSVのnodes/edges/forks、motion7 counterとfallback/skip/
+  replacement整合を検証。候補のmotion counterは全ゼロが必須。
+  符号付き`gap_density_step_delta_milli_sum`は負数も保持。optional gap keyの未出力は
+  nullと`not_emitted_by_core`理由を付加し、元raw mappingは変更しない。
+  呼出側は元mappingと正規化済みmappingの両方を保存し、CSV reportを実byteに結び付ける必要がある。
+
+検証中の失敗も記録: 初回CSV実装のimport順/E501、test追加位置で既存eval36 test末尾5行が
+移動したF821を修正。既存test末尾を元に戻した後、unit02 source9定義/test46定義のAST完全一致を
+再確認。存在しない`tests/test_validate.py`指定によるpytest exit4/no testsも、実在する
+`tests/test_validate_submission.py`をrgで確認して修正した。これらをPASSとして数えない。
+
+自己レビュー後、fresh PythonでE26 module import時にNumPy/Polars/pandas/Torch/score moduleや
+旧E25/ST-R3 runnerが入らないことも確認。synthetic fixturesだけを使用。
+最終検証: unit02の3 test modules + `test_validate_submission.py` + `test_io.py` +
+`test_output_bounds.py` + `test_output_bounds_regressions.py` + `test_e26_bounds_notebook.py`で
+**1406 passed in 2.38s**。新2filesのRuff、git diff --checkもPASS。
+source SHA `585300dfc10af234a33c084c4fa8b3d9a517f7a8dfac56e4de82a4eb69274c01`、
+test SHA `d0a8883e5793fbfb4c59a71b4606866fb8328342d80f7ff6fa9dc26f138bf272`。
+E26 v3のsource/helper/test/notebook/metadata/CSV/report/provenance/log/statsの11 SHAは全て既存pinと一致。
+official/はclean、postproc/validate/ioの既存科学処理は無変更。subagent/外部Qwen/GPU/GT採点/
+Kaggle API/再提出/commit/pushは実行していない。unit03全体が未完なので一括commitしない。
+
+次の実装順（科学条件の変更なし）:
+
+1. canonical run ID/exclusive JSON、完全なinput/source/dependency inventoryとalias/drift検証、
+   public/private preregistrationの厳密schemaを作る。両expected SHAを実行時に必須とする。
+2. generation-only child controlをallowlistで導出し、public4→baseline36→candidate36の直列監督、
+   strict CPU loader/seed/thread receipt、wall/RSS/失敗保持/成功時のみsealを接続する。
+3. unit04のopaque事前登録と別score process、公式singleton/stage/lineage集計、段階GT readと
+   全早期REJECTを含むcommon finalizerを実装する。GT/予測/source差し替えの合成試験を必須にする。
+4. 全体受入後に数値予算・入力manifest照合を固定し、fresh直列物理評価を行う。
+
+新gateとCSV検証だけで生成可能・採点済みとは扱わない。実データのlocal paired Δは依然未取得。
+本turnはunit02完成とunit03部品実装によるprogress、goalはactiveを維持する。
+
+### 2026-09-08 05:00 UTC — unit03の入力照合・JSON・実行条件部品を実装
+
+前回turnはunit02とCSV/telemetry部品を実装したprogress。開始時のsource/test SHAは
+04:35節と一致していた。今回も親単独実装・自己レビューであり、subagent/Qwenは使用していない。
+generation/scoring contract、runner interface、E23 parity runbookと既存core/strict-loader/IOを再読した。
+
+実装したもの（`src/biohub/e26_screen.py`と同test内）:
+
+- `inventory_path`/`verify_inventory`: 完全なfile/tree inventory。相対名、選択名、解決先、
+  明示された全ancestor/internal alias、file stat、byte SHA、空directoryと全childrenを記録。
+  保持FDでpre/post statを照合し、欠損/循環/未登録alias/特殊file/途中変更を拒否する。
+  旧SHA256SUM形式のtree hashも保持。入れ子schema、全record・親子関係・counts/digestを
+  filesystem再読の前に検証。親子照合は全recordを一度分類する構造にし、二重全件走査を避けた。
+  GT graphや画像chunkの意味解釈は行わない。全実行source/dependency closureの登録はまだ接続していない。
+- `read_json_bound`/`write_json_exclusive`: SHA先決め、unknown byteのparse拒否、duplicate key/
+  NaN/inf/overflow/不正Unicodeを拒否。exclusive作成、0600、flush/fsync、strict reparse。
+  失敗したpartial fileは保持。入力別名は明示登録可能だが、出力pathの別名は許容しない。
+- run IDと登録namespace: 安全な1–96文字ID、生成run既存時・既存登録時・出力ancestor alias時は拒否。
+  登録directoryだけを別namespaceへ作成する部品。canonicalの実run/登録directoryは作成していない。
+  完成markerやGT登録を発行する入口は未実装で、directory作成だけを事前登録完了とは扱わない。
+- `validate_budget`/`check_runtime_budget`: 全arm・全generation・score process/stageのwall秒と
+  self-process RAM byte上限を明示必須にした。数値defaultなし。
+  方針は`getrusage(RUSAGE_SELF).ru_maxrss`のdataset境界/receipt検査。
+  Darwin bytes/Linux KiB→bytesを区別し、process-tree peakやOS hard memory capとは主張しない。
+  上限超過をE26Errorにする部品を実装したが、実際のdataset hook/timeout supervisorへの接続は残る。
+  test内の小さい数値は合成fixture専用で、物理実行予算ではない。
+- `generation_environment`/`initialize_inference_runtime`: auth/proxy/BIOHUB overrideを継承しない
+  allowlist、locale/TZ、Python/NumPy/Torch seed0、CPU、Torch intra/inter-op1をfresh childで確認。
+  数値libraryが先に読み込まれている場合も拒否。checkpointをロードした検証ではない。
+
+失敗・原因・対策: 初回fresh child試験はenvironment不一致で1 FAIL（他809 PASS）。
+実際の差分は追加key `__CF_USER_TEXT_ENCODING`だけで、既知allowlist内の値変更は無かった。
+このDarwin環境では起動時に当該user encodingが追加されることを確認し、親環境の任意値はコピーせず
+`0x{uid:X}:0x0:0x0`を明示固定した。unknown envの許容へ緩和せず、実childで全key/value一致、
+Python/NumPyのseed0の初回値、Torch seed/thread/CPUを再検証してPASS。
+追加時のRuff E501は折返しで解消。自己レビューで`//` root、出力parentのalias cycle、
+未作成generation namespaceへのbroken alias、同一aliasの矛盾recordを追加拒否した。
+旧ST-R3 module除外testはunderscore付きmodule名も検出するよう1定義だけ強化した。
+
+検証: 前回と同じ関連8 modulesで **1523 passed in 3.06s**、新2fileのRuffとgit diff --check PASS。
+既存source12定義はAST不変。既存test74定義中、上記import除外test以外はAST不変、35定義を追加。
+自己レビュー後source SHA `8f8ea722a7f46f57a3081a2c3b91f64b14727dbb6632118255fe891d0f376c44`、
+test SHA `ccb0ee1fd82ea21f5f2ed0a4dc983dd9e6571e09a7aae6f22a49ecb3c6ba95a6`。
+official固定HEADでclean、既存postproc/IO/validator/official scorerを変更していない。
+
+限定した現物診断: 実装の合成試験後、既存public4 rawの4 GEFF treeを新inventoryで**不透明なbyte列として**
+照合・再照合した。全132 files/1,583,021 bytes、各33 files、各336153/279449/87688/879731 bytesで、
+4つの旧tree SHAすべてがE23 parity runbookのpinと一致。raw graph/GTのparse、image chunk復号、
+推論・採点は行っていない。これは入力byte照合で、新public4 parity生成やlocal accuracyではない。
+
+入力provenanceの残項目: raw4の`DOWNLOAD_MANIFEST.json`と画像の`data/manifest.csv`は存在する。
+指定raw36取得folderには独立したmanifest名のfileを確認できず、取得logとraw treeがある。
+これはそのfolderの探索結果だけで、全repoの証拠不存在を証明しない。旧run配下の広すぎるfile名検索は
+出力が切れたため完全な探索証拠に数えない。次は証拠fileのbasename/取得logに絞り、raw36の既存取得記録を
+特定する。現在のhashを過去の取得時証拠と偽って置き換えない。
+
+次の接続単位: 固定source/scientific/dependency closureと全選択generation inputの厳密schema →
+GT private/public registration pair（public marker最後・両SHA固定） → generation-only child control →
+strict loader1回・順序hook・stream log・timeoutの直列監督 → 全成功時のみgeneration seal → unit04採点。
+今回の部品受入はunit03全体の完成ではない。CLI、全closure、登録pair、直列監督、seal、公式採点はまだ未完。
+物理予算固定・fresh比較・精度改善・再提出・commit/pushなし。学習なし（E26は後処理仮説、Loss対象外）。
+goalはactive、科学条件とE23 incumbent0.924は維持。金メダル到達は未証明。
+
 ## 前提（Day 1 に埋める）
 
 | 項目 | 値 | 確認日 |
@@ -19,11 +3614,11 @@ E 番号は採番前に `grep -n "### E" analysis/experiment_ledger.md` で衝�
 | LB 再実行のばらつき | base1同一コード2回がともに0.908。表示3桁では差なしのため、観測上限 **<0.001**（E2/E4） | 2026-08-24 |
 | 誤差の集中度 | 未測定 | — |
 | オラクル上界 | 未測定（GT 自身 / 検出のみ完璧） | — |
-| カーネル実行時間の上限 | **未確認**（Rules / Code Requirements ページ。ローカルで閲覧不可のため公開 NB の記述か user 経由で確認） | — |
+| カーネル実行時間の上限 | **CPU/GPU Notebookとも12時間以下**。internet disabled、出力名 `submission.csv`。公式OverviewのCode Requirementsをブラウザで確認（下記9月5日外部状態記録）。 | 2026-09-05 |
 | 1 動画あたり実行時間 | smoke（NN スターター、CPU ローカル）: 約 6.5 秒/動画 | 2026-08-23 |
 | ベースライン | smoke NN スターター: 公開 test 4 本でローカル公式 score **0.0446**（adj_edge_J 0.0446、div_J 0、node_recall 0.065） | 2026-08-23 |
 | 参考（外部・未再現） | LB 首位 0.962、公開 NB 自称 clean 0.908 / UNet 0.857 | 2026-08-23 |
-| 目標 | 2026-08-30時点のgold圏proxy=15位0.945。変動余裕込みで **public LB 0.947以上**、最終的にはprivate gold圏 | 2026-08-30 |
+| 目標 | 最終外部確認2026-09-07: 3,195 teams、既確認式によるgold圏proxy=上位16、16番目の表示score **0.951**。既に決定済みの作業目標 **public LB 0.953以上**、最終目標はprivate gold圏。式の新規再検証・今回の順位照会・科学gate変更ではない。 | 2026-09-07 |
 
 > **LB差<0.005は判定不能。paired動画比較とhidden LBの両方でバーを超えた場合だけ採用する。**
 
@@ -711,6 +4306,2149 @@ exposure/selection 汚染のため hard-example 機序の直接裏付け、因�
    この audit は回収済み local artifact の read-only 検証と文書訂正のみで、
    Kaggle submission も GPU 実行も行っていない。
 
+### E25 事前登録: twin-onlyの初期screening（2026-09-05・実装前）
+
+1. **固定仮説**: E23 orphan safe-division後、近接するmid-track親Pとtrack-start親Qに
+   娘が一本ずつ分かれたstrict twinに限り`Q→B`を`P→B`へ付け替えると、
+   正しい関連付けを保ちながらdivision TPを回収できる。候補は既存
+   `e23_twin_only_v1`で、半径/cap/sort/DeepCenter/モデルは変更しない。
+2. **計測器変更の理由と権限**: ユーザーがKaggle向け軽量ループへの切替を明示承認。
+   旧ST-R3完全隔離/対象環境校正がlocal初期反証を阻んでいたため、
+   [Kaggleループv2](kaggle_loop_protocol_v2.md)を別schemaのSCREEN専用経路として追加する。
+   独立設計レビューはSHIP。旧ST-R3/HOLDは残し、SCREENから提出可へ昇格しない。
+3. **対照と入力**: exact E23、同じeval36 raw/image/DeepCenter、literal eval12+eval24。
+   現行public-four E23の参照CSV parityを別成果物で先に確認する。public-fourは採否に使わない。
+   生成は全36 dry-run→baseline→candidateを直列、全出力固定後にのみGT採点。
+4. **独立性**: eval12/24は既露出のretrospective screeningでありholdoutでない。
+   eval36は保存行のroll-up。postprocess-onlyでtraining gateはN/A。
+5. **数値gate**: twin既存値を不変で使う。eval12 mean≥+0.005、eval24 mean≥+0.003、
+   両段階median≥0/worst≥−0.002/aggregate adj-edge≥−0.002/両lineage score非悪化。
+   roll-upはdivision TP純増≥4、combined/division J非悪化、その他既存条件全て。
+   一つでも落ちれば次stageは開かず、候補の事後調整をしない。
+6. **実行上の境界**: content/source/config hash、fresh出力、off/dry-run同値、
+   graph/telemetry保存則、公式直呼び、生成と採点のprocess分離は必須。
+   敵対的same-UID/OS非可視/対象cgroup校正/ABBA保証はこのSCREENでは主張しない。
+   local wall/process RSSは診断として保存する。
+7. **次行動**: SCREEN_REJECTならv1終了、計測器ERRORなら候補不変の修正ループ、
+   SCREEN_PASS_REQUIRES_CONFIRMATIONなら候補bytes固定で対象環境の時間/RAM/再現性を
+   別途確認するまで提出不可。現時点でGPU実行/LB照会は予定しない。
+8. **状態**: 原因分析・実装前設計完了。実装差分・source/input/run hashesは実行前manifestへ
+   固定する。新しい公式score、twin採否、実行可能性PASSはまだない。
+9. **実装・実データ開始追記（2026-09-05 07:20 UTC時点）**:
+   新しいSCREEN runner/CLI/testsだけを追加し、候補や旧ST-R3は変更しなかった。
+   独立レビューSHIP、親と別reviewerでfocused **24 tests**、Ruff、構文検査、diff-check成功。
+   score前source/dependency再照合、planner失敗/counter保存則の検査、生成/採点process分離、
+   本番でのtest-hook拒否、public4失敗時に36生成を開始しないことを確認した。
+
+   - source SHA-256: `d79b3157d5d79af202c0c0d2455045d0ff0187470a5723cdeeb16565c0de7bff`
+   - CLI SHA-256: `00d4528999a8f395ae66246c3a38135f15bc11dbd4d40d051f1294d997ced56d`
+   - tests SHA-256: `8bb3c4d284ac95936dfc8528d4815d288bbf095037c8f057f55ebd75fd1185a0`
+   - run: `outputs/local/kaggle_screen/e25_twin_screen_v2_20260905071008Z/`
+   - 開始: **07:10:08 UTC**。既存dirty checkoutを隠さずsource内容を固定。
+   - `CONTROL.json` SHA-256: `df248f3f4c6522dd989558d8b0ec66b35a9ae8003edac79ecc12e663a03ee224`
+     （code/config/dependency/live-inputの全inventoryを内包）
+   - fresh public4 E23 parity: **240,126 rowsが参照CSVとbyte/hash完全一致**。
+     CSV SHA-256: `33c179b0449b9cdd186f06a653cddc8cf12359f008982f6713cdf30784a52e6a`
+   - public4 core wall **335.593199958 s**、process peak RSS **4,395,270,144 B**。
+     CPU/strict DeepCenter epoch2、fallback 0。local診断値で、target runtime/RAMの保証ではない。
+     過去parity wall約135 sより遅い。今回の数値計算thread=1固定が主因の候補だが、
+     code差もあり因果分離は未実施。実行中にthreadや候補を変更しない。
+   - 現在はeval36 **dry-run生成中**。baseline/candidate完了、generation seal、公式score、
+     twin採否はまだ未取得。GTの意味解析は未実施、Kaggle提出/新規学習なし。
+   - 既存の2時間メンテナンスへ、このrunの完了確認→別process採点→原因記録を追加。
+     生成中/採点前はhash対象のcode/protocol/依存を編集せず、commit/pushしない。
+     追加の20分heartbeatは同一タスク1件制限で作成されず、**実際の間隔は2時間**のまま。
+
+   並列R0監査ではE17のexact feature builder/trainer/original consumer sourceは未発見。
+   指定support script SHA `c44e771ba5980b820f93091e03a303c25dfe8f3232e501f54dc9565731c234b9`
+   も未取得で、別SHAのofficial scriptを代用しない。**R0 HOLD**はtwin評価を妨げないが、
+   次のranker利用の許可にはならない。隔離モデルのロードやGT解析は行っていない。
+
+10. **生成進捗（2026-09-05 08:03 UTC確認）**:
+    同じrunの全36 dry-runが`SCREEN_ARM_COMPLETE_NOT_SEALED`で完了。
+    `generation/dry_run/ARM_RESULT.json`はcore wall **2,707.616094917 s**
+    （約45.13分）、process peak RSS **5,366,054,912 B**を記録した。
+    CSVは**1,491,393 rows**、78,391,867 B、SHA-256
+    `72d2a94c6ee4a9fce37a9f330c7c9d0a7097976d013a511ea6fe4b2b6e383273`。
+    これは無編集dry-runの生成物で、候補の精度・off/dry全体同値性・target実行可能性の
+    PASSではない。親PID `37820`がfresh baseline子PID `59876`へ直列移行して
+    稼働中であることをcommand/run IDと照合した。baseline/candidateの全完了、
+    generation seal、公式scoreは未取得。途中planから採否を推測せず、条件を固定する。
+
+## 2026-09-05 外部状態の再確認（E25とは別のread-only調査）
+
+2026-09-05 07:31–07:35 UTC頃、親タスクがKaggle CLIのleaderboard上位20件と
+competition listを各一度読み取り、公式ページをブラウザで確認した。APIは成功し429なし。
+新規download、kernel push/run、submission、学習は行っていない。E25の生成は同じ
+run IDのdry-runを継続し、候補・入力・thread設定・数値gateを変更していない。
+
+- Competition list: **3,115 teams / userRank 822 / userHasEntered true**、
+  deadline `2026-09-29T23:59:00`。この時点の新たな自分のsubmission scoreは未照会で、
+  最終確認済みのE23 public LB **0.924**を上方更新する根拠はない。
+- 公開leaderboardの先頭scoreは0.970、返却順16番目は0.948、18–20番目は0.947。
+  [公式メダル基準](https://www.kaggle.com/progression/competitions)は1000+ teamsで
+  `10 + floor(0.002 × teams)`なので、現在のgold圏の作業上の目安は上位16となる。
+  [公開順位表](https://www.kaggle.com/competitions/biohub-cell-tracking-during-development/leaderboard)
+  は最終private判定の代替ではなく、表示丸め・同点・参加数変化も残る。
+- 親の設計判断: 公開スコアの作業目標を**0.950**へ更新。最終確認済みE23との差
+  **+0.026**は未達の距離であり、twin/rankerの期待改善量や成功予測ではない。
+  E25の事前登録gateは一切変更しない。生成中のhash固定protocol文書には反映せず、
+  この台帳を最新外部状態とし、protocolの状態整理は採点終了後に行う。
+- [公式Code Requirements](https://www.kaggle.com/competitions/biohub-cell-tracking-during-development/overview#code-requirements):
+  CPU/GPUとも**12時間以下**、internet disabled、`submission.csv`。
+  提出前確認では従来の20%時間余裕を維持すると**9.6時間以下**が作業上の上限になる。
+  これは公式12時間からの保守的な設計値であり、現在pipelineが満たすという測定結果ではない。
+- [公式Rules](https://www.kaggle.com/competitions/biohub-cell-tracking-during-development/rules):
+  points/medalsあり、1日5提出、最終選択2件。外部データ/事前学習モデルは合理的に
+  全参加者へアクセス可能である必要があり、ライセンス・再現可能なcodeの確認を継続する。
+  規約同意、チーム変更、外部共有などの操作は行っていない。
+- 07:39 UTC頃の[公式repository](https://github.com/royerlab/kaggle-cell-tracking-competition)
+  `main`参照は`075fc5f5a52d11077f9dc2b074644618f26939e2`で、read-onlyなlocal
+  `official/` HEADと一致した。remote参照を読んだだけでfetch/checkout/更新はしていない。
+  また07:27:53 UTCのgoal状態は`active`と確認できた。以前のpaused状態を現在へ持ち越さず、
+  goalの達成・再開をこちらが操作したとは主張しない。
+
+### E17 R0の公開source探索（同日・E25とは独立）
+
+- 既存公開metadataからsupport packのslug
+  `pilkwang/biohub-tracking-support-pack-50ep-v1`、dataset ID `10999845`、
+  source version ID `17804310`の対応を確認した。read-only APIを各一回呼び、
+  metadataでlicense `CC0-1.0`、GetDatasetでcurrent version number `10`と
+  version `1–10`を確認したが、各versionにsource version IDの対応欄はなかった。
+  **17804310がv10であるとは推定しない**。packのpayload取得は行わず、
+  指定13 source filesの実体・packaging・exact version対応は未解決。
+- 公開コードの限定検索で見つけた
+  `pilkwang/biohub-cell-tracking-blend-preprocessings`を、SOL subagentが
+  **2026-09-05 07:48:28 UTC**に一度だけ取得し、実行せず静的に読んだ。
+  Notebookは121,142 B、SHA-256
+  `fd4d166ef72afc8db2e191df6e7dad661b18151f6faf9fa303e97531b6de892c`。
+  取得記録は`outputs/local/e17_source_diagnosis/blend-preprocessings-0t3Tpl/acquisition_receipt.json`。
+  取得metadataにはlicense/revision/version欄がなく、このNotebookの該当事項は未確認。
+- Notebookには別系統のD4 node-transformer consumerがあるが、E17 ranker名、
+  既知22特徴のbuilder、trainer、ranker固有のgroup key/label/consumerは見つからなかった。
+  support packから展開した外部scriptを文字列patchする構造で、元scriptは埋め込まれていない。
+  **E17の特徴単位、source/target grouping、pre/post-ILP、activation/calibrationを
+  この別consumerから流用して確定しない**。R0 HOLDを維持する。
+- 今回の限定source探索は全呼び出し成功・429なし。Notebook実行/import、モデルロード、
+  GT採点、Kaggle kernel実行/提出は行っていない。次候補を利用可能にした成果ではなく、
+  調べた範囲と未解決事項を保存したもの。E25のhash固定source/入力は変更していない。
+- 07:51:58 UTC頃、E25の同じgeneration親PID `37820`とdry-run子PID `38762`を
+  run ID/commandと照合して生存確認した。子は約36分経過・CPU約100%で稼働中。
+  新しいarm完了/生成seal/公式scoreはまだないため、再起動・重複実行はしない。
+  定期引き継ぎの古い「goalはpaused」前提だけを現在値確認へ修正し、
+  **2時間間隔と通知設定は維持**した。
+- 独立SOL reviewerが取得receipt・保存物のSHAと本追記を照合して**SHIP**。
+  version/license混同や別consumerからのsemantics流用なしと確認した。
+  `git diff --check`成功。E25生成中のためcommit/pushは行っていない。
+
+### 次ループの共通前提: E23 source回収と提出全体の時間（08:08 UTC以降）
+
+**新しい精度結果ではない。** E25の候補・生成順・gateを変えず、並列のSOL監査から
+次に必要な証拠を整理した。既存E23のLB 0.924という提出成功を撤回するものでもない。
+
+- 保存されたdetector metadataは最終座標のhash/countとprimary/blendedの閾値後
+  candidate数だけで、per-seed pre-threshold map・score・実座標は保存されていない。
+  既存GEFFやcountから検出consensusの候補を復元できない。二つの重みのSHAが違うことは
+  誤差の独立性・相補性の証明ではない。現存notebookのpatch記述には両mapを同じwindowで
+  作る位置があるが、実行済みpatch全体とのbyte同値は別途確認が必要。
+- 親がsupport pack **v10**のファイル一覧を一回照会したところ、返却ページに
+  `repo/`以下の13 Python sourceが個別ファイルとして存在した。ページ全体の完全性や
+  source version ID `17804310`とv10の対応は、これだけでは証明されない。
+  続いて`repo/scripts/predict_unet_transformer.py`だけを一回取得し、
+  **26,008 B / SHA-256 `c44e771ba5980b820f93091e03a303c25dfe8f3232e501f54dc9565731c234b9`**
+  を実測した。E23 runtime receiptのpatch前source pinと完全一致する。
+  保存先は`outputs/local/e17_source_diagnosis/support-v10-21AP4F/`、取得記録
+  `STATIC_RECEIPT.json`のSHAは`2e0b4810d7068f8dfdea4d638ed3acfc47bb0e65df2389ca171d781972a58277`。
+  CLIの平坦化された返却名をそのまま保持した。両request成功、429なし。
+  **静的診断専用**であり、残り12ファイル、全Python manifest、version join、
+  pinしたversionのlicense照合、rankerの特徴/trainer/consumerは未確認。
+  source取得だけでR0 READYにせず、実行/import/モデルロードもしていない。
+- 保存E23ログ`outputs/kaggle/e23_reference/biohub-pub923-repro.log`では、
+  T4×2のshard開始275.076 s→4 GEFF merge846.166 sが**9.52分**、
+  `Found 4 prediction graphs`1089.477 s→CSV出力1378.590 sが**約4.82分**。
+  log originからCSV完成は約22.98分、最初の実質stdoutからなら約22.81分。
+  **ログ上の区間差**であり、GPU同期付きのstage timerやNotebook終了wallではない。
+  846→1089 s等の無出力区間は未分解で、DeepCenter loadそのものとは断定しない
+  （`Trying`→`Loaded`の表示区間は約0.316 s）。残余の固定費/比例費も未確定。
+- 4本が同質で線形、同じ2GPU割当と仮定した200本シナリオでは、上の明示二区間だけで
+  **約7.93+4.02=11.95時間**となる。hiddenの構成・規模・shard偏りも不明なので
+  正式な12時間超過判定には使わないが、9.6時間の余裕を既存ログから保証できない。
+  local E25のraw以降のwall/RSSだけを、画像推論を含む全提出jobの証拠にしない。
+- **親の設計判断（SCREEN通過時のみ）**: 最終提出packageを先に固定し、依存準備・
+  artifact展開・モデル読込・detector/association/ILP・shard merge・DeepCenter/後処理・
+  CSV検証・不可避な後続cellを含むNotebook終了まで、対象環境で一続きに計測する。
+  不要なvalidator除去等が必要なら計測後に変更せず、別の同値性レビューを経て先に固定する。
+  stage/video/shard時間、遅いshard、whole-job CPU RAM（quota対象cache/全子process込み）、
+  各GPUメモリ、cold-start、入力規模と偏りを保存する。固定36はhidden代表性を保証しない。
+  事前固定の保守的外挿≤**9.6時間**、実測target RAM limitの**80%以下**、
+  全stem/config/CSV/graph整合、SCREEN出力とのparityとfresh再実行一致を確認する。
+  未計測・不一致・timeout/OOM・条件未達なら候補を救済変更せず提出不可。
+- この新しい提出前確認の設計は独立SOL reviewer **SHIP**。実装や実測はまだなく、
+  状態は**提出前確認未了**。将来のラベルは`TARGET_SUBMISSION_PREFLIGHT_PASS/HOLD`等の
+  別schemaに限定し、旧ST-R3のPASS、敵対的隔離、hidden実行の数学的保証を名乗らない。
+  current notebookのattribution SHAは元sourceの来歴欄であり、現ipynb全体のSHAとの差だけで
+  実行codeの不一致/改変とは判定しない。immutable kernel版・実行source全体のbindは別の確認項目。
+
+**08:13:45 UTC追記 — support Python全13本のbyte identityを回復。**
+
+- 同じv10から残り12ファイルを各一回・直列に取得し、前段で検証済みのpredictor一個を
+  byte保持copyした。新しい静的collectionは
+  `outputs/local/e17_source_diagnosis/support-python-v10-hcCz5l/`。
+  `repo/`は**13 regular Python files / 合計148,660 B**、各サイズ/SHAと名前集合が
+  E23 runtime receiptに完全一致した。全体manifestのSHAも
+  **`978b626d1fd1e7397435a437dfe68691defe1572fc3c20e61012d7c9b52ed029`**と一致。
+  `STATIC_COLLECTION_RECEIPT.json` SHA:
+  `b1922d09fe156dc674bae7977c9d20395228bb7545c4acc3aa75b8936fa1ad2a`。
+  親の12 requestは全て成功、retry/429なし。別SOL担当が保存物のname/type/hash、
+  manifest、既存runtime receiptとの一致とcopy由来を独立検証し**SHIP**した。
+- これにより、**E23がdynamic patch前に検証した13 source bytesの手元不在**は解消した。
+  前段の「残り12未取得」は08:08時点の履歴となる。v10↔source ID `17804310`のjoin、
+  pinned-version license、実行済みdynamic patch後bytes、E17 rankerの特徴/学習/consumerは
+  引き続き未確認。静的collectionであり、formal R0 READYや実行許可のreceiptではない。
+- exact predictorの静的診断では、`_detect_cells_pooled`（254–293行）が
+  max-pool local maximumとsigmoid thresholdを同じmaskへ適用し、整数peak座標だけを返す。
+  feature抽出→隣接frameのassociation候補→graph/ILPへ渡す座標registryは395–401行で
+  確定する。したがって検出consensusを後日設計するなら、このregistry確定前に候補を
+  定義しないと既存associationへ入らない。これは**patch前sourceの確定事実**で、
+  実行済みE23 patch後codeとの同値確認を省略するものではない。
+  全13ファイルのranker固有名/feature-column等の静的検索でも、E17の22-feature
+  builder/trainer/original consumerは未発見。別consumerから意味を転用せず、R0 HOLDを維持する。
+- 親の次行動はE25の同じ直列生成→公式採点を優先したまま、結果後にこの回収sourceを
+  exact実行packageの確認へ使うこと。検出consensusの閾値・候補対応・DeepCenter適用・
+  node予算・数値gateは未固定で、今回のsource診断から実装/推論を開始しない。
+- 提出前確認設計・静的source回復の本追記も、別SOL reviewerが**SHIP**と判定。
+  `git diff --check`成功、E25 runner/CLI/testsの三SHAは開始時と一致した。
+  08:17 UTC頃に`.codex/bin/qwen-implement`、`.codex/runners/biohub_implementer.instructions.md`、
+  `AGENTS.md`の新しい差分を確認したが、本ループでは編集していないため保持する。
+  これらはE25の`SOURCE_FILES`外で、HEADも開始時の`e410a7a`から変更していない。
+  この観測をQwenサービスの稼働証明とはせず、本ループのSOL担当を継続する。
+  frozen run中のcommit/push、モデル切替、追加物理評価は行っていない。
+
+### 08:24–08:32 UTC: 自分の提出結果と実行版sourceの追加確認
+
+- 過去提出一覧を一回read-only照会し、全6件・次pageなしを確認した。
+  E23 `55760016`、提出日時`2026-08-25T03:46:50.900000`は**COMPLETE / public 0.924**。
+  現在返る自分の最高public値も0.924で、private値は空欄。新規提出はしていない。
+  取得記録`outputs/local/e23_source_diagnosis/kernel-v1-3QAgpq/SUBMISSIONS_READ_RECEIPT.json`
+  のSHAは`02cb571241a19c1c3fcbeef5028e1ab0930b2c84afc752d5ee226d1fd7439433`。
+  過去のdescriptionに残るE20のheld-out/予測値等は当時の文章で、現在の科学的結論にしない。
+- 一覧APIとinstalled SDKのsubmission型にはkernel-version fieldがないため、
+  この取得は`55760016 → 自分のkernel v1`の機械可読なjoinを新規証明しない。
+  その対応は既存台帳の一次運用記録として保持する。source-attributionの別作者v12を
+  自分のkernel versionに読み替えない。
+- SOL担当がinstalled CLIのversion付き入力を調べ、親が08:28:24 UTCに
+  `kernels pull taichiiiii/biohub-pub923-repro/1`をfresh directoryへ一度だけ実施したが
+  **exit 1、payloadなし**だった。collectorに残ったのはexit codeと429文字列非検出のみで、
+  詳細エラー/HTTP statusを保持できていない。**失敗原因未分類**とし、404・権限拒否・
+  v1不存在とは断定しない。これはsourceが存在しない証明ではない。
+  失敗記録`FETCH_FAILURE.json` SHA:
+  `5999c15ef1260f164c7b62deddfdf1011c3f8b33367dbf72cc286d79a61341f3`。
+- 再点検ではCLIが`kernel_slug="biohub-pub923-repro/1"`を送る一方、SDK型には別の
+  `version_label`欄もあることが判明した。両者のbackend互換性は未確認で、今回の失敗原因へ
+  結び付けない。latestへの切替、再試行、別API形の試行はしていない。
+  後日必要な取得はfresh出力とし、秘密を残さずstatus/失敗種別までreceiptへ記録する。
+- 約243秒の無出力区間の静的診断では、現notebookのpost-processing cell入口から
+  依存import・定義/setup・loader呼出・checkpoint候補探索を経て`Trying`が出る構造を確認。
+  現sourceでは候補探索に入力root下のrecursive globも含まれるが、どの処理が何秒使ったかは
+  既存ログから不明。実行版とのsource同値も未確認なので、探索が遅延原因とは断定しない。
+  提出前確認ではcell入口、loader直前、候補探索前後、checkpoint load前後を計測境界にして、
+  setup・探索・model materializationを分ける。今回はinstrumentationを実装していない。
+- 08:31 UTCには同じE25 baseline子PID `59876`が約30分経過・CPU約99%で生存していることを
+  command/run IDと照合した。source取得のHOLDと、正常稼働中のE25を混同しない。
+  E25の再起動・条件変更・追加GT解析は行っていない。
+- 本追記と二つのreceiptは独立SOL reviewer **SHIP**。08:38:24 UTCにも同じbaseline子を
+  約37分経過・CPU100%で生存確認した。採点済み成果物はまだなく、goalは継続中。
+  `git diff --check`成功。code/依存/入力の変更、commit/pushはしていない。
+
+### 08:49 UTC: baseline完了・candidate生成へ移行、今後の実装担当を更新
+
+- 同じrun `e25_twin_screen_v2_20260905071008Z` のbaselineが
+  **SCREEN_ARM_COMPLETE_NOT_SEALED**で終了した。保存receiptの実測wallは
+  **2,499.703610708秒（約41.66分）**、process peak RSSは**4,467,179,520 B**。
+  CSVは**1,491,393行 / 78,391,867 B**、SHAは
+  `72d2a94c6ee4a9fce37a9f330c7c9d0a7097976d013a511ea6fe4b2b6e383273`で、
+  完了済みdry-runのCSV SHAと一致した。この観測だけで全graph/telemetry検証や
+  generation sealの成功、精度改善、提出可能とは判定しない。
+- 08:48:55 UTC頃、親PID `37820`の同じrunにcandidate子PID `55080`が存在し、
+  command/control SHAを照合した。candidateは約5分46秒経過・CPU約99.9%で生存。
+  baseline子は終了しており、重い評価の直列性を維持している。
+  candidateの途中出力や未解禁GTは解析していない。08:49 UTCの再確認でも
+  runner/CLI/testsの三SHAは開始時と一致。code/config/入力の変更、commit/pushなし。
+- 別の設定タスク `01a0581d-815d-7de1-a3cc-a5fbb5dd9d17` から、ユーザー指定として
+  今後の実装を**ローカルFlash**へ統一する通知を受領した。最新launcherと指示書を読み、
+  model `qwen38-flash-next`、provider `qwen_flash_local`、effort `none`、
+  `.codex/bin/qwen-implement`経由・共有`/Users/taichi/.local/bin/qwen-flash-queue`
+  で物理実装一件、旧Qwen/cloud/SOL実装への自動fallbackなし、を今後の担当条件とする。
+  設計/採否は親、SOLによる原因分析と独立レビュー（棚卸しmedium、診断/review high）は不変。
+  この追記が過去の「SOLで実装/Qwenは使用しない」運用記述に対する最新overrideであり、
+  E25開始前に行ったSOL実装という履歴や稼働中の評価条件を遡って変更しない。
+- **作業場所の未整合**: 現launcherはclean linked worktreeを必須としてprimary/dirtyを
+  拒否する一方、ユーザーのcanonical checkout一箇所のみ・新しいworktree/コピー禁止は継続。
+  設定タスクも、モデル変更だけでこの禁止を撤回しないと返信し、そちらで確認すると通知した。
+  本タスクは新worktree作成・launcher制約迂回・新Flash実装worker・SOLへの代替を行わない。
+  将来実装が必要で未整合が残れば、その実装だけHOLDとし、原因と最小修正設計を保存する。
+  **現在のE25生成継続・条件成立後の一度の公式採点はこのHOLDの対象ではない**。
+  通知を外部操作の権限拡張やFlashサービス健全性の実測証拠として扱わない。
+- 既存2時間メンテナンス（automation `2`）の担当記述だけを同じFlash条件と作業場所HOLDへ
+  更新した。2時間間隔、通知設定、canonical限定、E25 run ID/固定条件、採点順序、
+  終了後にE25専用部分だけ外す運用は保持。別自動実行や作業フォルダーは作成していない。
+- 独立artifact監査でdry-run/baselineの各6 artifactの実サイズ/SHAがreceiptと全一致し、
+  両CSVの直接byte比較も一致した。実行数はheaderを除き1,491,393行で、receiptの
+  36動画のnode+edge合計とも一致。DeepCenter receiptもbyte-identicalで、
+  CPU/float32・epoch2・fallback候補0を確認した。これは完了済み二armだけの監査で、
+  candidateや未解禁GTには触れていない。担当変更と本節の判定境界も独立review **SHIP**。
+  08:51:55 UTCにcandidate子の同一command/run/controlと生存（約8分45秒・CPU99.4%）を
+  再確認した。generation seal/VERDICTはまだなく、引き続き同じ生成の正常終了を待つ。
+
+### 08:58 UTC: E23実行版sourceの取得失敗を分類
+
+- 前区切りはbaseline完了と独立byte監査という進捗。08:52 UTCの開始確認では、
+  同じE25 candidate子PID `55080`のcommand/run/control一致と生存を確認した。
+  生成完了前の採点、再起動、条件変更はしていない。
+- 既存CLI/SDKをSOL担当がread-only診断し、別担当が取得方法を独立review **SHIP**。
+  CLIの`slug/1`連結とは異なり、SDKの定義済み`version_label` fieldへ`"1"`を明示する
+  一度だけのsource読み取りを親が実施した。これはE23の提出package確認に向けた診断で、
+  E17の正式artifact取得・実行やE25の入力変更ではない。
+- 08:58:10.892–08:58:11.330 UTC、既存認証の`GetKernel`へ
+  `user_name=taichiiiii`、`kernel_slug=biohub-pub923-repro`、`version_label=1`を送信し、
+  **HTTPError / HTTP 404 / service code不明**を取得した。source payloadなし、
+  429なし。45秒上限、verbose無効、追加retry/latest fallbackなしで終了。
+  元の08:28 CLI失敗とは別attemptとしてfresh directoryへ保存した。
+  `outputs/local/e23_source_diagnosis/kernel-v1-sdk-vm5pLf/FETCH_RECEIPT.json`
+  SHA: `53e1d65b6d5d22cc6ce0b8cf2a9bcad57fdcedffe16327686a718d5d89d5c093`。
+  例外本文・headers・token・URL query・ambient設定は記録していない。
+- **確定したのはこの明示requestに対する404だけ**。版の不存在、private権限、backendの
+  version解決等の原因は識別できず、実行済みsource bytesは未取得のまま。
+  既存のCLI失敗についても、今回の404を遡って原因として割り当てない。
+  SDK responseにrequested/resolved version echoはなく、仮に返却される
+  `current_version_number`が1でも、単独でhistorical版やsubmission/runとのjoinを
+  証明できないことも確認した。追加API探索はこの区切りでは止める。
+- 次行動は同じE25生成→seal→一度の公式採点を優先する。E23 packageの実行版との
+  同値性確認は提出前の未完了事項として残し、R0 READYや対象環境preflight PASSへ
+  読み替えない。新たなcode/test実装worker、学習、Kaggle実行、提出は起動していない。
+
+### 09:29–09:31 UTC: E25正式終了 — SCREEN_REJECT_EVAL12
+
+- candidateの全36生成が`SCREEN_ARM_COMPLETE_NOT_SEALED`で完了し、core wall
+  **2,735.042575709秒（45.58分）**、process peak RSS **5,399,298,048 B**。
+  CSVは**1,491,396行 / 78,392,078 B**、SHA
+  `a3288789db50c1ae096030bc6eb674e24d7c99c5a36f9e34055207081e2898e6`。
+  baselineは2,499.703610708秒 / 4,467,179,520 B。これはlocal processの記録で、
+  hidden約200動画の実行時間やwhole-job RAM、旧ST-R3のPASSを証明しない。
+- 生成親はexit 0。09:29:43 UTCまでに`SCREEN_GENERATION_SEALED.json`を取得し、
+  実ファイルSHA **`d52784ffa199fd137aecde1d81149e92f65d6affad28aa20ffca02498a7a36f6`**を確認。
+  public-four参照一致、off/dry CSV・共通telemetry一致、dry/candidate plan一致、
+  入力安定の全checkがtrue。開始時HEAD `e410a7aa0b7d394997d0b73421b61d1625b28076`、
+  dirty=trueを保持し、runner/CLI/testsの三SHAも開始時から不変だった。
+- 同runの生成/採点processが存在せず、score/VERDICTもないことを確認し、
+  09:30:38 UTC頃に上記の**実測seal SHAを渡す別processで一度だけ公式採点**を開始。
+  score PID `35156`、session `2923`はexit 0で終了し、**SCREEN_REJECT_EVAL12**を返した。
+  最初の失敗gateは`paired_mean_combined_score_delta`。eval24/36は採点していない。
+- 12動画paired Δの**mean `4.054474065928737e-07` < 必須`0.005`**、median `0`、
+  worst `-8.502998069315204e-06`。score変化は正3 / 負2 / 不変7動画。
+  mean以外のmedian/worst/aggregate adj/両系統の5 gateは全て通過した。
+  median=0や微小な正meanを広い改善と解釈しない。
+
+| eval12公式aggregate | baseline | candidate | 差分 |
+|---|---:|---:|---:|
+| adjusted-edge Jaccard | 0.9154842085737304 | 0.9154856861675568 | +0.0000014775938264044441 |
+| division Jaccard | 0.11764705882352941 | 0.11764705882352941 | 0 |
+| combined score | 0.9272489144560833 | 0.9272503920499097 | +0.0000014775938264044441 |
+| edge TP / FP / FN | 7253 / 370 / 338 | 7253 / 370 / 338 | 全て0 |
+| division TP / FP / FN | 4 / 16 / 14 | 4 / 16 / 14 | 全て0 |
+
+- `44b6`公式aggregate score Δは`+1.6593506790840706e-07`、
+  `6bba`は`+1.995317579495115e-06`。各動画のedge/分裂TP・FP・FNとnode recallは不変で、
+  微小score差は`total_node_ratio`を含むadjustment側にある。公式動画平均と
+  公式aggregateを混ぜない。全12のpred node合計は両側250,465でも、動画別の増減はある。
+- `scores/eval12/RESULT.json` SHA:
+  **`bb35b01fe342fe5ea3736d0c82c98ed43674f8a5fd65ca8e033ec207dbf041a1`**。
+  `VERDICT.json` SHA:
+  **`a8e6bd4e10f92e3e5de0e9237321f9123b1b927c263f593f4cfab6e6042848e6`**。
+  別SOL reviewerが12行の算術・全gate・first failure・RESULT identityを監査し**SHIP**。
+  これは計測器ERRORではなく、有効な初期評価による科学的棄却である。
+- 親の採否: **`e23_twin_only_v1`を退役**。同じ36でradius/cap/sort/閾値を調整せず、
+  eval24へ迂回せず、候補をKaggleへ提出しない。E23の自分のLB **0.924**を維持し、
+  このlocal 0.92725を自分のLBや未接触holdoutの精度へ読み替えない。
+  postprocess-onlyにつき新しい学習LossはN/A。goalの金メダル圏は未達で継続する。
+- 生成物/sourceの別監査も**SHIP**。candidateの6 artifactは実サイズ/SHA一致、
+  4 arm全てのARM_RESULT SHAがsealと一致、dry/candidate planとDeepCenter receiptは
+  byte-identicalだった。seal内のexact 22 source pathsも現在bytes/sizeと一致し、
+  `official/`は固定HEADかつclean。artifact integrityのSHIPを科学的採用に読み替えない。
+
+#### 原因診断: 適用は成立したが、公式の正解件数は増えなかった
+
+- 解禁済みeval12の全12動画で列挙は非zero。計**224,674候補**のうち224,665を
+  eligibility条件で除外し、**eligible 9件 / 5動画**、video capで2件除外、
+  **accepted/applied 7件**だった。dry/candidateの7 tuple identityは一致し、
+  planned remove/add=7/7、actual=7/7、mutations=7、validation_failed=0。
+- candidateの最終CSVではnew edge 7本が全て存続、old edge 7本とdonor node 7個は
+  全て不在。baseline最終CSVにold edge/donorが残っていたのは5件で、残り2件は
+  baseline側でも短いtrackの除去を受けていた。したがって「変更が発火しなかった」
+  「下流が7件のrewireを全て消した」という説明ではない。
+- raw_statsでは、candidateの孤立node除去がbaseline比**+7**、短いtrackの除去が
+  **node -7 / edge -5**。孤立donorを除く一方、つなぎ替えで短いtrackとして消える
+  node/edgeが減り、eval12最終出力は**node純増0 / edge純増5**となった。
+  geometry/pruneのedge除去数は不変。スコア差のある5動画の最終node差は
+  `267148e4:-1`、`2a2eff9f:+1`、`587a1e22:-1`、`5f15d135:+3`、`09961292:-2`。
+- 親の原因整理: 実際の介入件数が非常に少なく、今回の固定候補では狙った正しい辺・
+  分裂の純増を観測できなかった。**GT上の被覆率上限を測定したわけではない**。
+  RESULTにはmatched edge/分裂のidentityがなく、7件が全てGT上で誤り/無関係なのか、
+  同数のTP/FPの入替が起きたのかは区別できない。疎GTの未マッチを負例扱いせず、
+  この結果から全two-child headを否定しない。候補/範囲を緩める救済は行わない。
+- 原因記録は別SOL reviewerがraw_statsとRESULTを再集計して**SHIP**。
+  pruned isolated nodes 188→195、short-track除去nodes 10,350→10,343 / edges
+  7,668→7,663、最終nodes 250,465→250,465 / edges 240,852→240,857を再確認した。
+  生成・採点processは終了済みで、新規実験/提出、code変更、commit/pushは行っていない。
+
+### E25後の次ループ設計（親設計・独立レビューSHIP）
+
+1. **対照と終了候補を固定する。** E23を維持し、twin-only v1の再評価・半径/cap調整・
+   LB迂回提出はしない。今回の結果は既露出eval12のretrospective検証で、hiddenの
+   成功/失敗確率や全てのtwo-child headの上限を証明しない。
+2. **R0を既知の元実装一件へ限定する。**
+   `yusuketogashi/no-hack-biohub-cell-another-approch-3rd`の既知scored v21、
+   version `203031633` / run `340377068`について、まず手元の保存sourceを調べる。
+   同版へのprovenance bindがないローカルsourceは代用せず、なければ親が一度だけ
+   version-boundな読み取り取得を試す。error/429で止め、latestや類似版に切り替えない。
+   確認対象はoriginal 22-feature builder、trainer、label/group、original consumerの
+   意味であり、既に回復したsupport packを再収集する作業ではない。
+3. **元の意味が閉じなければrankerはHOLDのまま。** 版・license・入出力契約等の
+   既存gateを省略せず、特徴/parameterless layer/前後の正規化・出力domainを推測しない。
+   モデルをロードせず、無制限のsource探索や類似モデルへの自動置換をしない。
+4. **次の変更を選ぶための原因診断を設計する。** 対象は公開済みのexact E23 baseline
+   eval12のみ。保存済みbaseline CSVとそのGT/sourceを固定し、公式matcherと
+   `matched_edge_mask`/edge-valid処理をそのまま用いる一回の診断手順を、実行前に
+   独立レビューする。回収GT辺の集合と差集合からTP **7253** / FN **338**を再現し、
+   FNをendpoint対応状態で排他的に分類、合計338をassertする。候補の再採点や
+   eval24/36 GTの解禁、GTを見た閾値選択はしない。
+5. **診断名を過大解釈しない。** `endpoint-missing`は公式matcher上のcoverage不足で、
+   raw detector欠損のほか座標誤差・対応競合・後処理除去も含む。
+   `both-endpoints-matched`もgraph/後処理/edge-valid処理を含む未回収で、
+   association model単独の失敗とは限らない。この内訳を得てから、検出consensus等の
+   新しい単一候補を設計する。未固定のconsensusを先に実装したり、headを学習しない。
+6. **担当と実行条件。** R0資産確認と原因診断/レビューはSOL subagentへ分担し、
+   設計・採否・外部操作は親が持つ。今後の永続code/test実装はFlash指定を維持するが、
+   canonical-onlyとlauncherのlinked-worktree必須の未整合は新規実装HOLDのまま。
+   新worktreeやSOL fallbackは行わない。必要な実装はこの条件が整ってから
+   変更だけ実装→テスト→独立review→直列物理評価へ渡す。
+
+この次設計は独立SOL reviewer **SHIP**。新しい候補精度・Loss・対象時間の結果ではない。
+まず一件のsource適格性判断とE23残余の原因分類を進め、精度改善と文書更新を混同しない。
+
+R0の最初のローカル棚卸しでは、既知v21のexact notebook/sourceは未保存だった。
+`kernel-data-source-reference.recovered.json`（357 B、SHA
+`52384920f21d7e8e26c502611f7ecfa4903ff8f85358e5c04c6e0508af9660a7`）は
+run `340377068`とranker dataset/sourceを関連付ける派生記録だが、元の生responseではなく、
+kernel version `203031633`やsource bytesにはbindしない。quarantineはdataset添付だけで
+original builder/trainer/consumerを含まない。次は上記一件のversion-bound取得可否の確認で、
+現時点のR0 HOLDを解除する材料は増えていない。
+
+E25の判定・原因・次設計の記録完了に伴い、automation `2`のE25専用追跡を終了した。
+従来の2時間メンテナンス、通知設定、canonical限定、一般的な評価排他条件は維持。
+自動設定全体は削除せず、作業計画冒頭と担当記述だけを現在状態へ更新した。
+README/AGENTS/固定済みE25 protocolは本整理では変更していない。
+
+### 次ループ D0: exact E23 baselineのFN原因分類（実行前固定）
+
+2026-09-05、親タスクの設計。これは精度候補の追加評価ではなく、既に解禁された
+eval12の保存済みE23 baselineについての一回の原因診断である。候補・閾値・予測は変更しない。
+
+- 対象runは`e25_twin_screen_v2_20260905071008Z`、入力CSVは同runの
+  `scores/eval12/baseline.csv`だけ。SHAは
+  `5769483d3c65352fca1b9a4636613da0089e09757b1dce8346f5eb5cb50c6cab`。
+  CSVのdataset集合はsealのeval12と完全一致させ、sealのliteral順で処理する。
+  candidate CSV、eval24のGT、全36の予測生成は読み取り/実行対象にしない。
+- GTは`data/train`の該当12 GEFFとZarr scale metadataだけ。
+  seal内の`opaque_gt.records`をこの12 datasetに限定して現在bytes/sizeと照合する。
+  `read_scale`へ渡すmetadataの存在・明示scaleを確認し、defaultへのfallbackを許さない。
+  seal内のsource 22件、依存version、baseline CSV、既存RESULTの同一性も照合する。
+  seal SHAは`d52784ffa199fd137aecde1d81149e92f65d6affad28aa20ffca02498a7a36f6`、
+  RESULT SHAは`bb35b01fe342fe5ea3736d0c82c98ed43674f8a5fd65ca8e033ec207dbf041a1`。
+- CSV変換は`biohub.evaluate.read_submission`/`graph_from_rows`、GTとscaleは
+  `biohub.io.load_geff_graph`/`read_scale`をそのまま使用する。CSV node/edge行の
+  順番を保ち、CSVのnode_idと変換後の内部IDを混同しない。各動画一回だけ、
+  公式`evaluate(pred, gt, scale=scale, max_distance=7.0)`で対応付けする。
+- 公式`_evaluate_matched_graph`の返す辺を使用する。重複除去、連続時刻、merge、
+  outdegree cap、`pred_valid`を自前実装しない。`matched_edge_mask=True`の辺を
+  `MATCHED_NODE_ID`でGT source/target pairへ写し、回収GT辺集合を作る。
+  公式visualizerの`_classify_edges`と同じ集合差の方式である。
+- GT pairの一意性、写像先がGT辺に属すること、回収集合サイズと公式TPの一致をassert。
+  GT全辺との差集合をFNとし、その件数を公式FNとassertする。GT edge IDも保存し、
+  pairとIDの一対一性が崩れれば診断ERRORで停止し、別の意味へ読み替えない。
+- 予測nodeの有効な`MATCHED_NODE_ID`の集合をcoverageとし、FNを次の4群へ分類する。
+  **両端対応済み／sourceのみ未対応／targetのみ未対応／両端未対応**。
+  対応はnull/-1を除き、全GT node IDへの包含を確認する。4群を排他的にし、
+  動画別・系統別・全体の合計を保存する。各動画で公式7 countsを既存RESULTと一致させ、
+  全体のedge TP/FP/FN=**7253/370/338**、division TP/FP/FN=**4/16/14**をassertする。
+- 推論・モデルload・新学習・候補再採点・Kaggle照会は行わない。既存APIを組み合わせた
+  一時的なread-only解析命令を原因分析Agentが提示し、別Agentのレビュー後に直列実行する。
+  永続code/testの実装はこの診断の範囲外。結果はfreshなignored診断先に保存し、
+  E25の生成物・seal・RESULT・VERDICTを変更しない。実行後にも入力hashを再照合する。
+
+解釈を固定する: endpoint未対応は検出器の見逃しだけでなく、座標誤差・対応競合・
+後処理除去も含む。両端対応済みでも、関連付けモデル単独の失敗とは限らない。
+疎GTの未対応予測を負例にせず、この分解は未接触holdoutや改善可能幅の保証ではない。
+分類を見て次の単一仮説を設計するが、D0自体に精度採用/提出判定は設けない。
+
+実行前methodの独立レビュー: `screen_protocol_review`（SOL high）**SHIP**。
+公式visualizerと同じ集合差、ID/件数/scaleのassert、解釈と対象境界を確認済み。
+実際の解析命令は別途確認してから実行する。method SHIPは診断実行済みを意味しない。
+
+解析命令の独立レビューも**SHIP**。固定した命令は
+`outputs/local/e23_fn_diagnostic/20260905T_fn_partition_preflight/DIAGNOSTIC_COMMAND.txt`、
+SHA `bace565f619c8ce66c74f79732f645b4cd3f636272d8a748a946d062eb695257`。
+起動時のPython path/seed/CPU設定、GT edge IDの一意性、実行後のCONTROL照合を含む。
+別reviewerによるin-memory合成fixtureは公式edge TP/FP/FN=1/0/4、4分類は各1でPASS。
+親はこの版に限り原因分析Agentへ一回の実GT診断を許可した。結果は別途記録する。
+
+#### D0の実測結果と保存上の制限
+
+同日の一回実行はsession `79024`、最終chunk `019b02`、exit code **0**で終了した。
+既存RESULTの公式edge TP/FP/FN **7253/370/338**、division **4/16/14**、
+予測node **250465**を再現した。全動画の計数照合と実行後の入力照合を経て、
+命令は`DIAGNOSTIC_COMPLETE_NO_ADOPTION_CLAIM`を出力した。再実行していない。
+
+| FNの公式endpoint対応状態 | 44b6 | 6bba | 合計 |
+|---|---:|---:|---:|
+| 両端対応済み | 74 | 131 | **205** |
+| sourceのみ未対応 | 9 | 24 | 33 |
+| targetのみ未対応 | 12 | 26 | 38 |
+| 両端未対応 | 9 | 53 | 62 |
+| 合計 | 104 | 234 | **338** |
+
+両端対応済みが**60.65%**、片端以上未対応が**39.35%**だった。前者は44b6で
+71.15%、6bbaで55.98%。両端未対応の割合は44b6の8.65%に対し6bbaは22.65%で、
+系統間の違いもある。これはFNに限る分類で、FPの原因内訳を測ったものではない。
+
+**保存上の不備を明示する。** stdoutの一部がツールの表示上限で省略され、
+完全なJSONと全338 FNのID一覧を保存できなかった。集計・系統別・fixture・入力hash・
+終了状態は残存したprefix/suffixに実在するが、動画別詳細は部分的である。
+欠けたIDを補完せず、完全な結果artifactを独立再集計できたとは主張しない。
+これは候補精度のREJECTではなく、診断の結果保持の不備。D0の再matchingで埋めない。
+
+- 残存した正確なtool text: 同診断先の`STDOUT_RETURNED.txt`（40107 B）、
+  SHA `edad6906a0f7395a8a0b2109139788eb49631d0a9bbeb7f32cea0cd89d8a304a`。
+- 制限を含む派生要約: `DERIVED_SUMMARY.json`（2779 B）、
+  SHA `51051822131da318f4d7a0b40f394f092c607b329da83cb233d55c70bac64198`。
+- 対策: 今後の解析は表示前に完全な返却値を保持し、内部でJSONを保存・再parse・hash照合
+  してから短い集計だけを表示する。最大想定出力を含む保持経路もGT-freeで先に確認する。
+
+親の次設計判断は**関連付け・graph後処理の原因特定を先行**とする。205本を
+association model単独の失敗や改善可能幅と断定せず、133本をraw detector missとも呼ばない。
+次は原rawと最終CSVのID保存契約をsourceだけで確認し、両端対応済みFNが
+「raw時点で既に無い」「後処理で消えた」「最終graphにはあるが公式処理で対象外」
+のどこに属するか、最小の追加診断を設計する。モデル学習・候補実装・新規提出はまだ行わない。
+E23のLB **0.924**を維持し、D0の件数分類を精度向上とは数えない。
+
+D0の残存集計は別SOL reviewerが旧RESULT・残存stdout・派生要約と照合し、
+**集計範囲に限定してSHIP**。全4列の系統和、104+234=338、公式計数も一致した。
+完全な個票監査のSHIPではない。133はFN edge数で、未対応unique node数でもない。
+
+### 次ループ D1: solved rawから最終graphへの辺の来歴診断（親設計）
+
+**問い:** D0で多数だった両端対応済みFNは、入力のsolved rawに既に無かった辺か、
+それとも後処理によって最終出力から消えた辺か。モデル学習や半径の調整は先に行わない。
+これはD0の欠落ログを埋める再実行ではなく、新しくraw graphを照合する原因診断である。
+D0の結果や候補採否を再定義せず、既露出E23 baseline eval12だけを使う。
+
+source確認では、`_load_geff_as_dicts`がraw node_idを保持し、CSV writerも同じ
+node_idとedge endpointを出力する。CSVの`id`は行番号で、対応付けには使わない。
+既存nodeの再番号付けはなく、合成nodeは既存最大ID+1から割り当てる。座標は
+refinement/linefit/丸めで動くため、座標でrawへjoinしない。
+source監査はSOL subagent、親も関連関数を直接確認した。
+
+1. **入力を固定。** D0と同じseal/source/dependencies/GT12/scale/baseline CSV、
+   一回の公式matching、既存公式countsと205/33/38/62の再現を必須にする。
+   加えるのはsealの`raw36.records`をeval12に絞ったGEFFだけ。物理rootは
+   `outputs/kaggle/e22_bidir030_eval36_raw/tracking_repo/predictions/unknown/unet_transformer_val/split_0`。
+   全raw inventoryのrecords SHAは
+   `d49541301e7b76afe65a5ba61f5d8f8b01c14c39c256455b7cdd5af9a7564cbb`。
+   各選択rawの現在size/hashを実行前後で照合し、24動画のGT/予測・candidateは開かない。
+2. **IDを正確に結ぶ。** CSVのsubmitted node_idと、`bulk_add_nodes`が実際に返した
+   scorer内部pred IDとの双方向写像を保存し、公式GT matchの逆写像と結ぶ。
+   一対一性をassertし、rawに存在するIDはrawとfinalで時刻が一致することを確認する。
+   IDがrawに無いfinal nodeは別区分にし、元の検出nodeと同一扱いしない。
+3. **両端対応済みFNを排他的に4分類。** まず最終CSVに該当edge pairが存在するものを
+   `final_pair_present_not_recovered`へ分ける。残りは、片端以上がrawに無ければ
+   `nonraw_endpoint_pair_missing`、両端がrawにありraw edgeもあれば
+   `raw_pair_removed_from_final`、それ以外は`pair_absent_from_solved_raw_and_final`。
+   合計205、GT edge ID一意性、既存D0の全体・系統別集計をassertする。
+   第一区分の理由を自前metricで推測せず、公式edge tableと照合する。
+4. **得と損を片側だけ見ない。** 公式後処理済みedge tableのTP7253本とFP370本も、
+   CSV node_idへ戻してraw pair存在／両端rawだがpair不在／片端以上nonrawの3群に分ける。
+   raw側を別途採点はせず、TP/FPそれぞれ全数と排他和をassertする。
+   FN205だけを見て全raw辺を戻す、という変更は設計しない。
+5. **実行境界。** 既存APIを組み合わせた一時的なread-only解析で行い、raw model load、
+   学習、postproc再生成、既存source/公式metric変更、candidate再採点、提出はしない。
+   小さい合成fixtureと完全な結果保持のGT-free確認→命令の独立レビュー→親の一回実行指示
+   の順に進む。D0とは別の診断artifactに全結果を保存・再parse・hash確認してから要約する。
+   不一致/失敗時に自動で再matchingや別順序を選ばない。
+
+結果保持経路のGT-free試験: 1000行/224739 Bの合成JSONをtool返却経由で回収するv1は、
+大きな出力枠を要求しても省略が入りFAIL（`CAPTURE_CHECK.json`、SHA
+`af59a7489f8abef8173814666ee6cd78d055e5f8306e56ab660c1254e179c22f`）。
+方式を変更し、生成したruntime dataを新規ファイルへ排他的に直接保存するv2は**PASS**。
+再parse/件数/hash/sizeの検証後に短いstdoutだけを返し、親も独立に再確認した。
+`CAPTURE_CANARY_V2.json`は224739 B、1000行、期待/実測SHAとも
+`a6c72ebd835594d9c8700b659214d15f3a7abf8370d109494d2461162ac96829`。
+`CAPTURE_CHECK_V2.json` SHAは
+`caa838b1f6947f208dac8ee48509184a90fd6df72d7fcd6b4f97480c3c0afc85`。
+いずれもD0と同じ診断先に保存し、失敗v1も保持。D0/GT/model/APIの再実行はしていない。
+命令・ドキュメントの編集は従来どおりpatchで行い、実行時の生成データだけを直接保存する。
+
+D1 methodの独立レビューは**SHIP**。命令レビューでTP/FPの公式mask抽出、
+CSV内部ID逆写像、synthetic IDがraw最大ID超であることを重点確認してから実行する。
+ID逆写像は診断用helperでstock `graph_from_rows`と同じ変換を行い、
+`bulk_add_nodes`の実戻り値から双方向bijectionを得る。stock変換との全node/edge表・
+schema・順序・内部IDの完全一致と、mapのinternal ID集合の一致をassertし、referenceを
+破棄してhelper graphにだけ一回の公式matchingを行う。この補足も独立レビュー**SHIP**。
+`pred.node_ids()`の列挙順を推測したjoinや、libraryへのmonkeypatchは使用しない。
+
+2026-09-05 11:05 UTC、652行のD1命令に対する別SOL agentの最終レビューは**SHIP**。
+親も命令全体を読了し、SHA
+`416e031e32bf0e980c534c037a9c547882dfdf76b9336324bfca40cfe4dc4750`を再確認した。
+対象は`outputs/local/e23_fn_diagnostic/d1_raw_final_v1_20260905/DIAGNOSTIC_COMMAND.txt`。
+親はこの命令の実データ診断を**一回だけ**指示する。`D1_FIXTURE_ONLY`を明示解除し、
+失敗時の自動再実行はしない。結果とcapture検証を直接新規保存し、実行session/exitと
+命令・結果hashを別receiptへ結び付けてから、保存した全個票の独立監査を行う。
+
+担当SOL agentがmodel capacity errorで実行前に停止したため、親が結果未作成・
+該当プロセス未起動を確認し、同じレビュー済み命令を2026-09-05 11:09:48 UTCに開始した。
+唯一の実行sessionは`86879`（開始chunk `2204e1`）。命令の作成・原因分析・独立レビューの
+担当分担は維持し、親は物理実行の操作だけを引き継ぐ。別モデルによる実装代行ではない。
+
+**解釈の上限:** このrawはthreshold/ILP後の選択済みgraphで、棄却された全候補の確率は
+保存されていない。raw pair不在をモデル確率不足やILPの誤りと断定できず、raw pair存在も
+raw座標のままで公式TPだった証明ではない（D1は最終座標に対するmatchを使う）。
+特定の後処理stageが原因かもraw/final二地点だけでは特定しない。既存TPを壊すリスクを含め、
+この局在情報から次の単一変更を設計する。新しい精度や改善可能幅は本診断で主張しない。
+完全D0個票とのidentity再現は、D0側の保存欠落のため未証明であることも維持する。
+
+#### D1実行結果（2026-09-05 11:11 UTC、全個票の独立監査SHIP）
+
+唯一のsession `86879`はexit 0で終了（terminal chunk `815a42`）。各動画の公式
+TP/FP/FN等は既存baselineと一致し、総edge **7253/370/338**、division **4/16/14**、
+pred node **250465**、D0 coverage **205/33/38/62**を再現した。
+
+| 両端対応済みFNの来歴 | 本数 |
+|---|---:|
+| rawにはあったが最終CSVから消失 | **82** |
+| rawにも最終CSVにも無いpair（両端raw） | **121** |
+| 最終CSVに無く、片端以上がnonraw | **2** |
+| 最終CSVにpairがあるが公式未回収 | **0** |
+| 合計 | **205** |
+
+| 公式評価された最終辺の来歴 | TP | FP |
+|---|---:|---:|
+| rawに存在するpair | 7188 | 199 |
+| 両端rawだが、rawには無かったpair | **37** | **156** |
+| 片端以上nonraw | 28 | 15 |
+| 合計 | **7253** | **370** |
+
+これらは疎なGTに対する公式TP/FP部分集合で、全出力辺のprecisionや完全な正誤label
+ではない。82本を全て戻せば82 TP増える、とも言えない。原rawを採点しておらず、
+辺変更でnode matchingや下流処理も変わり得る。後処理に正解37本の追加効果もある。
+
+結果は`outputs/local/e23_fn_diagnostic/d1_raw_final_v1_20260905/`に新規保存。
+`RESULT.json`は**1507665 B**、SHA
+`82498d231340a1155cb8cabbd6f976497540bbfae75466505ba2ba6857040b71`。
+`CAPTURE_CHECK.json`は**430 B**、SHA
+`3a5cb06c70d341417a2e8dcd240317b15a5cdbe4124c5a9e99f673572d533f19`。
+全12動画、FN205/TP7253/FP370の個票を直接保持・再parse・hash/件数確認し、
+親も別toolでhash/size/JSON集計を再確認した。`EXECUTION_RECEIPT.json`が命令hashと
+実行handle/exit/成果物を束ねる。これはD0の個票保持失敗を解消した新診断の証拠であり、
+D0自体の完全logを回復したことにはしない。
+
+別SOL auditorが保存7,828個票のカテゴリをboolean述語から独立再計算し、全数一致。
+各動画/系統/全体集計、GT edge IDとsubmitted pairの一意性、TP/FPのedge ID/pair非交差、
+RESULT/CAPTUREのcanonical bytesとhash/size bindingを確認して**SHIP**。
+監査は保存証拠に対するもので、GT再matchingやraw採点を行っていない。RESULTには
+submitted↔internal ID写像の本体が無くhashのみのため、その内容の独立再hashは保証外。
+
+親の次案は**E26: motion relinkだけを無効化したA/B**。このstageは入力辺を
+全置換することがsourceで確認できたが、D1だけで82本全ての原因とは断定しない。
+stage除去の最終的な損益を一因子で測る。旧確率剪定・加速度剪定・ILP閾値の再掃引はしない。
+詳細は[親によるE26一因子設計](e26_motion_relink_off_design.md)。独立レビューは
+**科学設計SHIP／実行HOLD**。既存APIで変換は表現できるが、既存CLIは固定順・
+排他的保存・parity/seal/段階GT評価を満たさず、旧runner/gateはtwin専用である。
+最小E26 runner/CLI/testsをFlashで実装・レビューする必要がある。別schemaを用い、
+旧source変更やinline runnerでの指定モデル迂回はしない。Flashのworkspace制約が
+未解消のため、候補生成/採点/提出は未実行。親はこの矛盾についてユーザーの選択を求める。
+
+原因分析担当SOLもD1結果を独立に読み、raw pair維持がTPの7188/7253（99.10%）、
+削除FN82の内訳が44b6で20／6bbaで62であることを確認した。誤差は特に
+`6bba_09961292`と`6bba_12665c0e`へ偏るため、平均だけで採用せず動画/系統gateを維持する。
+
+2026-09-05 11:27 UTCの継続確認: Flash backend/bridgeはreadyだが、canonical一箇所と
+launcherのclean linked-worktree要求は未整合のまま。ユーザーからの作業先選択は未受領。
+新worker・コピー・候補生成は開始していない。既存の合成テスト6件をSOLが調査・実行し、
+親も本文を確認して6件を再実行、**6 passed / exit 0**（session `83679`終了、chunk `db395b`）。
+詳細はE26設計末尾。設定差分一項とmotion関数非呼出しの直接test不足を実装受入へ追加した。
+この確認は実装開始のHOLD解除や精度改善ではなく、実装前の部分的な前提検証である。
+
+2026-09-05 11:29 UTC、同じ作業先制約が連続3 goal turnで未解消。launcher/共有運用の
+hash、canonicalのみのworktree登録、E26 runner未実装を再確認し、全subagentも完了済み。
+直前のturnは合成テスト検証と不足coverage特定の進捗、本turnは不変のblocker確認のみ。
+追加の安全な診断・既存テスト確認は尽くしたため、精度改善goalを**blocked（ユーザー選択待ち）**
+へ変更した。目標の縮小・達成宣言ではない。金メダル圏は未達で、確認済みE23 LB0.924を維持。
+再開に必要なのはcanonical-onlyとFlash linked-worktree要求の整合についての明示選択。
+選択前のコピー追加・拒否解除・別モデル実装はしない。2時間ごとの既存メンテナンス設定は
+変更していない。再開後は凍結E26の最小実装→独立レビュー→直列評価へ戻る。
+
+2026-09-05、ユーザー「作成していいです」により、canonical配下の一時作業コピー
+一つが承認された。`work/e26-flash`を既存HEAD
+`e410a7aa0b7d394997d0b73421b61d1625b28076`からclean linked worktreeとして作成し、
+専用branchは`feat/e26-motion-relink-off`。canonicalの未commit変更と既存branchは保持。
+launcher変更・別モデルfallback・データ複製は無し。実装分割の最初は、exact E23対照と
+motion-off候補の一項差分・実関数の非呼出し/正対照を確認する新規テスト一つに限定する。
+仕様は`outputs/local/e26_implementation/unit01_contract_TASK.md`へ記録した。
+workspace障害は解消したが、goalのシステム表示は直前確認でblockedのままであり、
+親が再開状態を操作したとは主張しない。runner未完成・候補未採点・金メダル未達は変わらない。
+
+unit01初回依頼は11:43 UTCに共有queueへ入ったが、独立レビューで合成fixtureの
+前提誤りを検出。exact E23の`refine_all_centroids`は`dataset=None`でraiseするため、
+画像依存refinementだけをstubして実motion分岐を検証する仕様へ改定した。
+旧依頼はmodel開始前のwaitingだけを確認して自タスクqueue PID 21707へTERMし、
+session 53554のexit 143を確認。ログは67 bytesで元taskとともに保存、worktreeはclean。
+修正版task SHAは`db5b8d474222cc7950be6e77a056a63a083a4d0446d3a9c1e0926c82b56dfcb7`。
+無言再試行ではなく、特定済みのテスト仕様欠陥を修正して再レビューするもの。
+
+unit01 r2は独立レビューSHIP後、11:49:13 UTCに起動。共有slot待ち後にthread
+`01a07168-db73-7ee3-b4a0-4cb5b4f1f8ce`が開始したが、local Flashへの接続が
+`429 Too Many Requests`で失敗した。親がsession 51827のexit 1を確認。
+ログ`outputs/local/e26_implementation/unit01_contract_r2_WORKER.jsonl`は385 bytes、
+SHA `f483b61146727d518371cb362ed8c83c7364189e9e24a63621d6f0f68b647839`。
+worktree clean・新規実装0・テスト未実行。Kaggleへのrequest/提出ではない。
+SOL subagentへ既存ログのみの原因分析を渡し、モデル/サービス変更・自動再試行・fallbackは無し。
+完了追跡は同一taskにheartbeat一つまでの制約のため一時的に既存2時間メンテナンスへ
+追加したが、終了をこのturnで検知したため追加節を外し、元のprompt/間隔/通知設定へ戻した。
+
+SOL原因診断＋親の既存log/code確認では、E26の429は別の25,875-token prefillと重なり、
+queue flockとbridge推論slotが別に解放されるため、ローカル同時占有に整合した。
+bridgeが発した429かbackend透過かは未識別。サービス変更や新規health推論は行わず、
+別SOL reviewerのSHIP後、idle/clean/task SHA一致を直前確認して同一r2を一回だけ再依頼した。
+起動11:58:01 UTC、session 35026、thread `01a0716e-c88d-7873-b838-27d3f9967506`。
+ログは`outputs/local/e26_implementation/unit01_contract_r2_retry1_WORKER.jsonl`、開始イベント確認、
+実装結果待ち。追加retry予算0。既存automation id 2の2時間間隔・通知設定を変えず、
+この実行の終了確認・独立レビュー・対象pytest/ruff・記録だけを一時追加した。
+終了時は追加節のみ外し、メンテナンス本体を残す。commit/push/候補生成/提出は無し。
+
+2026-09-05 13:35 UTCの定期確認: 同じsession 35026は継続中で、親の短いpollも
+非terminal。別SOL auditorが約1時間37分のprocess identity（PID 87536→87552）と、
+監査中のlog増加159→162行を確認した。command 60件・error item 3件を観測したが、
+`turn.completed/turn.failed`なし、worktree clean・成果物0。長時間の読取反復という
+運用上の停滞リスクを記録するが、失敗確定・停止・retry許可へ読み替えない。
+今回テスト・モデル要求・Kaggle操作・commit/pushは無し。canonicalの全差分、既存WIP、
+旧E25 source/VERDICT・D1結果hash、official HEADを確認し、`git diff --check`成功。
+文書の現在状態に重大な矛盾はなく、同一実行の完了確認を継続する。
+
+14:12:51 UTC、共有Flash運用担当から最大2 worker・要求単位FIFO・物理推論一件の
+切替予告を受領した。本番反映は未実施で、既存実行を中断する依頼ではない。
+親の同一session確認ではlog 217行、queue 87517→node 87536→Codex 87552が約2時間14分
+稼働し、flash.lock保持、worktree clean・成果物0。終了解放は未確認として担当へ返信した。
+**次の連絡条件:** 自然終了時にexit・成果物・lock/両port接続の解放有無を
+共有運用task `01a0581d-815d-7de1-a3cc-a5fbb5dd9d17`へ通知する。共有受付の安全な切替完了を
+確認するまで次のFlash起動は行わない。現試行の追加retry予算0、モデル/effort/作業先/
+実験条件は不変。サービス停止・再起動・追加推論は行っていない。
+
+2026-09-06 01:35 UTC、同じsession 35026は非terminal、worktree clean・成果物0。
+監査で反復して数えた`error`型itemの本文を親も確認した。全27件は同一の
+長いthread・複数compactionによる精度低下への注意文であり、接続失敗やテスト失敗の
+27回発生ではない。ログ内の新thread推奨は新規workerの許可へ読み替えず、
+自然終了待ち・追加retry予算0を維持する。実装/テストPASSや精度改善は未確認。
+
+2026-09-06 02:32 UTC、共有運用担当から、ユーザーの「反映して」により
+この既存実行だけの停止と共有受付切替が承認された旨を受領した。停止操作は担当側で
+行うため、Biohub側では重複操作しない。この承認は従来の自然終了待ちに対する例外で、
+停止確認後は**ユーザー承認による中断**と記録し、モデル障害や正常完了とは扱わない。
+現時点の親pollは非terminal、worktree clean・成果物0で、停止・切替の完了通知待ち。
+ログ/WIPは保持し、追加retry予算0、次Flash・実データ評価・提出のHOLDは不変。
+
+2026-09-06 02:51 UTCまでの更新: 共有運用担当が対象実行だけを承認に基づいて中断し、
+親の同一session 35026 pollも**exit 130**を返した。worktree clean・成果物0。
+ログは1,976,990 B / SHA
+`44acb83dd15ea4e40d35143ce2f435da93786b54d8556bd18894ef1d710d8d56`で保持。
+正常完了・モデル障害・科学的REJECTではなく、**USER_AUTHORIZED_INTERRUPTION**とする。
+共有担当から受付切替完了と旧PID/接続解放の報告を受領したが、親はサービスを操作していない。
+unit01終了追跡だけをautomation id 2から除去し、2時間メンテナンス/通知設定を維持した。
+
+続くユーザーの「実装モデルを`qwen3.7-plus`に変更してください」を最新routingとする。
+親がモデル運用設定を変更し、`.codex/bin/qwen-implement`はexact `qwen3.7-plus` /
+既存machine provider `qwen_token_plan`を使う。Flash専用queue・catalog・provider定義を外し、
+既存の機械側認証をCodexへ任せる。鍵/認証command引数の値は出力・複製・実行していない。
+effort設定none、request/stream retry 0、作業先/ネットワーク/子agent禁止等の保護は維持。
+SOLは設計/レビュー、指定Qwenは今後の恒久実装を担当する。モデル設定変更は親の運用操作で、
+E26のcode/testをSOLが代行したものではない。AGENTSの担当欄だけはこの明示変更に合わせた。
+
+検証: `sh -n`、help、`git diff --check`成功。実Codexを置き換える一時mockによる
+6件（exact model/provider/effort/safety flagsとexit保持、primary拒否、空task拒否、
+NUL拒否、不在target拒否、同一worktree二重起動拒否と終了後lock解放）もPASS、worktree clean。
+独立レビューでlocal queue除去後の二重起動保護不足が指摘され、worktree固有のatomic
+directory lockをclean check前に取得する運用保護を追加した。既存lockは自動奪取せず、
+childの終了を回収できない中断時はlockを残して手動確認を要求する。
+修正後の全routing差分は別SOL reviewerが再確認し**SHIP**。この判定は設定と運用保護の
+静的レビューであり、実接続やE26実装の完了を証明しない。
+最初のmockはフォルダー名`e26-flash`を
+旧providerと誤検出して失敗したため検査述語だけ修正して再確認した。モデル要求は0。
+実接続・契約有効性/残量・Plusの実API互換・無人利用条件は未確認で、稼働成功とは主張しない。
+次の最小依頼設計は既存unit01 r2の3合成test一ファイルのまま。旧retry予算0を維持し、
+今回は新worker、実データ評価、Kaggle操作、commit/pushは行っていない。
+
+2026-09-06 03:08 UTCまでの更新: goalの自動継続を再開。前turnはモデルrouting変更と
+オフライン検証という進捗であり、精度readoutではない。今回の新しい証拠はproviderの
+利用範囲で、[公式Personal Token Plan Overview](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/token-plan-personal-overview)
+のMarkdown版を親が全文取得し、別SOL reviewerも独立確認した。対話的coding/agent tool
+利用は対象だが、automation script・custom backend・非対話batchは禁止されている。
+機械側に定義されたcustom providerは`qwen_token_plan`一つで、Individual名、Token Plan
+endpoint、Responses、command-backed認証の設定だけを再確認。認証command/秘密値取得は無し。
+現在の自動goal継続からのPlus worker起動はHOLDとし、自動用途に適合する接続先の選択、
+または実際の対話的実行が必要であることをユーザーへ確認した。勝手な従量課金への切替・
+別モデルfallbackは無し。モデル一覧のPlus掲載は疎通/残量/API互換の証拠ではない。
+
+旧r2 taskのFlash指示と新routingの矛盾を独立reviewで検出したため、旧bytesを保持して
+`outputs/local/e26_implementation/unit01_contract_r3_plus_TASK.md`を新規準備。
+SHA `6fccfcc47ca6ebf1dd9afea2a990379a3c0095f81de347ac011200f87a4d967f`。
+r2→r3はtitleとrouting/開始条件だけの差分で、tests/fixture/commands不変を親・別SOLが
+再照合してSHIP。親のE26設計はcontract→pure gate→generation→scoringの4単位とし、
+E26専用の薄いmodule/CLI/tests、既存committed API再利用、旧E25/ST-R3非依存を固定した。
+科学仮説・数値gateは不変。実装開始予算はまだ発行せず、旧Flash retry0/exit130を維持する。
+E25の過去時間資料は各arm `ARM_RESULT.json` の `duration_ns` / `process_peak_rss_bytes`のみ
+再読し、public4 335.593s、baseline36 2499.704s、candidate36 2735.043s、最大5.029GiBを確認。
+これは将来E26やhidden full pipelineの所要時間保証/実行budgetではない。
+時間資料探索の初回は一行JSONへの検索で出力が過大になったため、特定ファイルの限定key
+抽出へ修正した。成果物の書換え・追加GT採点・失われた評価結果はない。
+
+並列E17 source監査はHOLD維持。manifest/infoはgroup/label/extractor/output-domainを
+定義せず、13本のsupport sourceにもranker固有実装が無い。親もmanifest/info/predictorの
+hashと本文を限定再確認した。support predictorは閾値候補の後に任意のparent/child capを
+適用してからgraph/ILPへ渡すため、単にpre-ILPと呼ぶだけでfull candidate集合は特定できない。
+exact runtime patchとcap前後に対する特徴抽出位置もsource契約へ含めるとE17設計へ明記した。
+不適合の断定・転置/特徴近似・v21追加取得・候補実装は行っていない。
+
+今回変更は設計/引渡し文書のみ。既存code WIP、launcher/AGENTS、official HEAD
+`075fc5f5a52d11077f9dc2b074644618f26939e2`とclean状態、nested worktree cleanを保持した。
+`git diff --check`成功。コードtestsの新規実行、新モデル要求、候補生成/採点、Kaggle操作、
+commit/push、automation変更は無し。goalは未達のままactive。現在のprovider条件は再開後
+最初のblocker観測であり、このturnではblockedに変更しない。
+
+2026-09-06 03:11 UTC、同じ利用条件のblockerが再開後3 goal turnで継続。
+前turnは状態確認のみでno progress、本turnもprovider一覧がIndividual一つのまま、
+E26実装4ファイル不存在、approved worktree clean/HEAD `e410a7aa…`、r3 task SHA不変を確認。
+provider切替/実行方式へのユーザー回答は未受領。前turnの独立SOL確認も新しい実行可能性なし。
+安全な事前設計・既存source診断は完了しており、追加許可なしの課金経路変更や指定モデルの
+代行では解消しないため、親はgoalを**blocked（ユーザーの接続先/実行方式選択待ち）**へ変更した。
+金メダル圏は未達で、E26実装・生成・採点・提出は未実行。準備済みr3と既存成果物を保持。
+新しいモデル要求・実験・Kaggle操作・commit/push・automation変更は無し。
+前述03:08のactiveは当時の履歴であり、本段落のblockedが現在状態。
+
+2026-09-06 03:16 UTC追記: 03:11のblocked後にgoalがactiveへ再開されたため、
+blocker監査を新たに数え直した。再開後3 turnとも接続先の選択回答・provider設定変更・
+実装成果物の追加はなく、前turn/本turnともno progress。現providerはIndividual一つ、
+worktree clean、r3 hash一致、差分空白検査成功を再確認し、goalを再びblockedへ変更した。
+実装/モデル要求/実験/提出は開始せず、既存の設計・依頼書・成果物を保持する。
+
+後続ユーザー指示「サブスク範囲で使用してください」を受け、費用方針を既存サブスク内へ固定。
+親は[公式FAQ](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/token-plan-personal-faq)
+で、専用Token Plan経路の上限到達時は利用停止となりPAYG課金しないこと、誤った接続先/キーや
+対象外modelが課金の原因になることを確認した。OpenAI Docsの公式接続仕様も確認し、現在の
+機械設定がToken Plan専用URL・Responses・command-backed認証、代替認証field無しであることを
+秘密値なしで再確認。provider/launcher/authは変更せず、実認証commandやモデル要求も未実行。
+従量課金/追加bundle購入/upgrade/reset消費/別model/provider fallbackを禁止する方針を
+gold-loop、E26設計、戦略書へ記録した。上限・認証/routingエラーで停止し、残量/疎通は未確認。
+
+この直接ユーザー会話から一件のAgent依頼を開始する案は独立SOLへ確認した。
+公式overviewは対話的tool内Agent利用を対象とするが、現launcherの`codex exec`という
+非対話subprocess経路を明示的に分類していないため、reviewは条件付きSHIP/実行HOLD。
+今回は費用方針の反映までとし、workerを起動しなかった。サブエージェント全般が対象外、
+またはPlus利用に従量課金が必須という意味ではない。費用に関するユーザー選択は解決済みで、
+以後は同じ従量課金切替質問を繰り返さない。利用形態の未確認事項は別に残す。
+コード/AGENTS/凍結科学条件/実装r3は不変、生成/採点/提出/commit/push/automation変更は無し。
+
+2026-09-06 03:38–03:49 UTC文書整合確認: tracked unstaged差分を全読し、staged差分は空。
+現在branchは`feat/eval36-kernel-recovery`、HEAD `e410a7aa…`、cached upstream比ahead 7/behind 0。
+fetchは行っておらず、remoteの最新状態を確認したとは扱わない。未完成source/tests等のWIPを保持し、
+commit/pushは行わない。gold-loopの現状欄を保存済み9月5日の順位822/3115、gold proxy top16/0.948、
+作業目標0.950へ整合した。新しいLB照会・事前gate変更ではない。
+E26/戦略書に残った接続先選択待ちの現行文言を訂正し、サブスク限定の費用方針は解決済み、
+指定Plus経路の非対話利用条件・実接続/残量は未確認、と区別した。独立SOLの最終文書レビューはSHIP。
+差分空白検査・launcher構文検査・gold-loop/E26のローカルMarkdown参照5件の存在確認は成功。
+コードtestsの再実行はなく、WIP全体の検証完了とは扱わない。既知の評価entrypointの稼働は確認されず、
+公式submoduleはclean。保存済みE25判定は`SCREEN_REJECT_EVAL12`、E26生成/採点は未実行のまま。
+プロセス確認で`psutil`未導入を検知したが、追加installせず標準の`ps/lsof`確認に置換した。
+goalはfresh照会でもblocked。実装worker/モデル要求/実験/提出/automation変更は開始していない。
+
+2026-09-06 03:53 UTC、新しい直接ユーザー指示「サブスク範囲で使用して」に対する事前判断。
+親はPersonal Overview/FAQ/Codex統合とOpenAIのcommand-backed認証仕様を再確認し、独立SOLもSHIP。
+公式はtool内でユーザーがAgentへ対話的に開始する利用を対象とする。今回の単一・監督付きcoding
+subtaskを、cron/無人goal loop/backend/batchとは区別して許容範囲と判断する。`codex exec`という
+内部subcommand名だけで全てをHOLDした従前の解釈は、この直接依頼には適用しない。
+定期自動実行を解禁する判断ではない。根拠は
+[Personal Overview](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/token-plan-personal-overview)、
+[FAQ](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/token-plan-personal-faq)、
+[Codex統合](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/codex)。
+既存providerの専用URL/Responses/command-backed authを秘密値なしで照合し、代替auth/headerなし。
+承認済みworktreeは`feat/e26-motion-relink-off`、HEAD `e410a7aa…`、clean、lockなし。
+実装r3 hash `6fccfcc47ca6ebf1dd9afea2a990379a3c0095f81de347ac011200f87a4d967f`は不変。
+**新しい単発worker起動予算1、request/stream retry 0、fallback 0**を親が固定する。
+対象はr3の新規合成test一つのみ。exact `qwen3.7-plus` / `qwen_token_plan`を使用し、
+上限・認証・routingエラーなら停止。PAYG/追加購入/upgrade/reset消費は行わない。
+live互換・残量はまだ未確認で、成功を先取りしない。生成/採点/提出や次unitへの予算ではない。
+
+04:05 UTC結果追記: session `57343`（内部task `01a074d9-81ed-7993-90cb-491396bd96d0`）で
+Plusの実応答・tool呼出し・新test生成を確認。専用providerで疎通したが、残Credits/実消費量は未取得。
+モデル一覧は`data`配列でCodex側`models`期待と異なるwarning、metadata不足warningが出たが、
+exact modelは維持され会話は進行した。fallback metadataを別modelへのfallbackとは扱わない。
+workerは初版でAPI引数誤り（pytest 2 fail/1 pass）、修正版を作成した後も圧縮を挟んで再読・全書換を
+反復した。最後の版はpatch先をgraph_opsに誤り、worker pytestは1 fail/2 pass。
+最終logにはcompaction warning 8回、正常turn完了/usage集計なし。独立SOLも反復停止を推奨したため、
+04:02 UTCにexact model/worktreeで識別したPID `2861`だけへINTを送り、session exit 1とlock解除を確認。
+これは監督上の中断であり、quota到達・provider障害・正常完了とは記録しない。新worker/retryは0。
+
+log: `outputs/local/e26_implementation/unit01_contract_r3_plus_direct_user.log`、
+SHA `49b7bc08cf4b6de0c0cbac1adde7e1d402da85b32ef492efe378b7d852007e37`。
+最後の誤った版は`unit01_contract_r3_plus_rejected_overwrite.py.txt`として同ディレクトリに保持、
+SHA `6624149cce1e2da102e61718bc997f931f0ffff455f2ce2d6c43e50b4817d12c`。
+親が途中にpytest 3 PASSを確認したQwen-authored item_62をlogから実行せず抽出し、apply_patchで原文復元。
+復元SHA `3c35d11d392bbb031547fe25f42fad302ef695dd0e7ec7a1310edcf3310db795`はlog原文と一致。
+Ruff --fixによる機械的import整形（3件修正）以外、親によるtestロジック変更はない。
+最終fileは`work/e26-flash/tests/test_e26_motion_relink_contract.py`、SHA
+`0c5ef2972015ee4a5b1c4e7ea0e5a4151c87b0ec959281b3e8a6bc3ab1c82fc8`。
+親が全差分を再読し、指定pytest `3 passed in 0.91s`とRuff `All checks passed!`。
+別SOLも同じ検証を再実行し、全config一項差/無効時非呼出し/陽性対照・fallbackの3契約をSHIP。
+これは合成contractの受入であり、画像ありparity・runner全体・精度改善ではない。
+
+次への対策: 32k context/24k compactと大量初期文脈が反復を誘発した可能性はあるが、因果は未検証。
+必要APIの限定提示、短い実装依頼、既存成果の保全、反復の監督停止を次unit設計へ織り込む。
+workerは指定apply_patchではなくcatで新testを書いた運用逸脱も記録し、次依頼で再発防止対象とする。
+04:05 UTC時点では新testを未commitで保持。source/official/AGENTS/launcher設定は変更せず、
+新コピー・モデルfallback・追加購入・従量課金切替・生成・採点・提出・commit/push・automation変更なし。
+
+06:12 UTC統合追記: 親がQwen-authored final test全差分とSHAを再読し、新規3件と既存
+public-postproc 508件を同一processで実行、approved worktreeで511 PASS (1.80s)、Ruff PASS。
+独立SOLも同じsuiteで511 PASS (2.38s)、他testへのglobal patch汚染を認めず統合SHIP。
+test一ファイルのみをworktree commit `d9356bc4f260defbbc8f80ca9da4f01cdb72c45c`へ保存し、
+canonicalへcherry-pickしたcommitは`18234bd785cfd0dcf6a66ce0cc7cfd0fd8920142`。
+親のcanonical再検証は511 PASS (1.48s)、Ruff PASS。既存unstaged diff SHAは統合前後とも
+`d151eb28b8d47fc120eaa2fcf5c5ca4a670021e8978c7aa07378db64d02dafbb`で一致し、既存WIPを保持。
+worktree clean、canonicalは他の未完了変更を保持。push/提出/生成/採点/追加実モデル呼出しなし。
+unit01の検証・統合だけの進捗で、E23 LB 0.924や金メダル目標の達成状況は変わっていない。
+次は[E26 unit02仕様](e26_unit02_task.md)のpure config/統計/gateを実装する。
+旧E25 gateにはdivision TP+4・adj-edge≥−.002・twin/dry前提があり、E26への直接流用は不可と
+SOL原因分析と親のsource再読で確認した。数値条件はE26設計のままで緩和しない。
+共有設定担当のFlash主queue API通知は受領したが未配置・未検証、現launcher変更なし。
+通知をretry予算や無人Cloud使用へ拡張せず、サブスク専用・追加課金禁止を維持した。
+
+06:38 UTC設定追記: 共有設定担当が新queueを配置した後、委譲された起動ハーネスだけを
+SOL subagentが実装し、別SOLの独立レビューと親の全差分再読・再検証を完了した。
+対象は `.codex/bin/qwen-implement`、`.codex/libexec/qwen-implement/codex`、
+`.codex/runners/biohub_implementer.instructions.md`、`tests/test_qwen_implement_launcher.py` の4ファイル。
+科学アプリ実装・Qwen unit01ロジック・AGENTS・旧科学WIP・共有サービスは変更していない。
+既定Flash/明示対話のみCloud候補、固定provider/catalog/none/retry0、待機後の作業先再検査、
+HUP/INT/TERM転送・未回収lock保持を実装。親/独立レビューで重複provider引数の拒否、
+git index読取失敗の見落し、cancel時queue137でもlock解除する穴、signal testの直接group送信で
+転送不備を隠す検証穴を発見し、最終版では解消した。
+authorの起動回帰16 PASS (15.99s)、独立16 PASS (19.66s)、親の関連3module同時検証
+`PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -q -p no:cacheprovider`
+（launcher/E26 contract/public-postproc）で527 PASS (23.41s)、Ruff・両shell構文・diff check PASS。
+共有queueは静的importしてargv検証とmock config/catalogによるCloud変換だけを確認。
+最終共有source SHA `7c7d59a4e1edcc2a65d1620076a8250712175c570a3d73e633e7ac65c8973330`。
+実shared queue main/health/モデル/Keychain呼出しは0。共有担当の29件回帰は担当報告であり、
+親の527件へ加算しない。共有queue未導入の別ホストではintegration test一件だけ明示skipする。
+設定4ファイルのみをcanonical `b6b0d1599b53ce956ecef00da6ed03ca1194ce0c`へcommitし、
+approved worktreeへ`3ecd535e44a90cce3bf43d6f31bdba5c525f2e9c`で同期。既存WIPは保持、pushなし。
+新経路の実接続・Cloud残量・科学精度を保証せず、unit01旧attemptのretry予算0も維持する。
+次のunit02は別の実装単位として設計SHIP・未dispatchであり、この設定変更を再試行許可としない。
+06:40 UTC追記: 設定同期後のapproved worktreeでも親の同一3module検証527 PASS (23.67s)、
+worktree clean、official clean、AGENTS/旧provenance source/tests/frozen E25 protocolのhash不変を確認。
+共有設定担当へ最終4file SHA・試験範囲・未検証事項・commitを返した。
+
+06:44 UTC unit02開始判断: 前turnはunit01統合と起動ハーネスの検証済みcommitという実進捗。
+継続goal・完了unit01・独立レビュー済みunit02設計を根拠に、次の別実装単位をlocal Flashへ
+新規一回だけ依頼する。共有設定通知そのものや旧unit01 attemptのretryを根拠にしない。
+旧retry0は維持し、新unit02は開始一回/自動retry0/起動から20分の親監督上限。
+`--interactive`無し、Cloud/PAYG/実データ/生成/採点/提出なし、編集は二つの新規source/testのみ。
+独立SOLもdispatch境界をSHIPとし、最終stdin task SHA固定を要求した。
+`analysis/e26_unit02_task.md`の科学本文を保ち、冒頭の開始指示だけを更新した最終SHAは
+`616feedd816c98f8523016f89456a158684815f81dd6dd88f6f049436b86841e`。
+起動終了まで同taskを固定する。直前healthはready、active0/waiting0/blocked=false、
+worktree HEAD `3ecd535`・clean・hidden index flagsなし・対象二file不存在、launcher/shared SHA一致。
+生成/採点/金メダル精度の進捗とは区別し、成功時は親の差分再読/pytest/Ruffと別SOLレビューを必須とする。
+
+06:45:08 UTC実行追記: session `11043`、internal thread `01a07576-b558-7541-9290-de1f9cbf08ed`。
+新規log `outputs/local/e26_implementation/unit02_flash_attempt1_WORKER.jsonl` に
+route=flash / model=qwen38-flash-next / admitted 0.01s / automatic_retry=0 と開始eventを確認。
+監督期限07:05:08 UTC。Cloud要求はしていない。実装完了・test成功・精度改善はまだ未証明。
+
+07:05 UTC終了追記: 親は同じsessionを継続pollし、生存を確認したまま20分上限へ到達。
+07:05:08 UTCのclock確認後に対象TTYへCtrl-Cを送り、07:05:12 UTCにexit130を確認。
+共有サービス・他workerは停止していない。worktree clean・対象二file未作成・lock無し。
+最終log 52,357 B / 21 lines、SHA
+`f78b1824dd3a327f1beb8d58279f76ae7d9582566104c385e4636afdead45305`。
+task SHAは`616feedd...`のまま。source/testの読み取りcommandは進んだが、コード作成・
+test実行・正常完了は未観測。監督timeoutであり、quota/provider障害や科学REJECTとは呼ばない。
+直前共有healthはready/active1/waiting0だったが、共有counterから個別待ち時間を推定しない。
+独立SOLに保存logの原因分析を依頼。追加retry/Cloud/new worker/生成/採点/提出は無し。
+
+同turnの具体的進捗: 親が`analysis/e26_generation_contract.md`を作成し、API診断と
+独立設計レビューのmust-fix2件（科学条件docのsource closure、raw-stats完全schema/保存則）を
+解消してSHIP。signedなgap-density deltaを非負countと混同せず、E25保存runtimeは
+計測scopeがcoreのみであることを明記した。unit02完成前のunit03dispatchは行わない。
+git diff --check PASS。新しい実装テストは対象codeが無いためN/A、旧527 PASSを再試験としない。
+未完成作業をcommit/pushせず、AGENTS/既存provenance WIP/公式実装/凍結E25を保持する。
+
+07:09 UTC unit02原因分析: 別SOLがlogを構造的に監査し、探索command出力約43.9KB、
+うちconfig.py全文31,182文字、不要な一覧/状態探索の重複と、worktreeに存在しないE26文書の
+再探索を確認した。commandは全てexit0、apply_patch/test0。個別event時刻が無いため、
+20分を推論/queue/command待ちへ配賦する証拠は無く、遅延原因の断定はしない。
+stdinには必要科学条件が揃っており、仕様欠落とcontext発見導線の問題を区別する。
+親は`analysis/e26_unit02a_task.md`へconfigだけの小単位と限定読取行・固定APIを設計。
+original unit02 taskは不変で、02bがsplit/統計/全gate/異常系を引き継ぐ。
+これは同一依頼の自動再試行ではなく、原因分析後の依頼分割案。まだdispatchせず、
+独立レビューと別の親開始判断を必要とする。unit02全体/候補/採否基準は縮小しない。
+
+07:12 UTC再依頼判断: 独立SOLが02aの純粋config単位・型/共有drift検査・限定contextをSHIP、
+02bへの元要件保全も確認した。親は継続goalとこの原因診断/修正を根拠に、未完unit02の
+config-only follow-upを一回だけ開始すると判断した。旧full-unit02を再送せず、旧予算0を維持。
+新02aはlocal Flash/default/no interactive、開始から20分・自動retry0・実データ/Cloud無し。
+直前health ready/active0/waiting0/blocked=false、worktree `3ecd535`・clean・hidden index flags無し。
+これは科学条件/採否gateの変更や物理評価の再試行ではない。失敗なら同じ依頼を自動再送しない。
+
+07:13:26 UTC 02a開始実績: session `83288`、thread
+`01a07590-9c7b-7753-9852-21b759c0718c`。監督上限07:33:26 UTC。
+最終stdin task SHA `5fc0b7d34bd02c5721f76e49d87dff2c38c796efa53e2ec5e7ac124675220d73`。
+新log `outputs/local/e26_implementation/unit02a_flash_attempt1_WORKER.jsonl`は開始時260 B、
+route=flash/model=qwen38-flash-next/admitted0.00s/automatic_retry0を確認。
+同sessionのpollもlive。新コード/テスト/科学採点は未確認。旧log/taskを保持する。
+
+07:30 UTC監督判断: 同session `83288`を繰り返しlive確認。独立SOL運用reviewでは
+local log14/14 completed command成功・error item0・worktree cleanを確認し、同じhandleを
+一度だけ合計45分へ延長する案をSHIP。親は旧20分capより前にこれを採用し、最終hard stopを
+**07:58:26 UTC**とした。追加延長0、automatic retry0、Cloud/new worker/model変更0。
+原task SHA `5fc0b7d...`は不変。元20分は親の運用capであり、科学gateやユーザー費用上限ではない。
+停止/再起動を繰り返さず同じ作業文脈の継続を一回だけ待つための判断で、成功を推定しない。
+具体的追加負担はlocal slotの占有時間。provider/scheduler待ち時間の配賦は証拠不足のまま。
+
+並行設計: `analysis/e26_unit02b_task.md`に固定API/schema/完全payload例/literal split/全gateを
+具体化し独立SHIP。親と別SOLの算術検証で、math.fsum(values)/24はexact binary64 .003へ
+到達不能（隣接total .072/.07200000000000001からmeanはthresholdの直下/直上）と確認。
+閾値・fsum・>=を変えず、private共通comparatorのexact境界testとfullpayloadの両側testを要求した。
+丸め/tolerance/外部提供meanによる迂回はしない。これは計測器の実装可能性の修正で精度改善ではない。
+`analysis/e26_scoring_contract.md`も公式APIのsilent GT skip/sort、scale fallback、NaN skip、
+division-free singleton仕様を確認し設計。全REJECT/PASSの共通finalizerを明示して独立SHIP。
+unit02a/b→unit03→unit04の実装/受入依存は不変で、生成・採点・提出は未実行。
+
+### unit02a terminalと入力準備診断（2026-09-06）
+
+07:39:54 UTC頃、unit02aの保存logにerror/turn.failed
+`stream disconnected before completion: idle timeout waiting for SSE`。
+親が07:40:56 UTCの同session 83288 pollでexit1を確認し、後続再確認ではhandle無し。
+worktree HEAD `3ecd535e44a90cce3bf43d6f31bdba5c525f2e9c`、clean、実装file0、lock無し。
+logは50,549 B / 43 lines、SHA
+`618d179ecc95fcf614d28bab00f7e0cc528672b540fdd0939802c0d94e6626ad`。
+固定task SHA `5fc0b7d34bd02c5721f76e49d87dff2c38c796efa53e2ec5e7ac124675220d73`は不変。
+07:58:26の延長済み監督capより前の失敗で、旧unit02のexit130と混同しない。
+同じworkerのpoll/再起動を継続せず、retry0・Cloud0・科学条件変更0を維持。
+
+独立SOL診断と親のsource確認: shared `request_scheduler.py` ClientChannelは専用threadで
+5秒ごとにSSE commentをwrite/flushし、bridgeはqueue前からbackend処理終了までそれを保つ。
+したがって「upstream frame時だけkeepalive」は否定された。ただし今回の到達記録は無い。
+[OpenAI Docs設定参照](https://learn.chatgpt.com/docs/config-file/config-reference)では
+`stream_idle_timeout_ms`をSSE idle timeoutと定義するが、commentがtimerをresetするか未記載。
+親は共有担当task `01a0581d-815d-7de1-a3cc-a5fbb5dd9d17`へ、ランダムloopbackと架空応答だけの
+raw client/短縮idle real-Codex比較診断を依頼。本番port・実モデル・課金・service変更は禁止。
+診断結果前にtimeout延長・heartbeat形式変更・実装再試行を採用しない。
+
+並行した入力準備診断: literal eval36のraw .geff directory 36件と、画像inventoryの
+3,672ファイル（15,932,872,938 B）が揃い、期待/実際のpath集合・regular/nonsymlink・サイズに
+不一致0。全36 array metadataはshape (100,64,256,256)、uint16。親もこの範囲を再確認した。
+独立SOLはさらにmetadataの明示ZYX scale (1.625,.40625,.40625)、READYのroot identityと
+inventory参照も確認した。画像chunkの内容読取/復号/hash再計算・GT意味読取は0。
+raw graph内部も未検査で、完全なcontent seal、再現性受入、精度改善の証拠とはしない。
+現在の変更は記録訂正のみで新規app testは対象無し。過去527 PASSを今回の再実行と扱わない。
+ユーザーのサブスク限定を再確認: Cloudは契約対象・利用可能枠の確認前には呼ばない。
+従量課金/追加購入/自動fallback無し。生成・採点・Kaggle提出・新規学習は未実行。
+現行状態4文書の独立SOLレビューSHIP。logのbyte/line/SHA、clean worktree、新src/test・lock無しを
+別途照合しmust-fix無し。親のgit diff --checkもPASS。AGENTS/既存raw provenance source/test/
+固定E25 protocolは事前hashと一致し、officialはclean。今回commit/pushは行わない。
+
+共有担当の隔離診断速報（最終artifact・raw受信比較は未受領）: 実Codex CLI 0.153.4、
+空の専用CODEX_HOME、retry0、idle2秒、ランダムloopback限定のOSネットワーク制約下で、
+現行ClientChannelのcommentを0.25秒周期にしてwrite/flush成功が続いても約2.1秒で同じ
+SSE idle timeout/exit1を再現。response.created前/created・in_progress後の双方で失敗し、
+通常response.in_progress data eventを同周期で送る対照は6.23秒まで継続して架空応答exit0。
+これはこのclientでcommentがidle更新に数えられない機序を支持する。元workerのバイナリ同一性・
+本番packet時系列は未確認で、元障害の全原因確定とはしない。親は実行file/source hashと
+raw受信比較を含む証拠整理を依頼し、設定変更・実装再試行はまだ採用していない。
+
+最終診断を受領。共有task turn `01a075b0-8429-78b2-a3cf-835685873f93` のcompletedを確認。
+11成果物を `outputs/local/e26_implementation/sse_diagnosis_20260906/` へコピーし元bytes一致。
+親が保存resultsの5ケース・各1request・期待exit・raw23commentsを再集計PASS（再実行ではない）。
+最終REPORT SHA `8a2efba90d963d882277f5bd36d0d72aadc6ac8fd85f0877642cd10985adbda2`。
+原本の診断source/results SHAは上記速報後も不変。診断時native Codex SHAは
+`b973d440acac501fd2594a43e7ca9ce41e0a65b9dfb28d0d7a7837c99e1261e3`、元失敗時との同一性は未確認。
+親の次判断を [transport復旧設計](e26_transport_recovery.md) に固定した。
+共有担当へ正規livenessと隔離受入試験の最小設計のみ依頼。client timeout延長だけの迂回、
+本番修正/再起動・実装retry・Cloudは引き続き無し。科学実装/生成/採点の完了ではない。
+独立SOLはfixture/最終report/results/全stdout・stderrを照合し、限定した原因機構診断としてSHIP。
+resultsのversionはhardcodedであることを限界に追記。親もqueueの固定provider完全一致検査を読み、
+Biohubだけのtimeout overrideが拒否されることを確認した。共有担当の次design taskは
+turn `01a075b8-5a87-7a83-b858-b470ae836c6f`、inProgressを直接確認。旧診断taskや失敗workerと区別する。
+
+共有ownerの最小SSE案を受領し、親が [transport復旧設計](e26_transport_recovery.md) へ保存、
+独立SOLへ設計reviewを依頼。正規in_progress event型/response/sequenceを親もOpenAI Docsで確認。
+定期反復の汎用保証は主張せず、全state/sendの排他・error/drain時抑止・actual bridge/scheduler
+fake受入を要求。bridge適用はrestartを要し、他taskを止めず保守排他とidle確認が必要。
+今回は設計段階であり、source変更・deploy・unit02a retryは許可していない。
+
+並行した既存E25時間診断: receipt SHAは既知public4 `0ba4a023...`、baseline `4b360fea...`と一致。
+coreは335.593199958秒/2499.703610708秒、自己process生存期間peak RSSは
+4,395,270,144/4,467,179,520 B。timerはstrict DeepCenter load後のrun_postproc_coreのみ。
+起動/import/input再検証、model load、後続CSV検査/保存/hashはcore時間に含まれない。
+full-child launch/exit timestampが無く、正確な所要時間は復元不能。親もtimer/RSSの実装を再読。
+独立SOLがAPFS時刻から得たpublic4 337.997–338.541秒、baseline 2504.710–2508.064秒の
+参考区間には親側処理等が混ざるため、child厳密計時やmodel-load単独費用とは扱わない。
+原設計どおり物理予算の確定はrunner実装review後で、今回は数値gate/上限を新設しない。
+
+SSE最小修正設計の独立SOL reviewはSHIP（offline実装/隔離検証だけ）。queued responseの
+未終端状態通知は推論開始を意味せず、元bridgeの初回eventの意味を強めないことを確認。
+inactivityは成功data/state event基準とし、commentでcallbackを永久抑止しない条件を明示。
+親は設計段階から次段階へ明示し、共有ownerへ隔離コピーでの限定実装・A–F模擬受入・
+既存回帰・独立reviewを依頼した。共有ownerの著作者/費用制約は維持し、適合しなければ停止。
+本番source/config変更、production接続、service restart、実モデル/Cloud、Biohub科学コード変更、
+unit02a retryは依頼に含めない。修正完了や復旧実績はまだ未確認。
+
+共有ownerが同じ一件の隔離実装着手を確認、作業先 `/private/tmp/flash-sse-fix-DETGu9`。
+shared-infrastructure taskにはsole-author model封印無しとownerが確認し、実モデル無しで
+owner親が候補を書き、別reviewerを付ける。Biohub科学実装モデルの変更/fallbackではない。
+本番bridge SHA `0ac7f74ffd9446ccbf2d307137ed4f812349c196cc8d2b654c9e2d9482e16ebd` と
+scheduler SHA `8310822ae1739d84198ee1ff70b3740604f5c2c27ce82d8ebce38b5fbe044756` は親再確認で不変。
+別taskの直接ユーザー依頼でshared queueに--cloud-onlyが追加され、現物SHAは
+`9f526618e2ee466fb2a97d24c00b6f6d8f8ff8467fffc1fbbbe99b7e9f675e7e`。
+親は旧staging版との差分と配置検証記録43/43 PASSを読み、独立read-only互換性確認へ回した。
+これは共有側のfake試験実績で、Biohub親による再実行や実モデル成功ではない。
+Biohubはどちらのopt-inも無人goalで使わず、launcher/AGENTS/科学source/task/retry予算は変更しない。
+共有queue差分の独立静的監査SHIP。default/従来interactiveの制御流、固定argv、待機/終了/signal/
+lock/shimは旧版と同じで、現Biohub launcherに新flagは無い。現物とstaging/検証pinも一致。
+Biohubでのtest再実行・本番起動はしておらず、適合性確認をCloud権限や実装再開へ読み替えない。
+
+並行したpublic4/固定artifact監査PASS（限定前提）。指定raw4は4rootのみ、各33filesのsizeと
+DOWNLOAD_MANIFEST内値が一致、metadata JSONをparse可能。画像4root/metadataも存在。
+raw/image chunk内容のtree hash/decodeは未実施で完全input sealではない。
+DeepCenter best.pt (37,876,911 B)、manifest (7,069 B)、reference submission.csv (12,499,233 B)
+の現物SHAが固定pinと一致し、親もstream SHAを再確認。manifest内checkpoint path/size/SHAと
+epoch2も独立SOLが照合。checkpointはloadしていないため内部state/epochの実行時strict検査は未実施。
+referenceは240,126 data rows + header。path不足/hash不一致0、GT/score/inference/network/edit無し。
+この準備確認はfresh public4 parity、E26生成/採点、実装の受入を代替しない。
+
+08:18:44 UTCのSSE隔離候補初回検証: 59 tests/1 failure/0 errors、61.427秒。
+active/queued/nonempty snapshotの実Codex模擬caseは約6秒でexit0、旧comment対照は約2秒でexit1。
+ただし既存compaction継続testでraw_requests[5].inputのprobe_verify_5/VERIFIED期待が失敗。
+親はfirst result/logをfix_attempt1名で証拠dirへ保存し、採用をHOLD。
+ownerへ失敗を共有し、別SOLへread-only原因診断（再実行/同時編集無し）を依頼。
+要件削除によるgreen化は不可。証拠hash・scopeは [復旧記録](e26_transport_recovery.md) 参照。
+本番不変更/実モデル0/Cloud0は候補検証receiptの範囲で確認、Biohub実装/生成/採点/提出は未再開。
+
+SSE候補follow-up: 二回目60件再実行はcompaction CLI起動のEPERMで1failure。
+fixture cwdが親のhomeを継承しhome-read拒否と衝突した点を修正し、08:26:46 UTCには
+60/60 PASS（59.835秒）。親が現物result/logを読み、fix_attempt1/2/3として各結果を別名保存。
+候補source2SHAとnative hashは不変、本番source不変更/実モデル・Cloud・auth helper 0。
+親は173行の全候補diffと独立review source/logを読み、別に4件のメモリ内testを再実行PASS
+（0.526秒、前後候補hash一致、socket/server/model無し）。詳細は [復旧記録](e26_transport_recovery.md)。
+最終60件に対する独立受入確認はowner側で進行中。修正本体とfixtureの失敗を分けて保持し、
+本番deploy/実装retry/科学評価はまだ開始しない。
+
+最終隔離候補review ACCEPTを親が確認。source/test結果・二回のfailure・独立reviewを含む
+50 files/264,941 Bを `outputs/local/e26_implementation/sse_fix_20260906/` へ保存し全bytes一致。
+共有taskの同turn completedを確認した。続くread-only healthはactive0/waiting0/blockedfalse、
+started35。親はこれを瞬時の証拠とし、別の明示段階としてshared ownerへ条件付きdeployを依頼。
+maintenance排他/他owner調整/受付制御とworker・request・未確認drain無しを直前確認できる場合だけ、
+検証済みsource2fileを反映しbridgeのみrestart。他task停止、backend/queue/config/auth変更、
+実モデル/Cloud smoke、Biohub unit02a retryは含めない。旧版保存/復旧手順と反映receiptを必須にした。
+条件を満たせなければ延期。これは反映完了報告ではなく、詳細は [復旧判断](e26_transport_recovery.md) 参照。
+
+反映確認待ちの間、親は `analysis/e26_unit02a_recovery_task.md` を条件付きdraftとして作成。
+元taskのAuthoritative context以下はbyte同一（親diffで一致）、headerだけに修復/稼働/排他/
+sourcepinの再確認と明示的なlocal1回・45分固定・延長0/Cloud0/retry0を定義。独立reviewへ依頼。
+旧task/logは不変で、科学API・許可2file・全tests・unit02b–04依存も不変。
+この時点では接続修正の確認前であり、draftから自動起動せず新workerを作っていない。
+
+2026-09-06 08:43 UTC: 共有ownerの接続修正配備を親が実source hash・PID・healthで確認。
+bridge33154/backend61759、候補と同一2source、ready/active0/waiting0/blockedfalse。
+配備後の模擬回帰はowner実行33/33 PASS（08:42:10 UTC、10.046秒）。実モデル/Cloud smoke無し。
+復旧taskの独立設計reviewは条件付きSHIP。配備受入の独立監査後に、別途単発起動を判断する。
+前goal turnはdraft設計の進捗と同一live配備taskへのverified wait。本turnは実配備証拠を取得した進捗。
+詳細と固定byte identityは [復旧判断](e26_transport_recovery.md) に記録。金メダル目標は未達。
+
+08:47:00 UTC: 配備独立監査SHIP・親preflight受入後、単発local復旧workerを開始。
+session54736/thread `01a075e6-453f-7aa2-8d54-087695d85948`、launcher66751、
+09:32:00 UTC固定上限を外側supervisorで監督。queue待ち0.00s、route=flash、Cloud0/retry0/延長0。
+task SHA `a9815c7019e2a1d650d9136bcc3a928b094b417210cfd9cd5de5b16c54f42416`。
+旧task/logは不変。科学本文のbyte同一を親が再確認。コード受入/実データ生成/採点/提出は未完了。
+
+同じsession54736を後続turnでもpollし、liveのままrepository/config読込を確認。
+指定438–470以外のconfig、周辺source/設定の読込とdirectory listingも観測し、bounded-read指示からの
+逸脱として保持する。これは有用な実装完了や原因解決の証明ではない。時間上限は延長せず、
+同一log `unit02a_flash_recovery1_WORKER.jsonl` を保持する。新worker/Cloudは起動していない。
+
+待機と並行して、親は [unit03–04受け渡し案](e26_runner_interface.md) を作成し独立レビューへ回した。
+generation runの排他作成を保ちつつ、別のcanonical artifact namespaceに予測前のopaque GT登録を置く。
+期待SHAをdispatch時に固定し、親controlとGT-free子controlを明確に分離する。gate/候補/指標/追加worktreeは
+変更しない。別のread-only担当が最小API参照を特定し、親もcore/strict receipt/CSV/raw statsを確認した。
+受け渡し案は未受入draftであり、物理評価budgetや新たな実装起動の許可ではない。
+
+後続の独立レビューは、full GT登録JSONを生成側でparseし得る点と、失敗時seal文言をHOLDにした。
+親はprivate GT_BINDING/public PREREGISTRATIONを分離し、publicを最後の完了markerにする設計へ修正。
+両SHAはdispatch前固定、unit03はprivate bytesのhashのみ、unit04だけがprivate登録をparseする。
+失敗時は元digestを持つfailure receiptのみで、generation sealは存在しない。revision2
+`e2664fb91001ddfb06e15adc7eef5b6d13a9a6fdff63e7f8462481eab298fa98` は独立再レビューSHIP。
+親が採用しunit03/04契約にも同じ境界を反映した。物理予算数値・実データ評価の許可は未設定のまま。
+
+09:20 UTC: 同session54736の先頭52行/80,958Bを独立ログ診断。親がprefix SHA
+`56b89a4f6c60eb9f007e5cba06fad87785044e2e03a9e67634ee78418b0fbbcb` とclean worktreeを確認。
+19番itemに圧縮精度警告、その後も同sessionの再探索が続き、terminalではない。
+22 command開始/20 exit0/2 exit1、保存command出力63,076B、patch/実装test0という中間snapshot。
+指定を超える周辺読込は確認したが、圧縮回数や因果・token量は断定しない。
+親は2件のcommand errorを実出力に合わせて区別した（shell解釈エラーとpath typo、実装test失敗ではない）。
+同一処理の09:32 UTC cap/延長0を維持。診断詳細は [復旧記録](e26_transport_recovery.md)。
+
+09:32 UTC: recovery1は外側supervisorの2700秒capでSIGINT、exit130/elapsed2700.19sで終了。
+最終log79行/129,702B、SHA `d21ef2fbe5b82d80429b52f66dbe21523236630afc74d3783c312c2e81771f42`。
+独立最終監査: command34件(32 exit0/2 exit1)、保存出力99,697B、最後まで読取/検索/version確認のみ。
+patch/新source/pytest/Ruff check0、SSE/provider error0。実装未完了であり科学候補の棄却ではない。
+親がtarget0/worktree clean/lock無し/client全5PID不存在を確認。手動lock削除や他task停止は無し。
+09:35 UTCでもhealth active1/waiting0/blockedfalse/started36。共有ownerはclient側CLOSED、
+backend側ESTABLISHEDを確認し、drain未完了と整合する状態と報告。上流停止/進捗は断定しない。
+前goal turnは独立中間診断と公式資料による制約機構の可能性調査という進捗、本turnはterminal結果を
+独立確認して固定した進捗。新試行やhook変更の許可はなく、金メダル目標は未達のまま保持する。
+
+09:42:37 UTC: 親のhealthでactive0/waiting0/blockedfalse/started36、同bridge33154のlsofで
+旧client/upstream接続が両方消滅しLISTENだけになった。以前のdrain未確認は解消、正確な完了時刻は不明。
+共有ownerへ事実のみ報告し、新request/restart/設定変更は行わなかった。
+並行して [実行範囲復旧案](e26_worker_scope_recovery.md) を親が設計し、独立レビューへ回した。
+Qwenのcode/test著作者は維持してshell実行だけ無効化、親が全差分読後に元の全testsを実行する案。
+元のworker-side testが走ったとは扱わず、役割変更の受入を要する。API/gate/後続unitの科学条件は不変。
+installed native client＋隔離fake backendでpatch残存とshell拒否を別担当が検証中。実モデル0、本番変更0。
+
+09:55 UTC追補: 上記の隔離probeはPASS、source/artifactの独立レビューもSHIP。
+2 flags falseでapply_patch実動・未広告exec_command拒否を確認した。実モデル/Cloud/auth helper/
+本番port要求0。証拠は `outputs/local/e26_implementation/tool_gating_20260906/REPORT.json`、
+SHA `a0cd2d431aa0c4b1b8f9c1a3bd0534200dd835200da2fd34bba83ec04e405d5b`。
+旧task本文の科学仕様を保持した [patch専任handoff](e26_unit02a_patch_task.md) も独立SHIP。
+親はlauncherの2flagsと対応2assertionだけを変更。変更前launcher16 PASS12.52s、
+変更後launcher＋unit01＋public_postproc計527 PASS14.58s、Ruff/sh構文/diff check PASS。
+exact deltaの独立レビュー・採用前で、まだ新実装workerは起動していない。
+AGENTS、既存WIP、共有設定、実モデル経路、科学codeは変更なし。実装復旧の進捗であり精度向上ではない。
+
+10:04 UTC追補: 最初のexact delta reviewはfile/diff SHA報告が不整合だったため採用せず、
+別担当が現物raw outputと2files4行の一致を独立確認してSHIP。親は設定2fileだけを
+canonical28cd508でcommit、承認済worktree345dc38へ反映し、同所で527 PASS16.45s/Ruff/sh構文PASS。
+旧task/log/AGENTS/無関係WIPは保持、push無し。新task SHA
+`9b558c5469543b54d21aba143e45cb72df65756419b3d7d87bb6ed95740ff2f7`、科学本文はreviewed draftと同じ。
+10:04:42.892400 UTC、session80539でpatch1を一回開始。thread
+`01a0762d-6c53-7831-8233-5a998699a3b5`、Flash即時受付、cap1200s/延長0/再試行0/Cloud0。
+deadline10:24:42.892400 UTC。初期healthはactive1/waiting0/blockedfalse/started37。
+現在実装中であり、新sourceの受入・新accuracy・GT読込・Kaggle提出は未実施。
+
+### 2026-09-06 10:13 UTC 定期メンテナンス（途中確認）
+
+canonicalのみ確認。get_goalの現在値は`usageLimited`で、active/resumeとは扱わない。
+追加課金、reset消費、新しいモデル作業の開始はしない。開始済みlocal patch1の1200s
+supervisor上限は維持し、この保守では再起動・実装変更・推論開始を行わない。
+branchはfeat/eval36-kernel-recovery、cached upstreamに対してahead10、staged差分なし。
+最新commit28cd508は直前のgoal作業で完了した設定単位で、この定期保守でのcommitではない。
+既存tracked WIP6件とuntracked実装/設計を保持。unstaged全差分は2472行/179295Bで、
+取得した一部出力が省略されたため完全な全diffレビューは未完了と明記する。
+保守は状態記録まで。追加test/lint/typecheck、fresh fetch、commit、pushは実施しない。
+文書のwhitespace検証のみ行い、科学的受入や金メダル達成の証拠にはしない。
+最新確認済み自分のLBは引き続きE23の0.924（今回Kaggle照会なし）、新しい局所精度結果なし。
+
+### 2026-09-06 直接依頼: Cloud qwen3.7-plusへ実装担当を固定
+
+ユーザーがCloud exact `qwen3.7-plus` サブエージェントへの実装を直接再指定。
+過去のFlash-first指定を上書きし、既存Token Planサブスク内のみ使用する。
+local patch1はモデル変更のため親が停止、10:18:55.483628 UTCにexit130、
+852.59s、supervisor timeout=false。対象source/test生成なし、worktree clean、
+旧client終了・専用lock無し。最終log15行/2521B、SHA256
+`9b0bf9033dc8ee32edef111d506e523d89d2aa1aef4736c8bf98baf5f8497304`。
+local upstreamは後続観測active0/waiting0/blockedtrueで、完了確認済みと呼ばない。
+共有serviceを変更せず、Cloud-onlyはそのlocal health/slotに依存しない。
+
+契約画面を再読込して19:22:41 JST時点でPro Active、利用枠95.1%残、総40000、
+Credit Packなしを確認。公式QwenCloud Token Plan資料はexact modelと既存専用endpointを
+支持する一方、画面内model panelの表示には曖昧さが残る。認証・quota・routing errorで
+停止し、PAYG、購入、reset、fallback、無人automation/goalのCloud実装は行わない。
+今回の直接監督タスクは`analysis/e26_unit02a_cloud_task.md`、一回1200s/延長0/retry0。
+scientific contract・config全文reference・親test commandsは保持し、対象は新規2filesのみ。
+launcher3files設定単位は親full diff確認、529 tests PASS15.92s、Ruff/sh構文/diffcheck PASS。
+独立レビュー・設定同期・clean single-owner preflight後にのみCloudをdispatchする。
+この段階ではCloudの実装完了、新精度、学習Loss、Kaggle提出の結果はない。
+詳細と以後の実行結果は`analysis/e26_worker_scope_recovery.md`に記録する。
+
+同日追記:Cloud設定単位7368cebをcommit、承認済worktreea17eb02へ同期。
+親の最終529tests PASS15.89s、worktree529tests PASS16.40s。実Cloud routingで
+exact qwen3.7-plusを確認し、patch形式失敗後に独立レビューしたoutput-only deliveryで
+Qwenのsource/tests全文を受領（exit0、101.96s）。無改変反映・全コードレビュー後、
+元pytestは4failed535passed、Ruff17件、public4の誤presetも確認して未採用。
+生成2filesはignored evidenceへ移動保存し、作業コピーはcleanへ戻した。
+修正handoffは独立SHIPだが10:51UTCの受付でsubscription slot busyによりexit2、
+修正モデル呼出し0。nonblocking flockもEAGAINで空き未確認、owner/lockに介入せず停止。
+Cloud契約外課金・モデルfallback・自動再実行はせず、新accuracy/学習/提出はない。
+
+### 2026-09-06 自動goal継続: 採点経路と入力依存の限定確認
+
+前回直接依頼turnはCloud設定・Qwen全文受領・実際の検証失敗を得たprogress。
+今回get_goalはactive。過去のusageLimitedや金メダル達成へ読み替えない。
+この自動継続は対話的Qwen Cloud依頼ではないため、共有slot空きとは独立に
+Token Plan無人利用条件を満たさず新workerを起動しない。前回修正受付は終端exit2であり、
+live worker待ちとも扱わない。実装担当の無断SOL/Flash代行・追加課金なし。
+
+親は既存公式wrapper/I/O/提出構造/motion分岐の全4test filesを読み、
+`PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider
+tests/test_evaluate.py tests/test_io.py tests/test_validate_submission.py
+tests/test_e26_motion_relink_contract.py`を実行:38PASS4.37s。fixtureのみで競技GTを開かない。
+対象src/official/testsに差分なし。既存scorewrapperのmissing GT skipとmetadata不足時
+scale fallbackを現source/testで確認し、unit04側のstrict guardが必須な理由を再確認。
+この回帰成功は未実装E26 runner/gate・段階GT分離・新精度の証拠ではない。
+
+参照CSV/DeepCenter checkpoint/manifestの親current hashは固定値に全一致。
+保存場所と完全hashはE26設計の依存確認節へ記録。新downloadは不要だが、全画像/rawの
+content inventory照合・fresh parity生成・strict model loadはまだ行っていない。
+別SOLへ選定40raw/imageの存在・metadata/aliasだけの限定auditを依頼中。
+その全入力確認は完了報告未受領であり、親の3file確認へ混同しない。
+E26設計冒頭の古い「実装0/ローカル」現在記述を訂正し、履歴とcurrentを分離。
+AGENTS/旧WIP/frozen revision taskは保持、source実装/学習/物理評価/提出/commit/pushなし。
+
+### 次の自動goal継続: 対象40件の現物metadata点検
+
+前turnは38回帰・3file現物hashでprogress。今回も修正workerは終端exit2のまま、
+worktree HEADa17eb02 clean、revision task SHAeb21bb67…95a5ce不変、未実装である。
+指定Token Planの無人利用条件は2回目の自動goal確認でも解消しておらず、新worker0。
+SOLの限定input auditは終了したが実在確認0/40との報告であり、未評価を正常と数えない。
+親が承認済literal36件とpublic4を直接検査し、40/40のraw root/画像root/二種類metadata存在、
+40/40の明示ZYX scale・4D正整数shape・uint16を確認。選択rootのsymlink0、
+ancestorや内部alias/全chunk/content inventoryは未評価。raw graph/画像frame/GTは開かない。
+完全取得・内容seal・parity・精度改善とは別。契約と出力を偽装せず、実装待ち状態を維持する。
+この確認で追加取得を始める根拠は得られず、次の必要作業は既存SHIP修正taskの適合する
+対話的実行と受入である。別モデル代行・課金切替・提出・commit/pushなし。
+
+### 自動goalのblocked判定（同じ条件を3連続確認）
+
+3回目の自動継続でも、指定実装者qwen3.7-plus/Token Planの無人利用条件に変更なし。
+前turnは40件の現物metadata確認でprogress。本turnは同一blockerの再確認のみであり、
+進捗やverified waitとは数えない。修正attemptは保存logでexit2終端、受入済み新sourceなし、
+worktreea17eb02 clean、SHIP修正task hash不変。native入力auditも終了済み。
+38既存回帰・3file現物hash・40件metadataまで安全な独立準備を終えており、次の
+実験依存は修正実装の受入。未実装runnerを迂回して採点/提出したり、同じ点検を反復して
+進捗と見せたりしない。指定外モデル/従量課金/無人Cloudへの無断変更もしない。
+したがって目標は未達のままblockedへ変更する。再開には利用条件に適合する対話的な
+Qwen実装、またはユーザーが選ぶ適合した別実行経路が必要。共有slot解放だけでは
+この無人実行条件は解消しない。目標・科学gate・候補・既存成果は維持する。
+
+### 2026-09-06 12:12 UTC 定期メンテナンス開始・現行記述の整理
+
+canonicalのstaged差分は空、unstaged全差分2568行を省略なしで読み終えた。
+branch feat/eval36-kernel-recovery、HEAD7368ceb、cached upstream比ahead11/behind0。
+fresh fetchは未実施で、remote最新状態の確認とはしない。get_goalはblockedのまま。
+既知の生成・採点entrypointに該当する稼働processは検出せず、新実行は開始していない。
+gold-loopの旧local attemptの「Current」表記、実行復旧記録冒頭の旧起動予算を履歴へ明示し、
+Cloud枠busyは10:51 UTCの観測であって現在の空き状況を再照会した証拠ではないと訂正。
+科学条件・source/tests・指示ファイル・READMEは変更せず、既存WIPを保持した。
+新しい実装/物理評価/学習/提出は無し。未完了WIPをcommit/pushせず、枠の再照会も行わない。
+今回の文書変更を再読し、tracked差分とuntracked復旧記録のwhitespace検査はPASS。
+AGENTS/既存provenance source/testsの保存hashも不変。コード変更がないため新規pytest/
+lint/typecheckは実行せず、過去の成功を今回の検証や未完了WIP全体の受入とは扱わない。
+
+### 2026-09-06 14:18 UTC 再開後の利用条件監査（1回目）
+
+fresh get_goalはactive。親がresumeしたとは扱わず、前回blockedとは別に再開後の監査を
+1回目から数える。前のgoal turnは同一blocker確認でno progress。今回も精度改善や
+verified waitではなく、実装開始条件の再確認であり、新たな実装・評価・提出はない。
+canonical HEAD7368ceb、承認済みworktree HEADa17eb02でclean、unit02a新sourceなし。
+修正task SHAはeb21bb67fe53b75c75ff2d4acee0407e6b1aa583c3e278bbc6665965e195a5ceで不変、
+前回修正受付logのexit2終端を確認した。共有枠の空きは再照会せず、live workerと呼ばない。
+
+親と独立SOL担当が[公式Token Plan概要](https://docs.qwencloud.com/token-plan/personal/token-plan-personal-overview)
+を現在取得し、exact qwen3.7-plus対応と、対話的tool利用に限定し自動script/backend/
+非対話batchを禁止する条項を確認した。[Quick Start](https://docs.qwencloud.com/token-plan/personal/token-plan-personal-quickstart)
+はCodex対応とToken Plan/PAYGの別経路を記載する。公式がCodexのgoal機能名を禁止対象と
+名指ししているわけではなく、今回の自動継続への適用は親と独立reviewerの解釈である。
+既存worker指示も自動goal/heartbeat起動を明示禁止しており、今回の再照会では解除根拠なし。
+Qwen実装の対話的な修正受入が次の依存。モデル/課金/起動policyの変更はしない。
+
+gold-loopのgoal状態を時点付き履歴へ訂正し、戦略文書の古い「最新状態」にCloud受領・
+未採用の現在値を補足。科学条件、指示ファイル、code/tests、保存artifactは変更しない。
+文書差分を再読しgit diff --checkと未追跡戦略文書のwhitespace検査はPASS。
+code変更がないため新しいpytest/lint/typecheckは実行せず、既存WIPをcommit/pushしない。
+この文書整理を金メダル目標への実験進捗とは数えない。
+
+14:20 UTC追記: 再開後2回目・3回目も同一の利用条件blockerを現在ファイルで確認。
+前turnと本turnはno progressで、verified waitではない。worktreeは同じclean HEAD、
+unit02a対象2filesは未作成、修正task/終端log/worker policyのSHAも不変。
+追加の安全な独立準備ではこの実装依存を解消できず、対話的なユーザー入力が必要なため、
+3連続の基準を満たしてget_goalのactiveからupdate_goal(blocked)へ変更成功。
+目標未達、新しい実装・評価・提出なし。文書の現在状態のみ同期し、commit/pushなし。
+
+### 2026-09-06 14:23 UTC以降 — 実験・各ループ提出を優先する直接指示
+
+ユーザーが改善実験と提出の優先、詳細な原因調査、各ループでの提出を明示した。
+親は以後の科学仮説ループごとに原則1件の探索提出と終端LB確認を計画する。
+実装修理の小単位ごとには提出しない。local数値gate未達でも探索提出を妨げないが、
+local REJECTとeval12失敗後のeval24非参照は維持する。提出判断と採用判断を分離し、
+既存候補・数値gate・E25退役を事後変更しない。新しい方針はE26のreadout前に固定する。
+source/config/基準parity/形式/再現性/資産license/競技規則/対象run完了の異常は提出不可。
+同一候補のaccepted submissionは1件までで、不確実な受付を盲目的に再送しない。
+独立SOL reviewerはこの区別・候補ID固定・重複送信防止を条件に方針を受入。
+現行運用はgold-loopのAuthority boundaryを優先し、旧SCREEN文書の提出禁止文を
+公式の競技条件と混同しない。runner自身のsubmission_authorized=falseは変更しない。
+
+今回の直接依頼下で、親監督・サブスク専用qwen3.7-plusへ修正taskを1回実行。
+session7120/thread01a07719-e329-7881-b7e4-2fc89db673d3、14:23:00.022857→14:25:11.741437 UTC、
+exit0/131.72s、600s cap、retry0、fallback0。新logはunit02a_cloud_revision2_WORKER.jsonl、
+SHA f32e4fbc221133f2485eecc8483093561abfda25d012cde6eb8704a9db718950。
+正常完了、agent-message1件、tool/error0、2code blocksを受領したが、冒頭584文字の
+説明文が厳密な配送形式に違反。親はまだ適用せず、完全なQwenコードを無変更で抽出する
+限定的な復旧を独立レビュー中。実装受入・実データ評価・Kaggle提出はまだない。
+詳細な原因分析と提出経路監査を別SOLへ並列依頼。物理評価は重複起動しない。
+
+14:50 UTC更新: unit02a revision2は配送形式/テスト網羅性、revision3はRuff2件と
+必須canary不足で独立HOLD。両方未適用で、config/test修理だけの反復を止めた。
+ユーザーの実験・各ループ提出優先に沿い、同じE26仮説を既存E23 notebookの
+最小差分で直接Kaggle実行する探索経路へ変更。local SCREENは未完了のまま。
+設計と事前登録は [E26 target run](e26_target_run.md) に固定した。
+Qwen Cloud qwen3.7-plusが指定2行を作成し、独立レビューSHIP、親の全notebook
+不変条件/AST検査PASS、関連pytest534 PASS、変更2行Ruff PASS。
+配送JSONの括弧欠け等は独立承認した外側の形式修復だけで回収し、科学codeは無編集。
+
+14:50:34.758313→14:50:38.171071 UTC、private GPU/offline/timeout43200で
+kernel pushを一回実行し成功。Kaggleがtitleからslugを正規化した実際の識別子:
+`taichiiiii/biohub-e26-motion-off-exploratory`、version1、kernelId133333893。
+URL: https://www.kaggle.com/code/taichiiiii/biohub-e26-motion-off-exploratory
+初回status確認はRUNNING。これは提出ではなく対象環境の実行開始であり、
+新しいsubmission ID/LBはまだない。完走→pin/config/有限CSV/graph検証→同じversionを
+1件提出→終端結果の順に進める。元E23=0.924と未完了local評価を混同しない。
+fresh APIの提出枠はtoday0/total6/allowed5、asset metadataのCC0と現行版
+(DeepCenter5/secondary2/support10)を確認した。実際のGPU・出力・hidden時間は未検証。
+README/AGENTS/officialは本作業では変更せず、既存WIPもcommit/pushしていない。
+
+独立最終監査でも保存済み33cell、元source、candidate/metadata/worker logのSHA一致を
+確認しSHIP。事前登録SHAはde0c63f83860c8733034a0ff7a913bb5084d81d3c82af532b8927f82d8887216。
+文言上の補足: target runの「configuration/code unchanged」は宣言済み2行と
+metadata3項目を除いた全内容を意味する。gold-loop旧手順のlocal gate PASS必須文は
+今回の明示されたtarget-only探索例外には適用せず、local未完了/REJECTは採用判断で維持。
+実行開始後なので凍結済み文書はここでは書換えず、完走後の整理事項とする。
+
+追跡継続: 同じタスクにactive heartbeatは1件までのため、別E26監視の作成は拒否され、
+追加作成なし。既存automation id2を一時的に5分周期へ更新成功し、各回E26状態だけ確認、
+メンテナンス本体は最終完了14:14 UTCから2時間以上経過時だけ実施する。
+実行中/採点待ちはsource/protocol/Git固定。検証後のversion1の1件提出と終端結果記録を
+追跡に含め、Qwen/外部実装workerの自動起動は禁止。E26終端・次loop設計後には同じid2を
+元の名前・2時間周期・保存した元メンテナンス指示へ戻す。通知設定も既存値を維持。
+別cron/task/worktreeは作らない。設定更新は実験完走や提出完了を意味しない。
+
+14:56:31 UTCの再確認も同じkernelはRUNNING。CLI2.2.4のkernels_status/outputは
+版引数を解析後リクエストへ渡さないことを親が実装で確認した。`/1`表記だけで
+出力の版固定を保証せず、取得前後のremote latest=1/source一致を確認する条件を
+追跡指示に追加した。別版が発生した場合は、その出力でE26を提出しない。
+独立監査によりlow-level GetKernel/ListKernelSessionOutput/GetKernelSessionStatus
+requestはversion_labelを持つと確認。wrapperを避け、plain slugとversion_label='1'を
+明示する手順を追跡へ追加。RUNNING中のexact source取得は14:55頃の1回でHTTP404、
+payloadなし・原因未確定・追加再試行なし。COMPLETE後に再確認し、source/server設定を
+確認できるまで提出しない。Kaggle再直列化/outputs除去は全cell sourceの意味的比較で
+扱い、raw ipynb hashの不一致だけを科学差分とはしない。CSV10列/整数/有限値/sentinel/
+ID連番/重複edgeは既存graph validatorに加えて検査する。源notebookがXYZもint(round())で
+出力することは親がコードで再確認した。新しいsource-binding PASSや提出はまだない。
+
+### 2026-09-06 15:01 UTC以降 — E26実行中の版取得診断
+
+直前goal turnは15:00:10 UTCに同じkernelのRUNNINGをfresh確認したverified wait。
+goalはactiveで、親によるresume/complete/block変更はしていない。Qwen自動起動もなし。
+重複推論・再push・提出はせず、完了後の版照合で停止しないよう、独立submission監査へ
+exact-v1再送とは別の1回限定診断（plain slug、version_label省略のlatest取得）を依頼。
+その最新取得は成功し、server current_version_number1、kernelId133333893、private=true、
+GPU=true、TPU=false、internet=false、NvidiaTeslaT4、期待どおりのcompetition/3datasetsを確認。
+独立監査の全33cell順序/type/完全source比較はdiff0、cell3のmotion OFF/validator OFFも一致。
+server blob SHA141dc0a1c50a6e513f48d15ed19286786ec6ddb7d53daeae24555ca57ec9f332、
+local/server正規化cell manifest SHA e32f91a95ced1f7d9ca40aa9cb0cc5ec98db7e387fe401f3170ad6bad8fd6490。
+これは取得時点でlatestが意図したversion1である証拠であり、版指定outputの証明ではない。
+earlier404と今回成功はversion指定経路の差を疑わせるが、取得時刻も違うため原因断定しない。
+COMPLETE後もsource/metadataのversion1を再確認し、low-level outputのversion_label='1'と
+取得前後照合を使う。実験条件・事前登録・数値gateは変更しない。
+
+親は既存E23 reference CSVの固定SHAと240126行について、完走後に追加するread-only検査を
+実行した。10列/空欄なし/整数有限値/64bit範囲/id連番/sentinel/dataset block順/edge重複なし/
+node先行と読取前後hash不変はPASS、非有限・非整数表記9canaryは拒否。これはE26の
+出力検証ではない。notebook上のmotion関連7counterはOFF分岐では初期値0のままと確認。
+参照logではsubmission作成が1378.59秒時点だったが、E26の完了時刻は未測定。
+
+15:05 UTC独立運用review: 上記latest sourceを「current version1の確認済みsource/config」と
+扱うことを受入。完走後は取得直前のlatest source/metadataとCOMPLETE/version1を確認し、
+版指定outputを優先する。それだけが404なら、追加pushなしを条件に一回限定でlatest outputを
+診断取得してよい。全CSV/log/config/asset検証後にsource/metadataを再取得し、前後とも
+同じversion1・ID・全sourceであることを必須とする。証明の範囲は「唯一の版が前後不変で
+再pushなしという運用上の来歴」であり、exact endpointによる版固定保証ではないと明記する。
+版変更、source/metadata不一致、非COMPLETE、stale/不完全/曖昧な出力、pin異常、前後照合不可は
+HOLD。合格した出力SHAと一回のaccepted submission IDを結ぶ。科学条件を緩める変更ではなく、
+API経路の診断手順のみである。これは元のsource/output再現性条件に対する限定的な取得方法。
+
+### 2026-09-06 15:18 UTC — E26完走、座標範囲検証FAILで提出停止
+
+E26 version1はCOMPLETE。live logを一回だけ40秒上限で観測し、469eventsと正常stream終端を
+15:10:56.262684 UTCに確認した。submit CSV生成は1204.028801511秒、最終log1215.07651291秒。
+実GPUはTesla T4/2visible devices、predict_minutes_total=9.268008720874786。
+全33cell source・private/GPU/offline・model3種とsupport sourceのbyte pin・motion OFFの
+7counter=0・validator disabled・DeepCenter/dual-seedロードは確認済み。参照からの
+精度改善やローカルSCREEN成功を意味しない。
+
+出力9点をoutputs/kaggle/e26_motion_off_v1へ取得して保存した。
+CSV236052行/12284897bytes、SHA47eed35456bb3626e3903d582fc29f195bb0bb65c1d98db83f01ba908e36db17。
+full log76299bytes/SHA584e9b571fe5475fc5532a0877c702c6a53324bb3e5fc599876071a0bf7268ceは、
+liveのCSV write時刻・行数・hash・最終event時刻と一致する。元artifactは無編集で保存する。
+explicit outputversion1は404で、latestを事前inventory後に実取得した。取得前後でversion1・
+ID・全source/configは一致したが、download supervisorの全metadata等値assertはFAIL。
+server lastRunTimeは2026-09-03T15:12:22.098Z→2026-09-03T15:15:07.310Zと変化し、
+実際のSep6観測とも不整合。値は書換えず、version/sessionの開始証明には使わない。
+独立reviewはcurrent push→RUNNING→live END→COMPLETEと出力hash/sourceの対応を優先し、
+限定的な運用上の来歴確認として扱う判断。metadata全等値PASSとは報告しない。
+
+重要: scripts/validate_submission.pyのself-testはPASSしたが、実CSVは
+`44b6_0113de3b: 1 node rows with coordinate out of range (Z,Y,X)<(64,256,256)`
+でFAILした。まだ全動画の違反総数は確定していない。整数/有限値/10列/id連番/sentinel/
+4dataset順序/edge重複なしの追加検査はPASSでも、bounds FAILを上書きしない。
+判定はTARGET_CSV_INVALID_NO_SUBMISSION。新しい提出ID/LBなし。原CSVを直接書換えず、
+原因担当と独立review担当へ全違反node・周辺edge・座標生成段階の詳細診断を依頼した。
+記録: outputs/kaggle/e26_motion_off_v1/VALIDATION_STATUS.json。
+この既知invalidを5分監視で再提出したり、完了済みkernelを実行待ちと扱ったりしない。
+
+### 2026-09-06 15:38 UTC — E26境界原因レビューと修復設計
+
+全4動画の120460 nodeを独立監査し、違反総数は厳密に1件と確定した。
+44b6_0113de3b / node12069 / t49 / y256（有効上限255）、CSV物理行11615。
+唯一の接続は11797->12069、入次数1/出次数0の終端である。E23はt47の11525から
+11793->12065へ進む別枝で、11797/12069を残さない。確定した直近の欠陥はwriterが
+下限のみをclampし上限を保証しない点。終端linefitの外挿は有力な仮説だが、E26の
+raw/pre-linefit浮動座標が保存されていないため、その段階が数値的原因とは断定しない。
+refinementの無信号時入力維持もあり、上流rawの範囲外座標は完全には排除できない。
+
+親設計analysis/e26_bounds_repair_design.mdは独立review SHIP。実画像メタデータの
+厳密な(T,Z,Y,X)とshapeを確認し、従来のPython丸め後に上下限を保証する汎用writer修復。
+モデル/graph/ID/順序/科学設定は不変。全補正数と補正前float/丸め後/clamp後/補正量を
+記録する。public4再実行では既知のy256->255以外の行/軸/値/構造差はNO SUBMIT。
+過去の中間値欠落を認めた上で正しさを修復するもので、原因を特定したふりはしない。
+
+親のread-only整数写像監査: E23参照240126行/122207 nodeで変更0、E26 v1の236052行で
+上記1軸だけ変更。両CSVの前後SHA不変、変換CSVは作成していない。新ノートブックの
+再実行を代替する検証ではない。最新の直接ユーザー依頼に対し、一回600秒・retry0・
+fallback0の親監督付きQwen Cloud qwen3.7-plus実装taskを準備した。これは自動goal/
+heartbeatからのworker起動許可ではない。修復コード/新kernel/提出はまだ存在しない。
+
+完走済みE26の5分監視は終了し、既存automation2を元の「2時間ごとの定期メンテナンス」へ
+復元済み。既存prompt/通知failed_runs_onlyを保持し、重複automationは作成していない。
+E26はCOMPLETEかつinvalidであり、実行待ちでも提出待ちでもない。目標は未達、E23の
+LB0.924が従来の基準のままである。未完成変更のcommit/pushは行っていない。
+
+15:39:23.348361 UTC、bounds_repair1の直接監督付きCloud実装を一回開始。
+route=subscription-cloud-only / qwen3.7-plus / retry0のadmission成功。ただしQwenは
+本文のみの指示に反しapply_patchを試み、15:39:47にinvalid hunkで拒否された。
+親は最初の違反で停止。15:39:57.592675終了、exit130、34.24秒、timeoutではない。
+log901bytes、SHA1599a1b58e1e44b2e5e59e1ce7c138115dc723415910a3a3a2239005bb2c8292。
+worktree変更0、lock解放、workerプロセスなし。コードやテストは採用していない。
+元taskは終了し再試行しない。複数成果物/ファイル作成を意識した依頼が誤ったtool選択を
+誘った可能性を新しい配送仮説とし、ファイル操作を一切含まないhelper本文だけの狭い
+別unitを設計中。科学要件やモデル経路を緩めず、別途独立レビューを行う。
+親の既存postproc/contract/launcher回帰は529 PASS(16.30秒)。修復実装テストではない。
+
+追加の原因監査: retention guardの60frame fallbackはE23とE26で同一動画・同一値で、
+意図したper-frame検出保持処理。モデル欠損fallbackではない。負のdeepcenter_rejected表示は
+未加算geometric counterとの差を出すE23由来のprint不備。実counterのmissingは全動画0で、
+チェック/受理/拒否数は実験間で異なる。run全体が同一とは扱わず、今回のbounds修復に
+この既存診断表示の変更を混ぜない。
+
+15:42:14.409510 UTC、独立レビューを通した別のhelper本文のみunitを一回開始。
+task SHAab4973e0c6f239f67cf62123cfa140b9c49dc7b1b900bb0b194a791a42c20b7e、
+上限300秒、Qwen Cloud qwen3.7-plus / subscription-cloud-only / retry0。
+15:43:20.099308終了、exit0、65.69秒、tool0、timeoutなし。しかし先頭Markdown fenceで
+strict JSON parseがFAIL。log16487bytes、SHA78f9e0c72f3c24e48eefd48b473ec51f9a81c590c6a51e902f4655988d0871b5。
+worktree変更0、lock解放。本文の多重escapeや科学的な実装欠陥も疑われ、独立監査へ渡した。
+本文を復号・修正して採用せず、事前停止条件どおり追加の自動的な縮小依頼/再試行はしない。
+接続不能ではなく、モデル出力が受入条件を満たさない実装配送HOLDである。
+親SOLによるアプリ実装への置換はユーザーのexact Qwen選択を変えるため勝手に行わない。
+独立reviewの最終判定もHOLD。形式不備だけではなく、通常の小数丸めまで境界補正と
+誤計上する条件、全体のsamplesが20件に制限されない実装、node行の必須sentinel欠落/
+任意値引継ぎ、row_id上限不足、multiscales曖昧性未拒否、report更新の原子性不足がある。
+したがって外側fenceだけの除去では受入不能で、コードの実質修正が必要。
+E26 v1は依然NO SUBMIT。新kernel、提出ID、LB、学習Lossの改善は存在しない。
+
+後続goalの停止監査: 元の直接依頼turnと2回の自動継続で同じ実装依存を再確認した。
+Qwenの受入可能な成果物なし、実装workerなし、許可された別モデルへの変更回答なし。
+自動継続は直接ユーザー起点のCloud利用条件を満たさず、完成済み原因診断/設計の再掲を
+進捗とは数えない。安全に実装・再実行・提出へ進む経路が残らないため、3turn目に
+goalをblockedへ更新した。金メダル目標は未達・不変。今回の境界修正だけSOLへ切り替える
+判断をユーザーへ求めており、回答を勝手に承認扱いしない。2時間メンテナンスは維持する。
+
+### 2026-09-06 16:44 UTC — 直接ユーザー承認でCloud Flashへ切替
+
+ユーザーの「それで進めてください」により、実装をexact `qwen3.8-flash`へ明示変更。
+設計・原因分析・独立reviewはSOL、application code/testはQwen著者のままとする。
+サブスク外課金・Plus/Max/SOLへのfallback・無人Cloud worker起動は行わない。
+AGENTS.mdはこのturnで編集せず、Flash選択時だけ使用するworker policyへ最新決定を明記。
+共有queueは明示 `--cloud-only --cloud-model qwen3.8-flash` を追加し、既定Plus経路と
+既定catalogはbyte不変。別Flash catalogのdelivery指示は本文のみtaskでtoolを使わない。
+provider/認証元/effort none/retry0/lockは維持。これは接続設定で、科学実装のSOL代行ではない。
+親は関連545件PASS(20.49秒)、運用test34件・Ruff・shell構文・diff checkを確認。
+独立reviewも34件PASSとPlus不変を再確認してSHIP。別担当は隔離fake subprocessで
+Flash/default Plus/共有枠busy/catalog不一致の実queue分岐を検証した（実接続の証明ではない）。
+
+新しい手渡しはanalysis/e26_flash_bounds_task.md、SHA
+60ab22aae33204b86b51c0b130347ecd27e0920e13b0308732f3695aa05035d7。
+独立設計reviewはSHIP。helperとtestsを二つのliteral Python blockで返す一回600秒の
+親監督付きtaskで、tool0/retry0/fallback0。reportの原子性・全体20sample上限・丸めと
+境界補正の区別・Zarr path0の曖昧性・sentinel・整数精度を受入testへ固定した。
+final ID/time検証はserializerのfail-closed前提で、既存upstream raw int castは変更しない。
+旧Plusの失敗成果物を修正して採用する作業ではない。
+
+16:42:55.197660→16:42:55.477575 UTC、初回受付は0.281秒/exit2で共有Cloud枠busy。
+model invocation0で停止、worktree不変/lock解放。log85bytes、SHA
+416e9d7000c9b55c672aa8031b26358331b9581f1536f0b84d007e58675e2e00。
+その後lsof ownerなしと同じlock inode10391861のnonblocking flock成功を確認した。
+親は外部状態が変わったため、一度だけ同taskの再受付を許容すると明示判断し、独立review SHIP。
+provider/model失敗のretryではなく、未消費の単発呼出し予算を使う。旧logは保持。
+16:44:10.715034 UTC、二度目の受付成功: subscription-cloud-only / cloud /
+qwen3.8-flash / automatic_retry0。worker task01a0779b-23a6-7741-a529-11fe13d76751。
+log: outputs/local/e26_implementation/flash_bounds1_admission2_WORKER.jsonl。
+この受付時点は応答待ちで、修復実装受入・新kernel・提出・新LBはまだない。
+再度受付拒否またはprovider/tool/scope/format失敗なら停止する境界を維持した。
+以前のgoal blockedはapp上で勝手にresume扱いせず、この直接ユーザー依頼を実行している。
+
+16:45:20.510997 UTCにnormal turn.completed、exit0/tool0、69.797秒で終了。
+log27622bytes/SHA98983ba840ec9a8489d6300e191a8e4e7bc491f66439416637e9b3b99493d6db。
+input5351/output7446tokens（reasoning0）、実消費Credits/契約残量は未取得。
+strict HELPER/TESTS literal二blockとAST parseはPASS。親は全文を読み、元bytesそのままで
+outputs/local/e26_implementation/flash_bounds1_reviewへ隔離保存し、本体src/testsへ未採用。
+helper SHA31a95e7ceac47c89f45312a916cadaaaa348b61cda9f80636f26616f0a8d2005、
+tests SHAa8a9a794bd50e6557899674ad07be51416199a1151934fd08cd59393909f9996。
+実pytestは53PASS/8FAIL(0.34秒)、RuffはI001とE501三件でFAIL。
+主因はclip後値をroundedへ上書きして補正判定が常false。さらに同entry path0重複を通す、
+wrong-axis path0重複を見逃す、Real IDをfloatへ丸め精度を失う、sample={}を受入れる欠陥。
+親probeはFraction(9007199254740993,1)の1減少と非整数Fraction(18014398509481985,2)
+受入を再現。dim5の4.5001、負座標fixture、12件なのに20sample期待するtest側にも誤りがある。
+
+独立reviewの条件付きSHIPを得て、同一実装の一回だけの明示feedback correctionを設計した。
+正常なdeliveryを具体反例で評価した修正工程であり、無条件再生成/通信失敗retryではない。
+モデル/none/Token Plan/科学範囲を維持し、最初受付から通算600秒の16:54:10 UTCまでに限定。
+旧task/source/test/logは保持、親SOLがapplication codeを修正しない。次不合格なら停止する。
+task analysis/e26_flash_bounds_correction_task.md（元契約/全文/具体的失敗/正しい期待値を含む）、
+SHA9f619f29b0a789b245521b281591e463dbf0db8d137c6b2c186a38f2d6a358f6。
+16:50:45.451707 UTC開始、残204.548293秒、logは
+outputs/local/e26_implementation/flash_bounds1_correction_WORKER.jsonl。
+
+16:52:32.692993 UTC、correctionは107.241秒/exit0/tool0/timeoutなしで正常終了。
+log43309bytes/SHAc660b59197ead61a52ce085b0f39a6d101bcd37678edf492760e32d0bdce85a4、
+input14047/output11706tokens、reasoning0。元600秒期限内、fallback/transport retryなし。
+strict二literal block/AST parse/隔離保存byte一致を親が確認した。
+helper SHA8267b19f12faece4e8f70c55e1e231200f2a085e0550fc3b5dff5138f29367f8、
+tests SHA8d19dccddb6dc1bfa119cc00d95aa5f15b7916a44d71e648979768ddfc4d453d。
+隔離先outputs/local/e26_implementation/flash_bounds1_correction_review。
+親の実pytestは97PASS/2FAIL(0.29秒)、Ruff I001二件でFAIL。
+2件は誤oracle: fresh reportへsamples=[]を再代入、既存absolute_delta45へ45を代入して
+reject期待するno-op。これを直すだけでも受入不可。親の追加probeはsample.original_floatに
+Fraction(300,1)を入れると受入後json.dumpsがTypeError、元float1.0とrounded300の不整合、
+非truncated samplesの欠落、node1に対するx_count99も受入れることを再現した。
+補正数が常0の主バグとReal ID精度は改善しているが、PASS数を科学的改善や受入の証拠にしない。
+単位はFLASH_HELPER_ACCEPTANCE_HOLDで終了、追加worker/fallbackなし。
+canonical helper/testは不存在、承認worktree clean/lock解放。元E26 v1/CSV無編集、
+新kernel/提出/精度改善/学習Loss改善なし。次の修復設計はbounds design末尾へ記録した。
+
+運用TODO（今回の科学修正へ混ぜない）: 約10時間前のpytest fake-queue孤児3件は削除済み
+一時worktreeのrelease待ち。独立監査で本番Cloud/worktree lockを保持せず、実model/認証へ
+到達していないことを確認。test_same_worktree_is_exclusiveのlauncher後処理にqueue PIDを
+直接終了する予備経路がない。今回作成したものではなく停止/改変していない。
+この既存cleanup課題は今回初回busyの原因とは断定しない。
+
+最終の独立code reviewもHOLD。reportのJSON型/丸めと補正/sampleと集計の整合、
+metadata path/version型、誤oracle/残lintが受入を妨げると確認した。NaN/Inf IDは例外で
+拒否されるが、専用例外型への正規化は未完（値を無言で受入れる問題とは区別する）。
+文書reviewはFlash current stateの整合を確認。戦略書section8の古い「local gate全通過だけ提出」
+を、既に承認済みのgold-loop最新版（local REJECT維持で探索的提出は可、integrity/errorは不可）
+へ揃えた。科学数値gate/段階GT停止/E25退役は不変。元E23/E26 notebookとE26 CSVのSHA不変、
+承認worktreeclean/lock解放、diff check/shell構文PASS。未完成単位のcommit/pushなし。
+
+### 2026-09-06 17:10 UTC — Flash未達に対する明示Max切替
+
+ユーザーの「改善しなければ3.8MAXで」を、Flashの最終独立HOLDに適用する親判断。
+exact qwen3.8-max/Token Planのみ。自動route fallback/従量課金/追加購入はしない。
+最新[Token Plan公式一覧](https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview)
+でMax対象を確認し、[Responses仕様](https://docs.qwencloud.com/api-reference/chat/openai-responses)
+でqwen3.8系列none対応を確認。残Credits/実消費量は未取得。呼出しはこの直接user turn内の
+親監督coding taskだけで、自動goal/heartbeatへの拡張はしない。
+OpenAI Docsの設定/移行指針に沿って明示model選択だけを拡張し、既定Plus/既存Flash、
+認証元/Token Plan endpoint/none/retry0/共通Cloud lockは変更しなかった。
+shared queue SHAa86584d0f6f20f78d64621a4d4637d05e9c279ba3bd5dd1d397de618c3cd131c、
+Max catalog SHA27c323d73cdff9f17e7c581e670ba17439d6deb24abcc510068b8d2772888b46、
+Max policy SHAc96cacc5bfbd1a52b99cc1bb2a0ec2c34b98ca32dd37dcf18da0d2db163303c2。
+親42tests PASS(19.52秒)、関連553PASS(21.63秒)、Ruff/shell/diff check PASS。
+独立reviewは42PASSでSHIP。別担当のisolated main→Popen auditはMax正常配線、Plus/Flashの
+旧版argv/env/log完全一致、単一Cloud slot busy停止、Maxcatalog mismatch停止を実測した。
+
+自己完結task analysis/e26_max_bounds_task.md、SHA
+b5d8bfaa4fcd8e80d9acb43421bf48631e39edc6eda92ad7133afa332287d078、独立仕様review SHIP。
+親の重要なoracle明確化: Cは補正されたCALL数。helperはIDの過去重複を禁止しないため、
+完全sampleでもunique(row_id,node_id,t)数=Cを課さない。visible unique数はCの下限だけ。
+完全sampleのaxis別件数/maxは厳密一致、切詰めsampleの件数/maxは下限だけにする。
+元Flash helper/tests全文と真の破損fixture/no-op誤oracleを明示してMaxへ渡した。
+17:10:45.844728 UTC受付成功: subscription-cloud-only / cloud / qwen3.8-max / retry0、
+worker01a077b3-7ae1-73b3-96c4-4c5b94daf320、deadline17:20:45.844728 UTC。
+log outputs/local/e26_implementation/max_bounds1_WORKER.jsonl。応答/受入はこの開始記録時点で未確定。
+新kernel/提出/精度改善なし、旧goal blockedを親がresumeしたとは扱わない。
+
+### 2026-09-06 17:20 UTC — Max応答を受領、実装受入はHOLD
+
+Maxは17:13:29.870505 UTCに164.016秒、exit0/tool0で正常終了。厳密なHELPER/TESTS
+二つのliteral Python blockとASTの配送検査はPASS。使用量はinput17626/output13860、
+reasoning0/cached0 tokens。Credits実消費と最新残高は未取得で、推定残高を断定しない。
+log SHA c32a3dab01ccfd2ff3f67f523f31573a0e2154ece9303a69a1be9eb984ba2655。
+helper SHA 5559faaeef401698b705d3eeeb29d540570ded7548183e6c401a7d7704ae3942、
+tests SHA bb033e48dd318d56328549e4d5afcb524b7b00362901a6830571b0035cde0b93。
+原文をmax_bounds1_review配下へ隔離保存し、親は両ファイルを全文再読した。
+
+隔離pytestは112PASS/1FAIL、親再実行でも同値（0.12秒）。失敗は既存sampleの
+absolute_delta45を45のまま代入してrejectを期待する誤oracleであり、これだけで
+clip実装の退行とはしない。Ruffはhelperのunused inspect(F401)とtests import(I001)。
+再実行harnessは最初PYTHONPATH設定欠落でimport前停止し、srcを明示して上記を再現した。
+他の運用42件/関連553件PASSは接続設定の検証で、未採用helperの受入成功ではない。
+
+独立レビューHOLD。独立memory-only probesで、(1)rounded300/clipped254/delta-46を
+内部整合させた誤projection、(2)sample t100(T100)とID2**63、(3)21回の同じ補正量・
+sample20でtruncated false、(4)x sampleに対してz-only axis totals、を誤受理すると確認。
+NaN/Inf IDは拒否されreport不変だが、例外型がValueError/OverflowErrorで指定の
+OutputBoundsErrorに統一されない。metadata非path0 entryのaxes検査とai<=Cも未完。
+実際の検証漏れと誤ったテストを区別し、次修正はvalidationと対応oracleだけに限定する。
+
+原600秒監督枠の残りでは次の完全応答と受入を安全に完了できないため、この単位は
+MAX_HELPER_ACCEPTANCE_HOLDで終了。追加起動/期限延長/自動fallbackなし。
+Maxモデル選択は維持。既知supervisor/launcher終了・worktree lock無し・worktree clean。
+canonical src/testsは未採用、Notebook変更/GPU/提出/commit/pushなし。
+E26 v1は完走済みinvalid、E23 LB0.924が基準、精度改善は未確認。goal blockedも不変。
+receipt: outputs/local/e26_implementation/MAX_BOUNDS1_RECEIPT.json。
+OpenAI Docsのmodel-migration手順に従い、今回の明示selectorだけを追加し、
+他の既定モデル/effort/provider/authと既存Plus/Flash catalogは維持した。
+
+### 2026-09-06 17:28–17:32 UTC 定期メンテナンス
+
+canonicalだけを確認。HEAD7368cebe2d445e7eb6d0492133fdfb9aed9e51f7、branch
+feat/eval36-kernel-recovery、同名origin upstreamに対しcached ahead11/behind0。
+fresh fetchは未実施のため現在remoteとの非競合保証ではない。staged差分は空。
+trackedのunstaged全差分を親と独立監査で分担して全文確認し、untracked一覧も確認した。
+本メンテナンスによる変更はこの台帳だけ。旧Flash経路の一段落を明確な履歴時制へ修正し、
+未完ST-R3 WIPの棚卸しを追記した。README/AGENTS/CLAUDE/公式実装/固定protocolは変更しない。
+
+- 既存ST-R3 raw-provenance WIP（source +178/-31、tests +413/-7）には、
+  output-parent/staging pathname displacement、final receipt改変/衝突、fsync後rollback、
+  BaseExceptionGroupでの原障害とrecovery/close障害保持、verified publicationまでの
+  checkout guard保持を追加した差分がある。本メンテナンスで作成した実装ではない。
+  独立した実装受入/実データ確認は未完で、ST-R3 HOLD解除や科学的改善を意味しない。
+- 未追跡の関連WIPは `scripts/st_r3_checkpoint_evidence.py`、`scripts/st_r3_generate.py`、
+  `scripts/st_r3_gt_view.py`、`scripts/st_r3_preregister.py`、
+  `src/biohub/st_r3_checkpoint_evidence.py`、`src/biohub/st_r3_generation.py`、
+  `src/biohub/st_r3_gt_view.py`、`tests/test_st_r3_checkpoint_evidence.py`、
+  `tests/test_st_r3_generation.py`、`tests/test_st_r3_gt_view.py` の10件。
+  新規採用・commit/pushの対象にはせず保持した。
+- 親の軽量確認: `.venv/bin/python -m pytest tests/test_st_r3_raw_provenance.py -q`
+  は **91PASS / 5.52秒**。同source/test、launcher testおよび上記10件の
+  `.venv/bin/ruff check`、`sh -n .codex/bin/qwen-implement`、`git diff --check`はPASS。
+  Max隔離初稿の既知112PASS/1FAIL・lint2件とは別のtest対象であり、Max受入はHOLDのまま。
+  新しいsource編集はなく、型チェック設定もないため追加typecheckは行っていない。
+- E23/E26の固定Notebookと保存CSVの4SHAは直前記録と一致。officialはcleanで
+  HEAD075fc5f5a52d11077f9dc2b074644618f26939e2。canonicalを参照する既知種類の
+  ローカル生成/実装processは検出しなかったが、remote稼働を照会した主張はしない。
+  進捗/receipt監査はMax未採用、E26 v1 invalid、提出なし、E23 LB0.924と整合。
+- `get_goal`の現在値は **blocked**。このheartbeatでresume/達成扱いせず、
+  前回の次修正設計を保持する。Qwenの無人起動禁止を迂回せず、新worker、Kaggle API、
+  ダウンロード、学習、推論、採点、提出は行っていない。
+- 未完で複数作業の差分が混在しており、commitなし（新SHAなし）、pushなし。
+  文書整理と局所検証以外に重要な状態変化はなく、重複通知は不要。
+
+### 2026-09-06 19:29–19:33 UTC 定期メンテナンス
+
+HEAD7368ceb、cached ahead11/behind0、staged空、goalの現在値blockedを再確認。
+unstaged全差分を独立担当二名と分担して確認し、固定Notebook/CSVとMax隔離応答のSHAは
+前回記録に一致。新規helper採用・実行・提出・精度改善はなく、E23 LB0.924を維持する。
+fresh fetch、commit（新SHA）、pushはいずれもなし。既存未完WIPはそのまま保護した。
+
+新規TODOはAGENTS.mdの旧実行例だけ。同例は必須の `--cloud-only` が欠けており、
+現launcherの静的な引数検査ではexit2になる。今回のMax選択には既存
+`gold_loop_protocol.md` の `--cloud-only --cloud-model qwen3.8-max WORKTREE` が正しい。
+AGENTS.mdは定期メンテナンスの原則不変更を守り、指示書を次に明示更新する際の課題として
+ここに記録する。無人起動を許可する変更ではなく、実workerでの確認もしていない。
+
+親のRuff・`sh -n .codex/bin/qwen-implement`・`git diff --check`はPASS。
+独立担当の `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider
+tests/test_st_r3_raw_provenance.py tests/test_qwen_implement_launcher.py` は133PASS/24.63秒。
+一時fixtureとmockによる検査のみで、実モデル・認証helper・外部network・Kaggle APIは未使用。
+この結果は未採用Max helperの既知112PASS/1FAILとlint2件を解消しない。
+本回の編集はこの台帳追記のみ。次の修正設計とHOLDを保持し、Cloudの自動再起動は行わない。
+
+### 2026-09-07 04:02 UTC — Max検証修正を採用、ノートブック統合へ
+
+最新の直接ユーザー依頼 `qwen3.8-max にしてこのプロジェクトを進めてください` に基づく
+監督付きcoding turn。既存exact Max/Token Plan/none/transport retry0/fallback0を実受付で確認。
+新しいworktree、共有provider設定変更、秘密情報複製、追加購入、PAYG切替はなし。
+goalの現在値blockedは維持し、heartbeatや自動goal再開によるCloud利用とは扱わない。
+
+r2本体タスクは03:44:22.801483 UTC開始、900秒枠。初回は03:46:02.857988に100.056505秒で
+exit0/tool0、strict3blocks/AST PASS、130PASS/3FAIL。形状をlist変換してから検証するため
+None/scalarでTypeError、巨大Fractionのtest値2**200は有限floatなので誤oracleだった。
+さらに個別axis<=corrected、JSON scalar型、sample time int64、distinct identity下限の漏れを
+親反例で確認。03:52:55.405489の一度だけのfeedbackは原deadline03:59:22.801483を維持し、
+03:55:02.623277に127.217788秒/exit0/tool0で返却。156PASSだがdistinct identity検証は未実装で、
+対応testが第二sampleを消しmax不一致で落ちていた。独立HOLDによりr2単位を閉じた。
+
+原因を「長い全文再著作で明記済みguardが脱落し、testが別条件で成功」に絞り、親が同じ直接turn内で
+次単位を **1関数＋1testだけ** に再設計した。analysis/e26_max_identity_guard_task.md、独立設計SHIP。
+03:59:52.241666開始/300秒/単一応答/feedbackなし、04:00:11.763603に19.521937秒/exit0/tool0。
+可視(row_id,node_id,t)のdistinct数>corrected_nodesだけを拒否し、同一ID反復・truncated履歴は保持。
+全周辺bytes不変、親全文diff・独立実装review SHIP。156PASS/Ruff PASS。新testを旧helperへ適用すると
+DID NOT RAISEで失敗することも親が実測し、非空振りを確認した。
+
+canonicalへQwen-authored helperと2testを採用。importだけの機械整形後、関連693 tests PASS（2.18秒）、
+Ruff PASS、git diff --check PASS。accepted SHA256:
+
+- src/biohub/output_bounds.py: d39549fbaeefc9edbd6273e10c3cf96377b33b1ea6d080befec6bd12071e5df5
+- tests/test_output_bounds.py: 1bbbe9ac6c19f3ec36ea8b4701eddd0565110c3d1ab32838d715bea5ac7087b9
+- tests/test_output_bounds_regressions.py: 8f6e243a7b34e33e2ae5e1d493700f7ca81c92244cc07d117c2152a6552a887f
+
+親のread-only全CSV写像はE23 240126行/122207nodeの変更ゼロ。E26 236052行/120460nodeでは
+CSV id11613、44b6_0113de3b/node12069/t49のy256->255だけ。4 datasetの実Zarr metadataからshapeを取得、
+他field/edge/orderは維持、入力SHAは前後不変。これは整数CSVの検算であり再生成/提出ではない。
+新notebook/version/GPU実行/提出/LB改善はまだない。E23 public0.924を基準維持。
+
+実行log SHA256:
+
+- max_validation_r2_WORKER.jsonl: 6b975c7bb4bbe7b75b426e8f066f49d108868bdf34bea50342b8d44d053db79a
+- max_validation_r2_feedback_WORKER.jsonl: 0af621360e99221a28ba229d51aafcd6b3709b565642b69a8b9f52ce9957439b
+- max_identity_guard_WORKER.jsonl: 20c602f75628fe4ace00309935731a487220c51372522c4e8fb17cb2648ea72b
+
+9月7日の公式Rules/Code Requirementsをログイン済みブラウザでread-only再確認: 規約accepted、
+5提出/日、Notebook経由、CPU/GPUとも12時間、internet off、submission.csv、公開利用可能外部assets。
+Kaggle CLI提出一覧もfresh取得し、最新acceptedはE23 ref55760016/COMPLETE/public0.924、E26なし。
+GPU残量とpush直前のasset/version/quotaは新run前に別途確認する。秘密の残量/実消費は推測しない。
+次はanalysis/e26_max_notebook_integration_task.mdの6箇所だけをQwenに著作させ、全source保存一致と
+synthetic writer-tailを検証してから直列物理評価。旧E26 v1フォルダ/CSVは上書きしない。
+
+### 2026-09-07 04:34–04:42 UTC — Max実装統合を受入、E26修正版v2を直列実行
+
+同じ直接ユーザー依頼の監督付きturn内で、親は統合範囲をcell13の6領域へ固定した。
+Qwen Cloud exact qwen3.8-max / Token Plan / none、各単位transport retry0 / fallback0。
+04:07:57開始の600秒枠で初回44.44秒、sourceのみSHIPだがtest5 PASS/5 FAIL。
+一度のfeedbackは04:12:22開始、原deadlineを維持して69.00秒で完了。科学条件に触れない
+固有token・CSV/reportの実byte SHAを記録するprovenanceだけも事前独立レビュー後に追加した。
+実装SHIP、test7 PASS/3 FAILのため、この単位はtest未受入で閉じた。
+親は原因をtest oracleに限定し、04:21:50開始の4関数のみ/300秒/単一応答単位を設計。
+23.81秒の応答で9 PASS/1 FAIL。親handoffの圧縮表記node_id1を文字列と誤解したため、
+04:26:38開始の4定数のみ/180秒/単一応答単位で型を明記し、2.68秒で修正を受領した。
+各単位はtool0/exit0で閉じ、SOLによるapplication/test logicの代筆は行っていない。
+
+最終親検証は関連703 PASS（2.31秒）、新規4 Python filesのRuff PASS、git diff --check PASS。
+独立検証はnotebook10 PASS、helper統合166 PASS、Ruff PASS、全差分SHIP。
+全33 cellのうちcell13 source以外のオブジェクトは旧v1と同一、helperは完全一致で一度だけ埋込。
+candidate notebook SHA=e631fe0d68b9f862085bc14c7c39873f82b8d186ce7c15150381f9dd97798170、
+metadata SHA=5aea96ed603325fd874c2b2c29d2e4015cfe19ced740faae44ef11d917e1ac68。
+詳しい全file SHAと物理受入条件はanalysis/e26_bounds_target_run.mdに実行前固定した。
+元v1 source/CSVとE23 CSVは不変。新規9対象fileの限定secret scanで該当なし。
+既存WIPは保持、AGENTS/README/officialは本turnで未編集、commit/git pushなし。
+
+04:31 UTC GPU枠29.66/30時間残りを再確認し、既存3 assetsはCC0-1.0。
+v1 source/config/current versionを直前照合後、04:33:42.747148 UTCにKaggle pushを一度実施、
+04:33:45.624396 UTCにkernel133333893 / actual version2として受理。
+slug=taichiiiii/biohub-e26-motion-off-exploratory、private/T4/GPU/offline、timeout43200秒。
+04:34:34.875399と04:40:47.344447 UTCに全33 source/config/assets一致、version2/RUNNING。
+この時点ではCSV取得・提出・LB改善はまだなく、E23 public0.924を基準維持。
+
+最初のlive-log接続（04:35:48開始）は128 events保存後にChunkedEncodingErrorで切断した。
+実験失敗とは断定せず、独立運用レビューSHIPのうえ04:42:13.533187 UTCに全source/config/
+version2/RUNNINGを再確認して同じ実行へ一回だけread-only再接続（観測cap900秒）。
+最初のlogも残し、再push・kernel再起動はなし。固有tokenと後続provenanceの全hash照合は緩めない。
+
+### 2026-09-07 04:56–05:12 UTC — E26 v2の集計期待FAILを記録し、v3再現実行へ
+
+v2はCOMPLETE。exact version_label=2のoutput要求は404で、一度だけ事前承認latest経路へ。
+取得前後version2/全33 source/config/assets/Docker/COMPLETE一致、173 unique inventory/後続pageなし。
+新live tokenをRUNNING中に確認済み、取得full logで同token2回、provenanceのhelper/CSV/report SHA一致。
+これは運用来歴の確認で、exact-endpointによる版保証ではない。5成果物をoutputs/kaggle/e26_bounds_v2へ保存。
+
+親・独立二担当の全CSV/graph監査はPASS。236052行/120460 nodes/115592 edges、10列/int64/
+global row ID/全sentinel/dataset block/node-before-edge/重複/dangling/t+1/degree/shape全合格。
+全10fieldをv1と逐次比較し、差はid11613/44b6_0113de3b/node12069/t49のy256->255のみ。
+CSV SHA=1a2975db15961ba4b92c67019b209ccbb1bd2e0a9c71011fd2595d82da6e3390。
+実model/support SHA、T4二shards、motion OFF/validator OFF/DeepCenter loaded、意図した既存
+retention primary fallback60 framesはv1と同じ。run_statsはprediction時間以外同値。
+推論9.051分、最終log1285.713秒（約21.43分）。hidden199本/9.6hの保証や新学習Lossではない。
+
+**元report条件はFAIL、v2 NO SUBMIT。** reportは新上限y補正1件に加え、6bba_05db0fb1の
+x下限補正6件（node7471/19919/21305/23706/24088/61812、rounded-1->0）も記録した。
+6件とも旧serializer max(0,int(round(float(...))))の結果と同じで、v1/v2 CSVはx=0。
+親が旧整数CSVの写像から総補正数を推定したため、保存時点で見えなくなった旧下限補正を漏らした。
+helper/telemetryは仕様どおり。独立二担当の原因分析も一致し、同v2の事後救済はしないと決定。
+全float/sample/実byteSHAはv2 reportとdownload receiptへ保存済み。
+
+親がanalysis/e26_bounds_v3_contract.mdを前向きに固定し、独立設計SHIP。
+科学/helper/CSVの変更なし、reportは上限1＋旧下限6の7 identities/round/clipを固定。
+float末尾bit/report SHAそのものを事前固定せず、有限性・round整合と新provenance実byteHashを必須にする。
+実行識別子のみを新v3 tokenへ変更するtaskをMaxへ渡し、05:06:28.013124開始→05:06:31.068461終了、
+3.055秒/tool0/exit0/単一180秒枠/feedback0/retry0/fallback0。strict JSON受領後の機械的3箇所置換だけ。
+canonical notebook SHA0976f955fec21352fe37e1afb37b8c40d992fbde61cdea2a43b189d4eae185f2。
+元v2 notebook/test/metadataはignored v2_frozen_sourceへ同hash保存。親703 tests/Ruff合格、独立10 tests/SHIP。
+
+GPU残29.30/30hをfresh確認、current v2/COMPLETE/source一致を直前確認して一度push。
+05:10:28.321519 UTCにactualversion3/kernel133333893として受理、05:12:28.454910に全source/config/
+assets/Docker一致RUNNINGを確認。v3初live観測は05:27:09 UTC以降。追加GPU再run予算なし。
+提出は未実施、E23 public0.924を維持。fresh競技APIはrank920/3195、16番目の表示0.951。
+既確認medal式によるproxy top16を使う計画目標だけ0.953へ更新し、科学gateは変更していない。
+
+OpenAI Docsの同一task追跡手順を確認したが、既存heartbeatがあるため新しい15分追跡は作成されなかった。
+別cron/taskを迂回作成せず、既存2時間maintenanceは未変更。このactive turnでv3の完了確認を続ける。
+
+### 2026-09-07 05:30–05:52 UTC — E26 v3物理SHIP、初回提出受理・採点待ち
+
+Max選択と同じ直接監督turnを維持。新しいQwen要求・科学条件変更・追加GPU runなし。
+05:30:19.903955→05:30:22.706023 UTC、全33cell/source/config/assets/Docker/version3と
+RUNNINGを前後確認し、最初の実live接続でnewtoken完全行をruntime1038.495393004sに確認。
+2.802秒/304events、token確認直後close、stream error0、追加接続0。保存log SHA
+3fb5b9b839cadb19617b24b8b0770efb5f624e94cacb3a09c9156c1024fbab2e。
+先行precheckはlocalのstring boolとAPI bool/machine名の比較誤りでstream開始前に停止した。
+これはobserver verifierのfalse-negative/stream0であり、source/runは変わっていない。
+独立reviewも来歴PASSと確認した。
+
+05:40:42.679024 UTCにCOMPLETEを確認。exactversion3 output APIは404で、一度だけ承認済み
+latest経路へ取得。173 unique inventory/後続pageなし、前後全source/config/version3/COMPLETE一致。
+5成果物をfresh outputs/kaggle/e26_bounds_v3/へ保存し、05:40:48.809364 UTCに再確認。
+exact API版保証ではなく、source/ライブ・最終token/実hashによる運用来歴である。
+receiptはoutputs/local/e26_implementation/e26_bounds_v3_download_receipt.json。
+
+親と独立二担当（Ampere/Heisenberg）全員PHYSICAL_SHIP。全236052行/120460node/115592edge、
+10列/int64/global ID/全sentinel/dataset block/node→edge順/一意性/danglingなし/t+1/degree/座標VALID。
+v1との全field差はrow11613 y256→255だけ。v2とのCSV/report byte一致、7固定補正identitiesと
+旧writer再適用同値、actual Zarr shapes、集計z0/y1/x6/max1/truncated=falseがすべてPASS。
+provenance5field/新token/helper/CSV/reportの実SHA一致、full log token完全行2/旧完全値0。
+最終hash・実時刻と全条件はanalysis/e26_bounds_v3_contract.mdに集約した。
+703 tests再実行PASS（1.89s）、4新Python files Ruff PASS、git diff --check PASS、official clean。
+
+全run最後のlog1771.773s=29.53分、v2は1285.713s=21.43分。予測自体は8.95137分でv2の9.05143分と
+ほぼ同じ。token→Foundgraphsは614.857秒対294.389秒で、候補探索・準備等を含み純checkpoint loadではない。
+run_statsはprediction時間以外全field一致。T4×2、primary/secondary/DeepCenter/support実pin、
+DeepCenter epoch2 loaded、motionOFF/validatorOFF、allow_artifact_fallback=falseと既知retention60一致。
+新規Traceback/OOM/fallbackなし。hidden199本の12h/9.6h以内完了やRAM上限の保証はしていない。
+新学習なし/Loss N/A。ローカルSCREENはINCOMPLETE、E23public0.924をincumbent維持。
+
+最新提出一覧6件/E26なし、quota5残と全source/config/version3 COMPLETEを直前再照合し、
+SDKのcode submissionをversion3/output名submission.csvで一度だけ実行（CLIと同じ明示引数）。
+05:48:24.917302 UTC要求→05:48:26.887224 UTC受理ref56069885。retry/二重提出なし。
+05:48:45.295395 UTC読戻しで一覧7件、同slug/description/file、scriptVersionId347872590を確認。
+Kaggle受付日時05:48:25.793 UTC、score/error空・status省略・totalBytes0は採点待ちであり失敗としない。
+quota numToday1/numTotal7/numAllowedNow4。証跡はe26_v3_submission_attempt.jsonlと
+e26_v3_submission_readback.json（outputs/local/e26_implementation/配下）。
+独立受付監査もPASS。検証したpublic4 CSV hashをhidden再生成CSVのhashとは主張しない。
+
+OpenAI Docsの既存task追跡手順に沿い、既存2時間heartbeat id2に、受理済みID56069885の
+read-only score/error追跡だけを追加してtool成功後toml読戻しで一致を確認。
+名前/2時間周期/ACTIVE/同task/failed_runs_onlyは保存。Kaggle API禁止への例外はこのIDの読取だけ。
+新push/run/download/resubmit/最終選択、無人Qwen/PAYG/認証変更/fallback/購入/resetは禁止のまま。
+終端score/errorを記録後は当該IDの反復取得を止め、元maintenanceを継続。別task/cronは作成しない。
+05:51 UTC get_goalはblockedのまま。親がresume/完了したとは主張せず、金圏目標は未達である。
+
+次のローカル評価修正は本体再著作を避け、未採用Plus unit02aの6test定義だけへ限定する設計を
+別SOLが確認。全arm4paths、None戻り値、片armだけ不正、motion/twin8 exact errors、type3×2、
+実在checkpoint/manifest環境変数で元契約を満たす。workerはまだ起動せず、候補/他testは凍結維持。
+unit02b/03/04と公式段階採点は未完成。今回の進捗は実装修復・再現性検証・提出受付であり、LB改善ではない。
+既存WIP保持、AGENTS/README/officialの本turn編集なし。未採点sourceを保護しcommit/git pushなし。
+
+### 2026-09-07 05:56–06:08 UTC 定期メンテナンス・受理済みE26の読取追跡
+
+canonicalのみを対象とするheartbeat。親がtracked unstaged全8filesの完全diffを読み、
+台帳diff2035行も分割してEOFまで確認した。stagedは空、HEAD7368ceb、branch
+feat/eval36-kernel-recovery、cached upstream比ahead11/behind0。fresh fetchは未実施で
+remoteの現在の非競合保証ではない。未採点・既存WIP保護のためcommit（新SHA）/pushなし。
+get_goalの現在値はblocked。resume/達成扱いせず、Qwen Cloudの無人workerを起動しない。
+
+許可済みの提出一覧をpage_size1000で一回だけ読み、05:57:19.406664 UTCに7件・上限未到達、
+ref56069885、正確なE26 slug/scriptVersionId347872590の一致を確認。SDK属性PENDING、
+public_score/error_descriptionは空、total_bytes0で終端根拠なし。採点待ちを失敗/成功へ
+読み替えず、次の既存周期で追跡する。E23public0.924をincumbent維持、SCREENはINCOMPLETE。
+新規Kaggle push/run/download/submit、GPU/学習/推論、認証・費用経路変更は行っていない。
+
+固定source/tests/notebook/metadataとv3出力の計11fileはSHA全一致。読取専用の
+scripts/validate_submission.pyはself-test4datasetの全canary発火、実CSV VALID。
+4新Python filesのRuff --no-cache、git diff --checkはPASS。新規code変更がないため
+pytest/typecheckの再実行はせず、前turnの703PASSを本周期の実行とは扱わない。
+official HEAD075fc5f5a52d11077f9dc2b074644618f26939e2、cleanを再確認。
+
+本周期の編集はこのhash対象外台帳のみ。冒頭の古い0.950目標を、既存9月7日記録と
+gold-loopにある0.953計画へ整合しただけで、順位再照会・新しい採用gateではない。
+AGENTSのdevelop/Plus表記・旧起動例は最新ユーザーoverrideと異なる歴史記述だが、
+指示ファイル原則不変更を維持。既存gold-loopの明示Max/feature branchを優先し、
+将来の明示的な指示書整理時に整合するTODO（旧起動例は9月6日19:29節でも記録済み）。
+台帳独立レビュー担当はmodel capacity errorで停止したため、親が全文確認を引き継いだ。
+これはQwen実装/実験/提出の障害ではなく、別モデルへの再試行も行っていない。
+別の独立した文書整合監査は完了し、現状ヘッダ4文書・保存SHAに新たな物理/提出矛盾なし。
+追加TODOはe26_bounds_repair_design.mdの歴史節に残る「version 2 is now RUNNING as
+recorded in Current status above」（本周期確認時127–128行）の時点明記。親も原文を確認した。
+現ヘッダはv3完走・受理済みPENDINGを正しく示すが、この一文だけ現在形で参照が古い。
+採点待ちの設計書保護のため本周期は改稿せず、終端後の文書整理対象としてここに記録する。
+他の未提出/RUNNING表記は凍結事前契約または時点付き履歴で、過去の不合格記録を維持する。
+
+### 2026-09-07 07:57 UTC 定期メンテナンス・E26採点待ち継続
+
+07:58:37.154391 UTC、許可済み提出一覧をpage_size1000で一回だけ読取。7件・上限未到達、
+ref56069885、kernel taichiiiii/biohub-e26-motion-off-exploratory、scriptVersionId347872590
+（受理済みnotebook version3）を照合。SDK属性PENDING、public_score/error_description空、
+total_bytes0、終端根拠なし。次の既存2時間周期へ継続し、今周期の再照会は行わない。
+固定11fileはshasum -a 256で前周期の全SHAと一致、officialはclean/075fc5f5を維持。
+git status/diff/recent commits/upstreamを確認し、staged空、HEAD7368ceb、feature branch
+feat/eval36-kernel-recovery、cached upstream比ahead11/behind0。fresh fetchなし。
+get_goalはblocked。E23 public0.924をincumbent維持、E26 SCREENはINCOMPLETE。
+本周期はこのhash対象外台帳の観測追記のみ。source/config/protocol/指示書は不変更、
+commit（新SHA）/pushなし。git diff --checkを実行しPASS、コード変更なしのため
+pytest/lint/typecheckの再実行は不要と判断した。過去のテスト結果を今回の実行とは扱わない。
+既知TODOと次のunit02a限定修正設計を維持し、新規Qwen/GPU/学習/推論/提出は行わない。
+
+### 2026-09-08 02:07 UTC 定期メンテナンス・E26終端結果
+
+本周期の一回だけの許可済み提出一覧（page_size1000）は7件、上限未到達。
+02:08:50.997403 UTC（11:08:50 JST）にref56069885と正確なURL
+`/code/taichiiiii/biohub-e26-motion-off-exploratory?scriptVersionId=347872590` を照合した。
+受理済みnotebook version3、SDK status COMPLETE、public_score文字列 `0.922`、
+error_description空、total_bytes204999100。有限scoreを終端根拠とする（statusだけではない）。
+これは初めて確認した終端の観測時刻であり、実際の採点完了時刻・採点所要時間は不明。
+前回保存観測Sep7 07:58 UTCとの間を、未確認の定期照会や結果で補完しない。
+**submission56069885の反復API確認を以後停止する。** 既存2時間周期の保守は継続し、
+別の監視・再提出・最終選択変更は行わない。受付attempt/readbackの原本は変更しない。
+
+E23既確認public0.924比は表示上−0.002、改善なし・E26不採用/E23維持。
+独立解釈レビューも同判断。絶対差0.002は既定の0.005採用上の保守幅未満であり、
+これは動画再抽出・public/private転移の目安で、同一hidden A/B差の標準誤差ではない。
+SCREEN未完のため、motion OFFが真の悪化原因、または差が単なる雑音とは断定しない。
+adj_edge/division成分・動画別gain/loss・hidden実行出力は今回のAPIでは未取得。
+public4 CSV SHA1a2975db…6e3390は保持するが、hidden再生成CSVのhash・実行時間保証には使わない。
+ローカル比較値が未完なので、相関表には未測定として追加し相関の新しい対データには数えない。
+
+次の作業は既定どおりunit02aの不足6test定義だけをMaxへ渡す修正設計で、既存Plus製
+production blockは不変更。その受入後にunit02b/03/04と公式paired SCREENを順序どおり実施する。
+eval12の停止条件を満たしたらeval24を読まない。今回のLBを理由に候補・科学gate・閾値を変えない。
+このheartbeatからはQwen/GPU/学習/推論/新規提出を開始しない。新学習LossはN/A。
+
+Git全8fileのunstaged diffは親7fileと台帳独立監査2084行で確認、staged空。
+HEAD7368ceb、feat/eval36-kernel-recovery、cached upstream比ahead11/behind0、fresh fetchなし。
+固定11fileのshasum -a 256は全一致、officialはclean/075fc5f5。
+get_goalはblocked、目標達成やresumeはしていない。本周期はhash対象外台帳のみ更新。
+WIP混在・ローカルSCREEN未完のためcommit（新SHA）/pushなし。文書確認とgit diff --checkを
+実施し、code変更がないためpytest/lint/typecheckは再実行しない。
+
+### 2026-09-08 サブエージェント無効化（直接ユーザー依頼）
+
+`.codex/config.toml`のagents.enabledをfalseへ変更し、親のSOL/ultraは保持。
+OpenAI Docsの[公式設定](https://learn.chatgpt.com/docs/config-file/config-reference)を確認して適用した。
+AGENTS.md/CLAUDE.md/gold-loopの委任指示を、親が設計・診断・実装・テスト・自己レビューを
+順に担当する運用へ変更。今回の明示依頼により指示書も編集した。自己レビューは独立レビューとしない。
+ネイティブ子agent、外部Qwen worker、別taskへの代理委任を禁止。過去のMax指示と次unit02aへの
+Qwen委任予定はこの運用更新で失効するが、既存production/test修正設計・数値gate・成果物は保持。
+role定義とQwen launcherは削除せず非使用とし、共有queue・他project・認証・課金設定は不変更。
+既存2子agentはcompletedを確認し、新規spawn/followupなし。設定変更自体は学習・Kaggle提出・
+goal resumeを意味しない。E26 terminal0.922/E23 incumbent0.924、SCREEN未完の状態は不変更。
+
+以下は2026-09-05の作業コピー承認前の履歴であり、当時の経路は上記の明示Max選択、
+コピー制限は一箇所承認が優先する。当時は既存Flash指定を維持していた。
+承認前の共有運用更新でもcanonical-only制約は解除されておらず、launcherの
+linked-worktree要件との確認待ちだった。その段階で新worktree作成、拒否条件解除、
+別モデルfallbackは行わなかった。小さい論理単位へ分けて依頼する方針を記録していたが、
+実装成功や速度を事前に保証するものではなかった。
+
+### R0 v21の限定取得結果
+
+2026-09-05 09:56 UTC、固定URLのブラウザー表示でv21、Public Score 0.915、
+notebookのApache 2.0表記を確認した。元notebookの存在は確認できたが、表示された
+loader/consumerの一部を完全な元sourceやtrainerの再現契約とは扱わない。
+続く一回のSDK `GetKernel(version_label="21")`はHTTP **404**でsourceを返さなかった。
+429ではなく、retry/latest fallbackは行っていない。404から不存在や認証原因を断定しない。
+取得receipt: `outputs/local/e17_source_diagnosis/ranker-v21-lgaFrX/FETCH_RECEIPT.json`、
+SHA `b5028d229e59c81bc43fa05359d9ca0fb42e3471354ac1fdf8308d28a36dbd58`。
+完全な特徴・学習・consumer意味とartifact licenseのgateは未解決で、R0はHOLDを維持。
+このturnでは追加取得を行わず、D0の原因診断を進める。
+
+独立したSDKの静的確認では、GetKernelは生成RPC client経由のPOST JSONで、requestの
+`endpoint()`が返す旧REST風pathは使われない。CLI 2.2.4は版を`kernelSlug="slug/21"`
+へ組み込み、今回の直接SDKは`kernelSlug="slug"`と`versionLabel="21"`に分けていた。
+この表現差は確認できたが、serverの受理仕様や404の原因までは証明しない。
+追加リクエストは行わず、次回取得を検討する際の診断事実としてのみ残す。
+
+#### R0 transport-v2: 実装で確認した版指定表現だけを変える限定診断
+
+後続goal turnの親設計。時間経過を理由に同じrequestを再送するのではなく、上で確認した
+installed CLIの表現差を一つの仮説として試す。同じ既知v21についてのみ、
+`kernelSlug="no-hack-biohub-cell-another-approch-3rd/21"`、`versionLabel`未設定で、
+一回の読み取りを独立レビュー後に行う。owner/clientは変えず、latest fallback・
+他notebook・モデル実行は対象外。45秒上限、保存source上限1 MiB、nbformat4の静的parse、
+fresh隔離先への取得物/receiptの保存とhashを必須とする。errorで停止、429ならcooldown。
+失敗した旧requestは保持し、serverの原因が版表現だったと先に断定しない。
+sourceが返っても、応答にresolved version echoが無い限界、trainer/feature契約、
+artifact license等の既存gateは自動解除しない。これはR0の採用実験ではない。
+
+レビューは科学的なtransport診断の範囲を妥当とし、旧「最大1回」との関係、および
+SDKがresponseをbufferするため1 MiBは受信量の上限ではない点を指摘した。
+親の明示判断: 最大1回は親が設定した取得予算で、ユーザー指定のAPI回数制限ではない。
+ユーザーの自律的なin-scope作業指示の下、新しい静的根拠に対する限定診断として、
+このexact v21への予算を**合計2 requestまで**へ改定する。前回の失敗を1回目と数え、
+2回目は上記encodingだけ。他版・latest・GPU・提出・公開へ権限を拡張しない。
+1 MiBは受信後の保持可否判定であり、transportの受信byte上限とは主張しない。
+この版への3回目のrequestは本改定で許可しない。
+
+2026-09-05 10:55:46 UTC、CLIと同じ版指定による2回目はHTTP **403**で終了した。
+sourceは取得されず、429でもない。receiptのみを新規保存し、最新版への切替・再試行・
+取得コードの実行は行っていない。HTTP応答だけで認証原因やnotebookの不存在を断定しない。
+receipt: `outputs/local/e17_source_diagnosis/ranker-v21-cli-encoding-2B001j/FETCH_RECEIPT.json`、
+SHA `2d67eb18e57433d65406fb697c73db58ba876a91ed2fe8833249a240fff46fc9`。
+exact v21の取得予算2回は消化済み。完全source/特徴/学習/consumer契約とartifact licenseの
+gateは未解決のまま、R0はHOLDを維持する。D1のローカル原因診断はこの取得に依存しない。
+
+## データ復旧確認（2026-09-13）
+
+`data/manifest.csv` と実体を照合したところ、欠落していたのは全量ミラー対象外の
+train `.zarr` チャンクだった。ローカル運用で必要な選択集合（test 4 本、対応 GT、
+必須 GEFF、`sample_submission.csv`、計514ファイル・約1.91GB）は downloader の
+exact-size 検証で **514/514** が揃っており、再ダウンロードは `pending=0` で終了した。
+全199動画分の train `.zarr` は約87.6GBのため意図的に復旧対象外。Kaggle上の推論時に
+データセットとして利用する。
+
+#### E32 設計登録（soft consensus preference）
+
+E31 の hard reservation が Hungarian の競合比較を妨げているという単一仮説を登録。
+primary consensus 辺を予約済み集合から除外せず、既存 assignment cost の soft preference
+として扱う。baseline/E29/E30/E31の既定挙動、新規閾値、学習、追加GTは変更しない。
+採否基準は固定 known12 paired mean の baseline 比 `>= +0.005` と全既存 gate 合格。
+詳細は `analysis/e32_consensus_soft_preference_design.md`。
+Qwen Cloud Flash の親レビュー経路は対象ソースを読めない制約により、同仮説の安全な
+bounded patchを2回目も生成できず停止。推測実装は行わず、E32は未実装・未評価のまま保持する。
+
+#### E33 物理評価結果（short-track consensus rescue）
+
+E32 の soft preference とは独立に、既存の3-way reciprocal consensusで証明された辺だけを
+用いて、5ノード・4辺・連続時刻・分岐なしの短い線形成分を復元する仮説を評価した。監督付き
+再実行 r6 は全12動画を生成し、成果物のbinding・CSV形式・CPU制約・再現メタデータの各 gate
+を通過した（`E33_CONSENSUS_SHORT_TRACK_RESCUE_SUPERVISED_UNSCORED`）。known12 の公式評価は
+baseline **0.9272489144560833** に対し **0.9254608535332843**、差分 **−0.0017880609227989**。
+edge Jaccard は 0.9110664→0.9099925、node recall は 0.9837015→0.9837870 で、微小な
+node recall 改善を上回る edge 損失となったため採用しない。Kaggle提出は行わない。
+これにより有効な連続非改善は **7/8**（E29〜E33）となり、次の独立仮説が同じ判定を満たさ
+なければ科学的探索を停止する。E33 の Qwen Cloud Flash 実装依頼は読み取り能力不足で
+patchを返せず、親が事前登録仕様に沿った最小実装を行った。
+
+E34 r12物理評価（2026-09-13）: bidirectional motion-consistency gateを監督付きCPU直列で
+全12動画実行し、returncode 0、fork 0、成果物binding・CSV形式・GT未読・再現性ゲートを確認。
+baseline `0.9272489145` に対し E34 `0.9120348126`、差分 **−0.0152141018**。edge Jaccard
+`0.9110664→0.9068566`、division Jaccard `0.1176471→0.0`、node recall
+`0.9837015→0.9810306` と全面的に悪化したため棄却。E34を有効な連続非改善 **8/8** とし、
+ユーザー指定の停止条件に到達した。提出候補なし、Kaggle提出は行わない。以後は新規実験・
+実装・提出を行わず、最良既存候補（E31、差分+0.0023562だが採用閾値未達）と未解決事項を報告する。
+
 ## ローカル↔LB 相関プロトコル（user 指示 2026-08-24・常設）
 
 **目的**: ローカル評価が LB の順序を予測すること（絶対値の一致ではない）。
@@ -733,6 +6471,7 @@ exposure/selection 汚染のため hard-example 機序の直接裏付け、因�
 | 08-24 | base2 v4 | **E20-b** | — | **0.9221**（gradient-excluded / selection-contaminated local monitoring） | 計測不能（ft 学習集合） | **0.906** | ✗ 棄却バー≤0.919。localとLBは不一致だが方向・機序は推定不可 |
 | 08-25 | pub923-repro v1 | **E23** | — | — | — | **0.924** | ✓ 採用バー≥0.921。新基準へ昇格 |
 | 08-24 | base1 v2 | E5 | 0.8931 | — | — | **0.907** | ★予告どおり不転移: local +0.0041 が LB **−0.001**。linefit w1.0 棄却・後処理は base1 既定を維持。**「ローカルの n=1 集中効果は LB に転移しない」の直接実証**＝相関プロトコルの動画別寄与分布チェックが機能した |
+| 09-07（LB終端観測09-08 02:08 UTC / local同日09:20 UTC） | biohub-e26-motion-off-exploratory v3 / ref56069885 | E26 motion OFF | —（CSV検証のみ） | **0.9484374561**（基準0.9272489145、worst gate棄却） | —（eval12棄却で未採点） | **0.922** | local aggregate差+0.0211885417とLB差−0.002の符号不一致。経路/母集団差は未分離、E26不採用 |
 
 **08-30 17:30 JST時点の読み**: (i) **提出基準はE23（LB 0.924）**。
 (ii) E20-b の selection-contaminated local monitoring と LB は不一致で、
