@@ -1,0 +1,56 @@
+# E31 2GPU execution parity — Issue17
+
+v2は4動画を完走したがprediction15.909分。約200動画への外挿795分は公式12時間を超える。
+科学仮説・checkpoint・detector/association閾値・postproc条件を維持し、動画単位のみ2GPUに分割する。
+独立subprocess各1GPU、sorted動画の偶数/奇数割当、分離WORKING_DIR、共有read-onlyモデル。
+各workerは既存runtime/observer/strictloader/CSV検証を再利用。共有predictorfileはworker suffixで分離。
+親は全worker成功/receipt/CSVhash/割当完全一致を検証し、dataset順のCSVをstreaming mergeしてidだけ振り直す。
+入力動画数による科学条件変更なし。1GPUしか見えない場合は時間予算未達として開始前に停止。
+新しい候補の提出ではなくE31同一仮説の実行修正。v2出力とのsemantic parityと実測時間を確認する。
+同時に走らせる物理候補は1つだけ。各worker failure時は他workerを終了し不完全CSVを提出しない。
+
+独立レビュー追記: 子のCUDA_VISIBLE_DEVICESとBIOHUB_GPU_SHARDをtorch import前に一意化。
+notebook globalsとsys.pathはspawnで継承されないためjob JSON/PYTHONPATHで明示再構成。
+bounds correctionのrow_idは単純連結せず、合流後のIDでSerializerを再生して最終CSV照合。
+predict_minutes_totalは各shard値であり、合計時間として加算しない。実壁時計は別記録。
+Qwenの最初の入力処理案はbuiltins参照/None見逃し/順序検証不足で棄却し、
+globalsキー存在判定・厳密型・sortedunique検証へ訂正した案を適用。
+追加テスト案は誤ったキーやファイル名を含んだため該当箇所未採用、実APIに訂正中。
+
+進捗: runtime分割指定・default互換・suffixed predictor・実際のsplits/receipt限定を
+含む25tests成功、observer/mapping合わせ72tests成功。merge helperはQwenのmonolithic案を
+棄却（全行メモリ保持、hash検証欠落、verifier引数違い、w出力）。検証・streaming merge・
+最終receiptを分割依頼し、妥当な断片のみ統合した。新_child validatorは実Kaggle v2出力
+4動画/補正4件/CSV SHAで検証成功。独立レビューはhelperのid-only merge/bounds replayに
+具体的blockerなし。merge後のchild CSV再hashも統合済み。代入順序チェックはQwenが既に
+runtimeに納品したsortedunique式を変数名だけ合わせて再利用し、誤った重複だけの式を不採用。
+新moduleはまだnotebookへ組み込んでいない。次: synthetic merge parity tests、subprocess
+supervisor/builder統合、そのテスト・Max採用評価、Kaggle v3直列実測とv2比較。
+提出数0/5。ローカル学習はユーザー追加許可済みだが本E31修復では学習条件を変えない。
+
+synthetic検証完了: merge9件を含む関連81tests成功。偶数/奇数4動画のCSV bytesと
+補正auditが単一writer版に完全一致、child CSV不変、再実行拒否、7種receipt破損を検証。
+テスト初案の架空bounds/別parent directoryは不採用、Qwenによる実snapshotと正しい
+working-directory alias訂正を適用。lint/diffcheck成功。未着手のsupervisor/builder統合が
+残るので、2GPU実測/時間予算合格/提出はまだ成立していない。
+
+supervisor実装: runpyでjob JSONからPath/globalsを復元、GPUごと独立subprocess、
+payload/src等のPYTHONPATH明示、BIOHUB_GPU_SHARD=0/1、exclusive child job/log。
+失敗は毎pollで検出し全live groupへ先にSIGTERMしてからbounded wait/kill/reap。
+payloadは開始前と全child終了後の両方で実hash照合。両child PYTHONHASHSEED=0を
+再現性条件として明示追加（v2では未固定なので実出力parityは別途必須）。
+CPU上の小さな実subprocessによる成功/失敗/timeout/GT混入/hash不一致/GPU重複6tests成功。
+単独merge/runtime含め40tests成功。Notebook entryは正確な8job keysで接続、builderが
+child runtimeとe31_shardsを19payloadとして埋め込み、最後にdual_gpu_runtimeを実行する構成。
+Qwen初案のキー小文字化、hash生成後のpayload追加、testのenv/globals混同を不採用・訂正。
+Kaggle v3はまだ開始していない。Notebook結合テストと採用前Max評価が残る。
+
+2026-09-14 v3実行判断: Notebook結合8件を含む95tests成功（5.21秒）。親setupの
+payload/src優先順と既cache拒否を修正後、結合8tests再成功・lint/diffcheck成功。
+生成物は19payload/8cells、基底setupにbiohub先行importなしを検査。Notebook SHA
+0b8a771e592dbff8289574bcd17be80356ef7737e288476d042dca9499c4b855。
+Max新規評価packet=e31_dual_gpu_evaluation.json（multi-module変更のため再評価）は
+GO FOR DUMMY GPU VALIDATION、具体的blockerなし。親もprivate GPU試験のみ採用。
+実GPU binding・v2同値・所要時間は未証明であり、competition提出許可の判定ではない。
+v3を既存private kernelへtimeout10800/T4で直列実行する。候補source/configは実行中凍結。
+提出数0/5、既存E23 incumbent 0.924を維持。結果はe31_target_submission.mdへ集約する。
