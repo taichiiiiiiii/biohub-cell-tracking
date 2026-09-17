@@ -1,0 +1,739 @@
+{
+  "status": "PREPARED_NOT_EXECUTED",
+  "source_executed_locally": false,
+  "reference_count": 4,
+  "bindings": [
+    {
+      "path": "notebooks/pub923_repro/pub923_repro.ipynb",
+      "bytes": 247835,
+      "sha256": "08507f9123d9f40e185d0db8eda3dd21cb405e50febb720827c2e655f68d5ec1"
+    },
+    {
+      "path": "outputs/local/e23_association_capture_d3_20260908/prospective_e23_predict.py.txt",
+      "bytes": 46933,
+      "sha256": "8e7ac19e8b436d6777576b7ea2269464c4ed8842990b45448d40bf178f8f62de"
+    },
+    {
+      "path": "outputs/kaggle/e23_reference/detector_coordinates_harmonic_association_production_0_2.jsonl",
+      "bytes": 2569,
+      "sha256": "ebf6f88ab066dfad6ac27494c27041ef087a817e5294670ba998a1b8f1a02b51"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/ids/c/0/0",
+      "bytes": 84368,
+      "sha256": "fb5d3b81b671c02d580b68725010dfc2a1c3735a57b37848921c166905c2b009"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/ids/zarr.json",
+      "bytes": 640,
+      "sha256": "db97e4c74adf141706113d7c9855d60f47a044fec714dcc339f1953ec2ced04c"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/edge_dist/values/c/0",
+      "bytes": 24741,
+      "sha256": "374e1cb08f9e4ff129a3cfe44f11a13629cc3c0874e17de5a21a6373a93414c9"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/edge_dist/values/zarr.json",
+      "bytes": 625,
+      "sha256": "44e13271c3cf04bff176c9f4a0e24b183f273a49c7fba2f8c1db90eeff456cb2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/edge_dist/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/edge_prob/values/c/0",
+      "bytes": 91049,
+      "sha256": "38594815efde7a2ff053c36f4506097a23377477dd321af85864bb84096f2420"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/edge_prob/values/zarr.json",
+      "bytes": 625,
+      "sha256": "44e13271c3cf04bff176c9f4a0e24b183f273a49c7fba2f8c1db90eeff456cb2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/edge_prob/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/solution/values/c/0",
+      "bytes": 19,
+      "sha256": "b7d529a37a7d96139ec7390d91e324205aabac720f87791699260d321863b087"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/solution/values/zarr.json",
+      "bytes": 563,
+      "sha256": "757b42cf25b59361ed7d246264944752eb4fa36e39f112479958fd954e00601c"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/solution/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/props/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/edges/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/ids/c/0",
+      "bytes": 40191,
+      "sha256": "c0020bd11e5342271d44df5cde6f7ddea81cf8e83c5a0042e9a4d4d69841cc7b"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/ids/zarr.json",
+      "bytes": 622,
+      "sha256": "054f9193521e5af9e23083beb23ae03b9e006eb9e19dd3afaed5ee2c14405879"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/solution/values/c/0",
+      "bytes": 19,
+      "sha256": "62c774c2a01161afd3709093319990e3c92ed4f5563045d5528c40a12bdf81c6"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/solution/values/zarr.json",
+      "bytes": 563,
+      "sha256": "b43a3f92a8d9956c3c4aca1825b76b2930df6c5b07058185d445b39aa4d728db"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/solution/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/t/values/c/0",
+      "bytes": 266,
+      "sha256": "d15c0a3a07095da89ed9e9db61d026b8db75f680122c5876dac0d3ce267bad12"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/t/values/zarr.json",
+      "bytes": 621,
+      "sha256": "d7ec7ec1237036e3a3aec7a492593d6b61031b6e24d547542115092ab6ed61a7"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/t/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/x/values/c/0",
+      "bytes": 36003,
+      "sha256": "7c7fa853403e9cbccd70abbc39edfa56f740db54be4522189de2c4468afce2d4"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/x/values/zarr.json",
+      "bytes": 625,
+      "sha256": "6ba7f0bcb388046f83a2480e66908ea5ac1ab607a188f232e07877020623c3eb"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/x/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/y/values/c/0",
+      "bytes": 37882,
+      "sha256": "638a7b1d2df614e5cd8cf8ed65150c73b551d6b984f76ba1ce057c316047f24a"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/y/values/zarr.json",
+      "bytes": 625,
+      "sha256": "6ba7f0bcb388046f83a2480e66908ea5ac1ab607a188f232e07877020623c3eb"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/y/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/z/values/c/0",
+      "bytes": 11775,
+      "sha256": "ecc6153af4a1392ad73b8bafbb419f5b2a8e3bf18bf98254b8dee6c9f6a241e8"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/z/values/zarr.json",
+      "bytes": 625,
+      "sha256": "6ba7f0bcb388046f83a2480e66908ea5ac1ab607a188f232e07877020623c3eb"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/z/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/props/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/nodes/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0113de3b.geff/zarr.json",
+      "bytes": 2914,
+      "sha256": "19fd4169dd15083cf59c68513a508014ecbd663087adfe784e36ba9f9ef76d87"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/ids/c/0/0",
+      "bytes": 17447,
+      "sha256": "0ef17f88727adeddf0710ac6c7c09e58b8901855e8e32632bda2d1b85c4fe328"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/ids/zarr.json",
+      "bytes": 638,
+      "sha256": "2fc0dd26f290fb3f801d45b61786fa6015695a92dea94bdbf4614dde46ae1430"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/edge_dist/values/c/0",
+      "bytes": 5514,
+      "sha256": "f2f7f178a8590607d402422e9db0fd603fb3fda1901303a0c23584d3397269a2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/edge_dist/values/zarr.json",
+      "bytes": 623,
+      "sha256": "7432e586b28c552e194080a2b921fe4facce37f6078d1b54a24c564bf22cfc4b"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/edge_dist/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/edge_prob/values/c/0",
+      "bytes": 23554,
+      "sha256": "f90dfc903d62cfc202a5549eb82d8a8192cbe5c1235a06e7bdbe6cf2e985219a"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/edge_prob/values/zarr.json",
+      "bytes": 623,
+      "sha256": "7432e586b28c552e194080a2b921fe4facce37f6078d1b54a24c564bf22cfc4b"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/edge_prob/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/solution/values/c/0",
+      "bytes": 19,
+      "sha256": "4b1c5f5d909fd47159d4cfaea467b45aa4afb5846b3403c6c38a5489ded85718"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/solution/values/zarr.json",
+      "bytes": 561,
+      "sha256": "1478bf020936511539f1ceccf8e1dfe4983ee0ddb3fdd24348e6b1889c80bfac"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/solution/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/props/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/edges/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/ids/c/0",
+      "bytes": 10730,
+      "sha256": "d787ec3178cd8f3e1599e5565bdf4184aff0a418243ce77277bf3a2d50b02544"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/ids/zarr.json",
+      "bytes": 620,
+      "sha256": "6a604ace4185e4fbedeffaee869ee87aed69f818a1547a75b26b81d1dbea4823"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/solution/values/c/0",
+      "bytes": 19,
+      "sha256": "3b2a64435144a9f57784d019fe5115b0bebadfaeb1e00026cba404785d73b3d8"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/solution/values/zarr.json",
+      "bytes": 561,
+      "sha256": "b3a5d73254df3472ef835d5a5315c77f1ed4fb538a99b78dd62b37b71dad1205"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/solution/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/t/values/c/0",
+      "bytes": 238,
+      "sha256": "9334973ef522e7f8f0b9a46b19ef2f3007707f82dec1b70b258b4be4597a27c4"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/t/values/zarr.json",
+      "bytes": 619,
+      "sha256": "bcefd68fc6fc9cb9c4b8b0fa118cdfa8e41f000185a4f648d0c4d061d2553aff"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/t/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/x/values/c/0",
+      "bytes": 7992,
+      "sha256": "e0c7d62ee6fecd1e48360f781cc06d463d90bd4d724a3f861ec6f26eb8dce263"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/x/values/zarr.json",
+      "bytes": 623,
+      "sha256": "5029dc858f22ea3b5f214731db4421677d16055cbe52567279731657e185f195"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/x/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/y/values/c/0",
+      "bytes": 7966,
+      "sha256": "4a3905050713d429fd70c6af2383a4eb4153dfedf432ed86c9b6b214f79eff15"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/y/values/zarr.json",
+      "bytes": 623,
+      "sha256": "5029dc858f22ea3b5f214731db4421677d16055cbe52567279731657e185f195"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/y/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/z/values/c/0",
+      "bytes": 4389,
+      "sha256": "08871c900102b4bc2d50db5110c2a75158cd908fdda39578746bf0c159c615a4"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/z/values/zarr.json",
+      "bytes": 623,
+      "sha256": "5029dc858f22ea3b5f214731db4421677d16055cbe52567279731657e185f195"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/z/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/props/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/nodes/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05b6850b.geff/zarr.json",
+      "bytes": 2914,
+      "sha256": "19fd4169dd15083cf59c68513a508014ecbd663087adfe784e36ba9f9ef76d87"
+    },
+    {
+      "path": "outputs/kaggle/e23_reference/detector_coordinates_harmonic_association_production_1_2.jsonl",
+      "bytes": 2670,
+      "sha256": "d76d25ad95103065fcd43ef388f69d44977ae0ba95f9f6310194d05138310529"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/ids/c/0/0",
+      "bytes": 67576,
+      "sha256": "32093ded68f17abf995c01913002003f3562034cceb1e4e190127fa0d08565fa"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/ids/zarr.json",
+      "bytes": 640,
+      "sha256": "060dd45ac29084382d6b70f432c35959239c37f6e5d60d485247428ab4c2ed0b"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/edge_dist/values/c/0",
+      "bytes": 20994,
+      "sha256": "af6027ee4851e5005c871ed4e96555788fb71f8f100099516aacae937f10d1c0"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/edge_dist/values/zarr.json",
+      "bytes": 625,
+      "sha256": "96137ebd792cb437058501f35f3f53959dbcc31fbd949d7a38a04488c1cb1cae"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/edge_dist/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/edge_prob/values/c/0",
+      "bytes": 77882,
+      "sha256": "4cdab83f5a394fa2d31fe0a06fd1cc58738debf4856f9e160e53acd5ea8366c7"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/edge_prob/values/zarr.json",
+      "bytes": 625,
+      "sha256": "96137ebd792cb437058501f35f3f53959dbcc31fbd949d7a38a04488c1cb1cae"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/edge_prob/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/solution/values/c/0",
+      "bytes": 19,
+      "sha256": "82219e439c270a4bbbada3d567e20c5697e46ccdd767b730755f07e9b3b4a65d"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/solution/values/zarr.json",
+      "bytes": 563,
+      "sha256": "c1276c4bd5446b6d38c54f5c5cc593ea5a45701b8d144922fbc012af77f0ef4a"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/solution/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/props/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/edges/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/ids/c/0",
+      "bytes": 27259,
+      "sha256": "dd82403ad4894c1f8dd53d4c22b7f2ffc718c4cc1d94df45214e23f309866877"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/ids/zarr.json",
+      "bytes": 622,
+      "sha256": "90fdad74a86d57eefab46bca1bfeedf0c90841d220893112febfc1d203c3c0a5"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/solution/values/c/0",
+      "bytes": 19,
+      "sha256": "1e6b63878784dba75a09fa4abac4a3a190cf6594731a5e0db759d92ef6bb41b7"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/solution/values/zarr.json",
+      "bytes": 563,
+      "sha256": "0618307d5cb57bf6d040f84bbb4bd5e97bfcf0357d203fb9ad9dee84ee18e48a"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/solution/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/t/values/c/0",
+      "bytes": 258,
+      "sha256": "66aeaada327f70bb4d706bac37884ca4953feb697b79452aedc1b253534086c1"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/t/values/zarr.json",
+      "bytes": 621,
+      "sha256": "1394aa159dad50840c4c8212ebfe1c8ace0632ec29b81258e66e205e40ef9885"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/t/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/x/values/c/0",
+      "bytes": 32001,
+      "sha256": "aebbca3862ef70df88d2b22fe568dd0020777b33e1a43b850f12815b88ff6c68"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/x/values/zarr.json",
+      "bytes": 625,
+      "sha256": "d1e428aab6e376885f88f2dd3b76e1b6e090d7435b87da1a9c8e3eb5c12a8395"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/x/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/y/values/c/0",
+      "bytes": 31572,
+      "sha256": "c0833664affa3d2d4f7e01fe0cdc780cf56bf7f162014508ba64c0939f891294"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/y/values/zarr.json",
+      "bytes": 625,
+      "sha256": "d1e428aab6e376885f88f2dd3b76e1b6e090d7435b87da1a9c8e3eb5c12a8395"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/y/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/z/values/c/0",
+      "bytes": 12029,
+      "sha256": "18f4bf8bb52d4d74fd566e74f4d0d3235793d75963920fa03e1cd42fbf7bcf84"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/z/values/zarr.json",
+      "bytes": 625,
+      "sha256": "d1e428aab6e376885f88f2dd3b76e1b6e090d7435b87da1a9c8e3eb5c12a8395"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/z/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/props/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/nodes/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/44b6_0b24845f.geff/zarr.json",
+      "bytes": 2914,
+      "sha256": "19fd4169dd15083cf59c68513a508014ecbd663087adfe784e36ba9f9ef76d87"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/ids/c/0/0",
+      "bytes": 230912,
+      "sha256": "af6c37bd4a0bf08e22ba0cfd98216a8c4aac48d0762f920498171b19df446bff"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/ids/zarr.json",
+      "bytes": 640,
+      "sha256": "d2ef45c7897b660f8472d77f93e32a5125b1c6645a66c31fd9197be92b43feb1"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/edge_dist/values/c/0",
+      "bytes": 58414,
+      "sha256": "d45d50782d1098844fbb1885d4679617a59ca4670dc8828d1c0d7910787151cf"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/edge_dist/values/zarr.json",
+      "bytes": 625,
+      "sha256": "035fda67144e1b1309b86c25942514a0ca94faabcec321c344489fb368b1e1ae"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/edge_dist/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/edge_prob/values/c/0",
+      "bytes": 263747,
+      "sha256": "0981ccc0432e77e2fd47f4ffcd61e300cfc79868e5102d04fc37de72a004126d"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/edge_prob/values/zarr.json",
+      "bytes": 625,
+      "sha256": "035fda67144e1b1309b86c25942514a0ca94faabcec321c344489fb368b1e1ae"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/edge_prob/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/solution/values/c/0",
+      "bytes": 22,
+      "sha256": "19197fd2e8bb36421bd23b6e4733da520b9ff6045eec90c4d49d3258794f9759"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/solution/values/zarr.json",
+      "bytes": 563,
+      "sha256": "5ee5430c462171b75b66c070abe437f10ee5c5b6c8ac5ad103a5da3e512b070c"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/solution/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/props/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/edges/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/ids/c/0",
+      "bytes": 100666,
+      "sha256": "d6b59055ef6649e6c9efcc34bc885c252d7611fa4dc5c0c682a64127f6200f62"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/ids/zarr.json",
+      "bytes": 622,
+      "sha256": "a935761a07f0f5bdfb851633f1912522b5c974f3acd6dc41565da5a257192fb3"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/solution/values/c/0",
+      "bytes": 22,
+      "sha256": "43694a534cda1e8186e5ecd9c803e1f3f8796d898f33d993f7798a87d606fda9"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/solution/values/zarr.json",
+      "bytes": 563,
+      "sha256": "eaa9cf9a557d2d7e2808ab40c2e7ac84122f2916df61e5db42a4a5e3dd4b5385"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/solution/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/t/values/c/0",
+      "bytes": 381,
+      "sha256": "f2d85d5752eedfbce00857856f7ba60cf2bfe84bced045f19a69b7e0f7b53900"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/t/values/zarr.json",
+      "bytes": 621,
+      "sha256": "6c08cf01f9865eaac07d7e09eee2547d1c5bba91038ede3bb62c5c58b0289903"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/t/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/x/values/c/0",
+      "bytes": 104845,
+      "sha256": "d5dd9be1564bd0187c4694391a09bc56b933a58008ca747ed01e69c57f45f517"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/x/values/zarr.json",
+      "bytes": 625,
+      "sha256": "8794d7eb1f1a93ad5ac14decd066ae4fb681baa13a74f42932688b4ad0f8558d"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/x/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/y/values/c/0",
+      "bytes": 93922,
+      "sha256": "65ecf275d1ea97e554f0706f70bd170881309fc7572d9165308a974d7a1826bf"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/y/values/zarr.json",
+      "bytes": 625,
+      "sha256": "8794d7eb1f1a93ad5ac14decd066ae4fb681baa13a74f42932688b4ad0f8558d"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/y/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/z/values/c/0",
+      "bytes": 16960,
+      "sha256": "2935b5ba50ac1f4b5baf7b5b35fcb1cc90773906122456cc808efcfa01eeda33"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/z/values/zarr.json",
+      "bytes": 625,
+      "sha256": "8794d7eb1f1a93ad5ac14decd066ae4fb681baa13a74f42932688b4ad0f8558d"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/z/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/props/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/nodes/zarr.json",
+      "bytes": 66,
+      "sha256": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2"
+    },
+    {
+      "path": "outputs/kaggle/e22_bidir030_public4_raw/tracking_repo/predictions/unknown/unet_transformer/split_0/6bba_05db0fb1.geff/zarr.json",
+      "bytes": 2914,
+      "sha256": "cd82e8b818a4ef63b682abbc43bb765a34a905fd222e4fe8b819d46b9f6c6361"
+    },
+    {
+      "path": "outputs/kaggle/st_r3_checkpoint_recovery/primary/config.json",
+      "bytes": 165,
+      "sha256": "e9b4e396c58081bca08adf8275bd0bd1c2d3fd6eb091a1912a5116cb6de7b50a"
+    },
+    {
+      "path": "outputs/kaggle/st_r3_checkpoint_recovery/secondary/config.json",
+      "bytes": 165,
+      "sha256": "e9b4e396c58081bca08adf8275bd0bd1c2d3fd6eb091a1912a5116cb6de7b50a"
+    },
+    {
+      "path": "src/biohub/association_capture.py",
+      "bytes": 11101,
+      "sha256": "9015430194aad491bbc0df722fa966d9a21c469b29b833b090a6d445ccf4da36"
+    },
+    {
+      "path": "src/biohub/association_observer.py",
+      "bytes": 14990,
+      "sha256": "4615cce9840cc260530e965b4ccf6ecb47ed096335260a2148c67fa1eed45425"
+    },
+    {
+      "path": "src/biohub/association_instrumentation.py",
+      "bytes": 5009,
+      "sha256": "9fa79df7176d1f09ba840247dca8a71da204f62a2dbf877a2b8aa5617333b795"
+    },
+    {
+      "path": "src/biohub/association_parity.py",
+      "bytes": 12952,
+      "sha256": "3d0188c69c0b1d29c4cd0b057098df1adc8e24e3d35468b7df9f36a78557ecf7"
+    },
+    {
+      "path": "src/biohub/association_supervise.py",
+      "bytes": 4731,
+      "sha256": "457b8e3505b29bbf123c2effea4e56054a900f06777f71bc4b18b586d59692c6"
+    },
+    {
+      "path": "scripts/e23_association_bridge.py",
+      "bytes": 597,
+      "sha256": "88b4df5da2493f719145ac20a3cefc0ad18407acddbe8cac5acdbebc11fa4bcf"
+    }
+  ],
+  "source_insertion": {
+    "status": "STATIC_OBSERVER_INSERTION_ONLY",
+    "original_sha256": "8e7ac19e8b436d6777576b7ea2269464c4ed8842990b45448d40bf178f8f62de",
+    "instrumented_sha256": "e2fda47e41d970a2c650bbbbb5fe068b6e1b9667fdd91cb59cc2a3ac8ba95a9c",
+    "restored_bytes_equal": true,
+    "restored_ast_equal": true,
+    "insertions": 14,
+    "source_executed": false,
+    "inference_parity_verified": false,
+    "submission_authorized": false
+  },
+  "submission_authorized": false
+}
