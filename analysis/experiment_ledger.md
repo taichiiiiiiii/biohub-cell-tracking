@@ -6855,7 +6855,7 @@ TP/FP/FNとnode recallが完全に不変で、正のΔはnode数減少による�
 **判定: 不採用（Reject）**。単純平均Δ=−0.000959、公式micro Δ=−0.002516といずれも悪化、符号も
 3/6で割れた。44b6側の改善はnode-count adjustment由来でedge correctness・division回収を伴わず、
 6bba側では3/3動画で実edge TPとnode recallを喪失した。division/disappearanceイベント処理を
-本質的に改善する機序は確認できず、観測された主作用は系統依存性の強い全体pruングである。最終
+本質的に改善する機序は確認できず、観測された主作用は系統依存性の強い全体pruningである。最終
 順位はPrivate scoreで決まるため、Public・ローカル6動画のnode-count効果への適合よりも系統横断で
 のedge TP保持を優先すべきであり、E39のILP重みをcandidateへ置換する汎化根拠はない。**Kaggle
 提出・incumbent更新は行わず、baselineのdivision 1.0 / disappearance 1.5を維持する**（E39が
