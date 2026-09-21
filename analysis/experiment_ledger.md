@@ -7046,6 +7046,38 @@ LB検証候補として採用**する。R+G+Sの一括採用は見送り、GAP1 
 **残タスク**: notebook（`notebooks/pub923_repro/pub923_repro.ipynb`）への実装（R: writerの
 座標float化、S: `BIOHUB_OUTPUT_SAFE_DIVISIONS=0`）→ローカル検証→E44として事前登録・Kaggle提出。
 
+### E44: R+S（座標float出力＋safe-division無効化）— notebook実装・Kaggle LB検証（事前登録、2026-09-21）
+
+**実装**: `notebooks/pub923_repro/pub923_repro.ipynb`を2箇所のみ変更（Codex実施、diffをセル単位で
+検証済み、他の全セルは無変更）。
+
+1. セル13（submission.csv writer、論理行1676-1684）: node行のz/y/x出力を
+   `max(0, int(round(float(node["z"]))))`から`max(0.0, float(node["z"]))`へ（y/xも同様）。
+   非負制約は維持、整数丸めのみ廃止。
+2. セル3（環境変数overrideセル、論理行26-27）: `os.environ["BIOHUB_OUTPUT_SAFE_DIVISIONS"] = "0"`
+   を追加（理由コメント付き）。既存のBIOHUB_SAFE_DIV_*閾値設定はそのまま残置（将来の再有効化に
+   備える）。
+
+変更後notebook sha256: `c9d0cff15e2fdad5b3fb1ae4e62ed8e0c520922e0f4d74a13ba57fa397b54914`。
+JSON parse検証成功、`git diff`をセル単位のpython差分で確認し意図した2セル以外の変更なし。
+`src/biohub/evaluate.py`の`graph_from_rows()`がfloat座標をそのまま`pl.Float64`として受理する
+ことも確認済み（E44実装タスク内で検証）。
+
+**事前登録（Kaggle提出前、E43ローカルA/B結果に基づく）**:
+- ローカル根拠: E43のR+Sアーム（`outputs/local/e40_ilp_weights`のcandidate cache再利用、
+  同一6動画・同一検出候補）で公式micro平均Δ=+0.015870（vs E39本番相当）、単純平均Δ=+0.015011、
+  6動画すべて改善、44b6/6bba両系統で符号一致。
+- **予想LB**: E39実測0.930 + 割引済みΔ ≈ 0.940-0.945（6動画はE38/E40と重複しindependent
+  generalization splitではないため、ローカルΔをそのまま加算しない）。
+- **採否バー**: LB >= 0.930（現行E39を下回らない）で許容、明確な悪化のみreject。R
+  （座標float化）はtopology非依存の構造的改善、S（safe-division無効）はdivision TPを一切
+  回収せずFPのみ追加という機序に基づく除去のため、テストセット依存で崩れる根拠に乏しい。
+- 本日（2026-09-21）の提出は0/5使用、5枠残。
+
+**制約の確認**: `kaggle kernels push`・`kaggle competitions submit`は2026-09-20のAGENTS.md
+更新により承認不要（Claude実行のみ）。notebook変更はこのコミットで反映し、push後に
+kernel実行・LB提出を行う。
+
 ---
 
 ## 撤回した結論
