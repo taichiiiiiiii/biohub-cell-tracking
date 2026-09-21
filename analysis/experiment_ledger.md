@@ -6811,6 +6811,73 @@ Issueを更新、(3) EDGE_WEIGHT=0.15 sub-variantの未検証、division効果�
 いった留保事項への対応要否を検討、(4) 次の候補（E37で識別した他の未試験パラメータ: ILP division/
 disappearance weight 1.2/2.0、DeepCenter epoch500等）の要否をユーザーと相談。
 
+### E40: ILP division/disappearance weight変更（division 1.0→1.2、disappearance 1.5→2.0）— **不採用（Reject）**（2026-09-21、Codex実施・分析のみ）
+
+**目的・仮説**: E39採用構成であるv27-combo（secondary detection weight 0.80、bidirectional edge
+weight 0.15、secondary edge weight 0.20、Public LB 0.930）を固定し、ILPのdivision weightを
+1.0→1.2、disappearance weightを1.5→2.0へ変更することで、分裂選択と不自然なtrack終端を抑制
+できるかを検証した（E37で識別した未試験候補）。
+
+**評価条件**: real-GT付き100-frame動画6本（44b6_d754aa59、6bba_0e7c0d07、44b6_706092f0、
+44b6_74d0c52e、6bba_07e24132、6bba_207c6aaf）。各動画で同一の検出・edge候補を再利用し、ILP重み
+だけを変更したpaired A/B。スコアは`official/metrics.md`に従い
+`adjusted edge Jaccard + 0.1 × division Jaccard`で算出した。
+
+**結果（6動画、公式metric、baseline→candidate）**:
+
+| 動画 | baseline score | candidate score | Δ(candidate−baseline) |
+|---|---:|---:|---:|
+| 44b6_d754aa59 | 0.975210929 | 0.976564356 | +0.001353427 |
+| 6bba_0e7c0d07 | 0.873729390 | 0.871141547 | −0.002587842 |
+| 44b6_706092f0 | 0.839060571 | 0.840723459 | +0.001662888 |
+| 44b6_74d0c52e | 0.941819383 | 0.943747218 | +0.001927835 |
+| 6bba_07e24132 | 0.853864904 | 0.852473248 | −0.001391656 |
+| 6bba_207c6aaf | 0.643347878 | 0.636627482 | −0.006720396 |
+
+**動画横断集計**: 単純平均 baseline 0.854505509 → candidate 0.853546219（Δ=−0.000959291）。
+公式micro集計 baseline 0.792995716 → candidate 0.790479398（Δ=−0.002516318、adjusted edge
+Jaccardを各動画のedge TP+FP+FNで加重、denominator baseline 1,443／candidate 1,439）。division
+集計は両armともTP/FP/FN=0/0/7（division Jaccard=0）のためmicro combined scoreはmicro adjusted
+edge Jaccardと同値。符号一致性は改善3/6・悪化3/6。系統別では**44b6が3/3改善**
+（単純平均Δ=+0.001648050）、**6bbaが3/3悪化**（単純平均Δ=−0.003566631）で強い系統依存性。
+
+**機序分析**: 6動画合計でcandidateはedgeを86本追加する一方3,063本削除（symmetric difference
+3,149本、正味edge数100,042→97,065）。選択node数も109,586→105,302に減少し、中間frameの
+appearance/disappearanceともに約1,255〜1,258減少。disappearance penalty増加に対応して終端は
+全動画で減ったが、appearance weight据え置きでもappearanceが同程度減っており、track延長で終端を
+修復したのではなく、flow制約を通じて終端を伴う候補track全体をILPが選択から外した（全体
+pruning）と解釈するのが整合的。divisionは全動画・両armでdivision_nodes=0、GT division 7件を
+1件も回収せず、division weight 1.2が分裂検出を改善する根拠はなし。44b6の3動画はedge
+TP/FP/FNとnode recallが完全に不変で、正のΔはnode数減少による公式metricのnode-count adjustment
+のみに由来する（edge正確性の改善を伴わない）。一方6bbaは3/3動画でnode recallが低下
+（平均−0.018288）し、6bba_207c6aafはTPを8失いΔ=−0.006720396と最大の悪化。
+
+**判定: 不採用（Reject）**。単純平均Δ=−0.000959、公式micro Δ=−0.002516といずれも悪化、符号も
+3/6で割れた。44b6側の改善はnode-count adjustment由来でedge correctness・division回収を伴わず、
+6bba側では3/3動画で実edge TPとnode recallを喪失した。division/disappearanceイベント処理を
+本質的に改善する機序は確認できず、観測された主作用は系統依存性の強い全体pruングである。最終
+順位はPrivate scoreで決まるため、Public・ローカル6動画のnode-count効果への適合よりも系統横断で
+のedge TP保持を優先すべきであり、E39のILP重みをcandidateへ置換する汎化根拠はない。**Kaggle
+提出・incumbent更新は行わず、baselineのdivision 1.0 / disappearance 1.5を維持する**（E39が
+引き続きincumbent）。
+
+**再現性（verified_sha256、全6 result JSON内で一致）**:
+
+```text
+predictor         85f3c44b9270b00fc2a32345b0fe01099559bd5334f10270f42606d0050cc47f
+predictor_source  8e7ac19e8b436d6777576b7ea2269464c4ed8842990b45448d40bf178f8f62de
+primary           12f6881ee3620a831697ca098ff8f48e687a24225f4e048b538deec3562fe771
+secondary         9bac2fa0dadc4a6fc1899e0caf187f4b553e0a7cd90ba1261a68b35ffe9e305f
+run_e40.py         4cfddf487d59ed44108e8e62363eb52a22f68cc6cfa3a6271223a57d6bbae0aa
+official/metrics.md d8a2d3ff21b507242dd23e9b7c687d725261d7b4c79cff086cccb4093141d696
+src/biohub/evaluate.py 0626532f73ecba9708592c097e16164c1b4680f82917829837c41dc7b7b7d3c4
+```
+
+詳細: `outputs/local/e40_ilp_weights/result_*.json`。
+
+**残タスク**: E37で識別した他の未試験候補（DeepCenter epoch500 vs 2、detection threshold
+0.965、v27 postprocessバンドル）の要否をユーザーと相談。E39（Public LB 0.930）がincumbentのまま。
+
 ---
 
 ## 撤回した結論
