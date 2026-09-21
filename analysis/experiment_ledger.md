@@ -6887,6 +6887,63 @@ source/targetとして一度も現れないものは皆無）。ILPが既にsing
 0.965、v27 postprocessバンドル）の要否をユーザーと相談。degree-0ノード除去はno-opのため除外。
 E39（Public LB 0.930）がincumbentのまま。
 
+### E41: v27 postprocessバンドル（safe-div 7.0/12.0、DeepCenter epoch500/veto-off）調査 — **safe-div 7/12は不採用（Reject）、DeepCenter epoch500/veto-offは判定保留（Inconclusive・低優先度）**（2026-09-21、Codex実施・分析＋ローカルA/B）
+
+**目的**: E37で識別した残る未試験差分（v27 notebook群の履歴セルから復元）の正確な値を同定し、
+再推論不要なものはローカルA/Bで検証した。
+
+**値の同定**: `hahuyy_947.ipynb`／`evgendvorkin_942.ipynb`の履歴セルから、safe-div
+`BIOHUB_SAFE_DIV_MAX_UM`（parent）=7.0、`BIOHUB_SAFE_DIV_SISTER_MAX_UM`（sister）=12.0
+（現行E39/E23は8.0/11.0）と確認。DeepCenter側はcheckpoint=`checkpoint_last.pt`・expected
+epoch=500・`BIOHUB_DEEPCENTER_SAFE_DIV_VETO=0`（gap vetoとspatial TTAはon/off不変、sister
+symmetry gate off）と確認。ただし保存済み`evgendvorkin_942.ipynb`はv27実行可能snapshotではなく
+後続v28-v30コード＋v27履歴説明の混在であり、7/12・epoch500は履歴セルからの復元値。
+
+**分類**: safe-div閾値・safe-div veto on/offはpostprocess-onlyで再推論不要。DeepCenter
+epoch500/veto-offは主検出器・associationの再推論は不要だが、DeepCenterの補助推論（checkpoint
+差し替え）をやり直す必要あり（「再学習」ではない）。ローカルにepoch500 checkpointの実体がなく
+（同梱manifestは古いepoch100を指す）、公開資産からの取得・SHA検証が必要なため未実施。
+
+**safe-div 7/12ローカルA/B結果（E40 candidate `.npz`を再利用、主モデル再推論なし、E39 ILP重み・
+DeepCenter epoch2/veto-on固定、6動画）**:
+
+| 動画 | 8/11 (現行) | 7/12 (candidate) | Δ | edge symmetric diff |
+|---|---:|---:|---:|---:|
+| 44b6_d754aa59 | 0.897570487 | 0.897570487 | 0 | 3 |
+| 6bba_0e7c0d07 | 0.766035958 | 0.766059831 | +0.000023873 | 21 |
+| 44b6_706092f0 | 0.895063305 | 0.895093395 | +0.000030089 | 29 |
+| 44b6_74d0c52e | 0.947093654 | 0.947093654 | 0 | 4 |
+| 6bba_07e24132 | 0.827845986 | 0.827845986 | 0 | 6 |
+| 6bba_207c6aaf | 0.643518775 | 0.638749147 | −0.004769628 | 40 |
+
+単純平均Δ=−0.000785944、公式micro score 0.772466706→0.770656160（Δ=−0.001810546）。改善2・
+同値3・悪化1。division集計は8/11がTP/FP/FN=0/7/7、7/12が0/6/7でどちらもdivision Jaccard=0
+（真division回収ゼロは不変）。
+
+**機序**: parent半径縮小がsister半径拡大を上回り、幾何候補3,383→2,230、safe-div追加数266→225
+に減少。44b6側の小さな正の2例はedge TP/FP/FNが完全不変で、後段node数減少によるnode-count
+adjustmentのみに由来（E40と同型の機序）。一方6bba_207c6aafはTP 365→363、FP 88→89、FN 85→87、
+node recall 0.93053→0.92842と実edge損失が発生し、division FPは4→3だがTP=0のため得点に反映
+されず、悪化Δ=−0.004769628が最大。系統別では44b6平均+0.000010（ほぼ横ばい）、6bba平均
+−0.001582で、符号一貫性なし。
+
+**判定: safe-div 7/12 exactは不採用（Reject）**。公式micro Δ=−0.001810546（悪化）、真division
+回収ゼロ、6bba_207c6aafで実edge TP喪失。変更規模（symmetric diff 103 edge）は小さいが最大悪化
+−0.00477で、Private向けの安全な改善機序とは見なせない。
+
+**DeepCenter epoch500/veto-off**: 実現可能（E40 candidate cacheから主モデル再推論なしでA/B可
+能）だが、v27 bundleはepoch500・veto-off・safe-div 7/12・symmetry offが結合しており単独効果を
+帰属できない。後続0.939構成がepoch2・veto-onへ戻していること、今回の6動画でdivision TPが全arm
+0でveto解除の効果を測る材料がないことから、**判定保留（Inconclusive）・低優先度**。次のKaggle
+LB枠に投入する事前根拠なし。まずepoch500 checkpointを取得・SHA検証した上で「epochのみ」
+「vetoのみ」を分離したローカルA/Bが最低条件。
+
+**判定: E39を維持**。safe-div/DeepCenter bundleの復元はPublicの0.934単独を根拠にする危険が
+あり、6動画ローカル評価でも支持されない。
+
+**残タスク**: DeepCenter epoch500 checkpointの取得要否、detection threshold 0.965の検証要否を
+ユーザーと相談。
+
 ---
 
 ## 撤回した結論
