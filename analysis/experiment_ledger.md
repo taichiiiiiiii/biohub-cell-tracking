@@ -6875,8 +6875,17 @@ src/biohub/evaluate.py 0626532f73ecba9708592c097e16164c1b4680f82917829837c41dc7b
 
 詳細: `outputs/local/e40_ilp_weights/result_*.json`。
 
+**追記（同日、degree-0ノード除去の安価試算）**: E40のmetrics.py精査で
+`adj_edge_jaccard = max(0, J·(1 − 0.1·total_node_ratio))`には過少予測方向のクランプがなく、
+edgeに一切関与しないdegree-0 predicted nodeを後処理で削除すればedge精度を犠牲にせずscoreが
+単調改善するはずという仮説を立て、既存result_*.json内のbaseline予測CSV（再推論不要）で6動画の
+degree-0ノード数を実測した。**結果: 6動画・109,586 node中degree-0は0件**（node_idがedgeの
+source/targetとして一度も現れないものは皆無）。ILPが既にsingleton nodeを出力しない設計のため、
+この後処理はno-op。Δscore=0（単純平均・公式micro平均とも）。この方向は不採用（対象データなし）。
+
 **残タスク**: E37で識別した他の未試験候補（DeepCenter epoch500 vs 2、detection threshold
-0.965、v27 postprocessバンドル）の要否をユーザーと相談。E39（Public LB 0.930）がincumbentのまま。
+0.965、v27 postprocessバンドル）の要否をユーザーと相談。degree-0ノード除去はno-opのため除外。
+E39（Public LB 0.930）がincumbentのまま。
 
 ---
 
