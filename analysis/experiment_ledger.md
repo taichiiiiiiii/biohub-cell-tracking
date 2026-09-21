@@ -6944,6 +6944,65 @@ LB枠に投入する事前根拠なし。まずepoch500 checkpointを取得・SH
 **残タスク**: DeepCenter epoch500 checkpointの取得要否、detection threshold 0.965の検証要否を
 ユーザーと相談。
 
+### E42: E39本番postprocessチェーンのstage別アブレーション — **3ステージが除去推奨（座標整数丸め・safe-division・GAP1 fill）**（2026-09-21、Codex実施・分析＋ローカルA/B）
+
+**発端**: E40（bare ILP baseline）とE41（本番E39 postproc適用baseline、8/11 arm）を突き合わせたところ、
+同一6動画・同一検出候補・同一ILP重みにもかかわらず公式micro平均が0.792995716→0.772466706
+（Δ=−0.020529010）と、銀メダルまでのギャップ（+0.018）を上回る規模で悪化していることが判明した。
+単純平均もΔ=−0.024984148。division集計は0/0/7→0/7/7。
+
+**前提確認**: `outputs/local/e40_ilp_weights/run_e40.py`の`solve()`はbare ILP→CSVのみで
+postprocessを一切呼ばないことを確認。E41の「8/11」armは`notebooks/pub923_repro/pub923_repro.ipynb`
+本番チェーン（`src/biohub/public_postproc/pipeline.py`・`config.py`・`divisions.py`）と完全一致
+（座標整数丸めを含む最終writer動作まで）することも確認し、Arm0/ArmFの乖離を数値精度内で完全再現した。
+
+**本番チェーンの有効段・実行順**（E23プリセット）: (1) all-node centroid refinement、
+(2) 次frame・14µm edge sanitation、(3) motion relink、(4) single-parent repair、(5) GAP1 fill
+（`GAP_CLOSE_MAX_GAP=2`だが実装上effective max=1）、(6) synthetic gap centroid refinement、
+(7) safe-division（parent 8.0/sister 11.0/existing-child 10.0µm、mid-track・mutual-NN・
+divergence gate）、(8) DeepCenter gap veto／safe-division veto（epoch2）、(9) isolated-node
+prune、(10) short-track removal、(11) linefit smoothing、(12) CSV出力時の座標整数丸め。GAP2
+recovery・adaptive short-track rescue・division geometry filter・steal-twin rewire・postproc側
+consensus保護は本番では無効。
+
+**leave-one-stage-out結果（Δ=その段を抜いたarm−full E39、6動画・公式micro/単純平均）**:
+
+| 抜いた段 | 単純平均Δ | 公式microΔ | 符号（44b6/6bba） | 判定 |
+|---|---:|---:|---|---|
+| 座標整数丸め | **+0.013202** | **+0.014553** | 00+ / +++（非悪化） | 強く推奨（除去） |
+| GAP1 fill | +0.009836 | **+0.009408** | +++ / +++（全改善） | 推奨（確信度中） |
+| safe-division | +0.001647 | +0.001244 | +++ / ++−（5/6改善） | 推奨（division基準） |
+| DeepCenter safe-div veto | +0.006119 | +0.009346 | 0−+ / +++ | 除去非推奨（即採用は見送り、division専用追試候補） |
+| gap centroid refine | +0.008653 | +0.005223 | 0++ / ++− | 除去非推奨（74d0・整数量子化との交絡） |
+| motion relink | −0.001736 | +0.017568（micro上は正） | −−+ / +++（強い系統依存） | 除去非推奨 |
+| linefit | +0.002060 | −0.008338 | +−+ / −+−（符号割れ） | 除去非推奨 |
+| centroid refinement | −0.007723 | −0.012305 | −−+ / −−− | 除去非推奨（維持） |
+| short-track filter | −0.002712 | −0.002517 | −−− / −−−（全悪化） | 除去非推奨（維持） |
+| DeepCenter gap veto | −0.001168 | −0.001656 | −−− / −−−（全悪化） | 除去非推奨（維持） |
+| edge sanitation／single-parent repair／isolated prune | 0 | 0 | 000/000 | 最終出力no-op（安全ガードとして維持） |
+
+**division FP=7の発生源**: safe-division段のみ。除去するとdivision集計0/7/7→0/0/7（TPは0のまま
+不変）。ただし公式scoreの`division_jaccard=TP/(TP+FP+FN)`はTP=0のためFP有無に関わらず常に0で、
+**division FPの増減自体はscoreに影響しない**——safe-division除去によるmicro改善（+0.001244）は
+専らedge項（safe-divisionが追加する266本の第二child edgeがFPを増やす効果）に由来する。
+
+**座標整数丸めの機序**: 外すだけでedge TP+10・FP−15・FN−10、6動画すべて非悪化、両系統で符号整合、
+topology変更なし。CSV/evaluatorはfloat座標を受理するため、この量子化（最大0.5 voxel/axis誤差、
+7µm matching境界を跨ぐnode発生の原因）に必要性はない。
+
+**GAP1 fillの機序**: 全6動画改善、edge TP合計不変・FP−13、3,525 node・4,005 edge削減。
+`6bba_207c6aaf`のみTPを3失うがFPも6減り正味改善。未知Privateでの真のmissing-detection gap回収
+可能性は残るため、座標整数丸め・safe-divisionより確信度は低い。
+
+**除去非推奨の主因**: motion relink・linefitは系統間で符号が大きく割れる（44b6とbba6が逆方向）。
+centroid refinement・short-track filter・DeepCenter gap vetoは6動画中5-6本が一貫して悪化。
+
+**制約**: 各段は単独leave-one-out。複数段同時除去（座標整数丸め＋safe-division＋GAP1 fill）の
+相互作用は未測定であり、単純加算（+0.013202+0.001647+0.009836=+0.024685単純平均見込み）を
+そのまま信用してはならない。
+
+**判定**: E39は維持しつつ、上記3ステージ除去の複合効果をローカルA/Bで検証するE43を次に実施する。
+
 ---
 
 ## 撤回した結論
