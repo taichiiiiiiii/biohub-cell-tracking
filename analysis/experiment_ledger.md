@@ -7078,6 +7078,20 @@ JSON parse検証成功、`git diff`をセル単位のpython差分で確認し意
 更新により承認不要（Claude実行のみ）。notebook変更はこのコミットで反映し、push後に
 kernel実行・LB提出を行う。
 
+**Kaggle提出実績（2026-09-21）**: `kaggle kernels push -p notebooks/pub923_repro`でversion 3を
+push、実行完了（RUNNING→COMPLETE）。`kaggle kernels output`でsubmission.csv取得、z/y/x列が
+意図通りfloatで出力されていることを確認。`scripts/local_eval.py`で公開test4本（in-sample、
+参考値）score=0.8992を確認後、提出。
+
+**注意（次回提出時の教訓）**: 本コンペはコード提出専用のため、`kaggle competitions submit -f <ローカル
+フルパス>`（`-k`/`-v`なし、一般CSVアップロード扱い）は`400 Bad Request`で拒否される。正しくは
+E38と同じ形式`kaggle competitions submit -k <kernel> -v <version> -f submission.csv`
+（kernelが生成したファイル名を指定、フルパスではない）。
+
+`kaggle competitions submit -c biohub-cell-tracking-during-development -k taichiiiii/biohub-pub923-repro -v 3 -f submission.csv`
+で受理成功。**submission ID 56428314**、2026-09-21 12:13:47 UTC、状態PENDING。本日の提出は
+1/5使用、4枠残。採点結果は後日確認する。
+
 ### detection threshold 0.965調査（2026-09-21、Codex実施・分析のみ、未実行）— 前提訂正あり
 
 E37で「現行0.99 vs v27=0.965」と記載していた比較は誤り。**notebook先行セルで
