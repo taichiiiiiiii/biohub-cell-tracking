@@ -16,13 +16,21 @@ Kaggle側の受理をsubmission IDで確認して数える。送信失敗、同�
 
 | ケース | 候補・成果物 | submission ID | 受理・結果 |
 | --- | --- | --- | --- |
-| 1/5 E31 | primary-only reciprocal consensus / kernel v3 / CSV SHA2842635b8416fc3745fdb0b69c7d8d96adaace2a476be922b41bd20d395de9c8 | 56213346 | 2026-09-13 18:50:14.763 UTC受理、PENDING（score未確定） |
+| 1/5 E31 | primary-only reciprocal consensus / kernel v3 / CSV SHA2842635b8416fc3745fdb0b69c7d8d96adaace2a476be922b41bd20d395de9c8 | 56213346 | 2026-09-13 18:50:14.763 UTC受理、2026-09-19確認: COMPLETE / Public 0.924、Private未公開 |
+| 2/5 E38 | pub923_repro v2 / association複合設定 / 成果物hashは提出記録に未記載 | 56400188 | 2026-09-20 15:44:30.973 UTC受理、2026-09-21 00:02 UTC確認: COMPLETE / Public 0.930、Private未公開 |
 
-現在の受理数1/5。E31 v3は95tests・実2GPU完走・v2 byte同値・全CSV/bounds/hash検証を経て、
+現在の受理数2/5・終端記録2/5。E38はIssue #18の並行作業による提出で、詳細は末尾のE38提出節。
+新規受理の記録を根拠に既存CLIの読取を再開し、認証成功・全履歴9件・当日1件・残り4件を確認。
+2026-09-21 00:02 UTC定期確認（Issue #18）では既存CLI認証成功、E38 COMPLETE/Public 0.930。
+E23比+0.006で観測Public最高値を更新。Private改善・Claudeによる最終採用は未確定。
+API枠は当日0件/全履歴9件/残り5件。末尾の再認証待ち/PENDINGは過去の確認状態である。
+E38再送なし。採点待ちのみを理由とする凍結は終了するが、提出物hash補完・並行WIP検証は未完了。
+E31 v3は95tests・実2GPU完走・v2 byte同値・全CSV/bounds/hash検証を経て、
 Max/親の単回exploratory判断で提出。known12 gate REJECTは変更せず、E23 incumbent0.924維持。
-取得ログの詳細・runtime推定・判断記録は`analysis/e31_target_submission.md`。
-当該提出の終端score/error確認までsource/config凍結、重い次候補実行とcommit/pushは行わない。
-送信後CLIは当日残り4件、履歴APIで上記submission ID/PENDINGを確認済み。再送しない。
+取得ログの詳細・runtime推定・判断記録は`analysis/e31_target_submission.md`の
+「終端確認（2026-09-19、Issue #16）」節（認証済みKaggle提出履歴でsubmission ID 56213346が
+COMPLETE・Public 0.924・Private空欄と確認、全履歴8件・当日0件・提出可能枠5件を同時確認）。
+E23と表示精度で同点であり、改善とはしない。次候補は別途承認・検証が必要。
 
 ## 旧探索記録（2026-09-13: 当時E34評価を含め8/8非改善として探索停止）
 
@@ -6480,6 +6488,328 @@ baseline `0.9272489145` に対し E34 `0.9120348126`、差分 **−0.0152141018*
 変動余裕込みの目標0.947まで+0.023、首位0.962まで+0.038。
 
 既知の相関リスク（対処不能・記録のみ）: hidden が train と同じ 2 胚由来か新規胚かは未公表。新規胚ならドメインシフトが支配し、ローカル相関の上限そのものが下がる。
+
+---
+
+## Issue #18 — 銀メダルGoal起票と初期調査（2026-09-20）
+
+ユーザーが新Goal「Kaggleで銀メダル圏内に入れるPublic精度を作成する」を設定（旧Goalの連続8回
+非改善停止条件が2026-09-13に成立済みのため、新Goalとして仮説カウンタをリセット）。
+Issue: https://github.com/taichiiiiiiii/biohub-cell-tracking/issues/18、
+ブランチ `codex/issue-18-goal-silver-medal`（既存WIPを保持した同一checkout、new worktreeは作成せず）。
+
+### リーダーボード実測（2026-09-20 06:36 UTC、公式CSVダウンロード）
+
+`kaggle competitions leaderboard biohub-cell-tracking-during-development --download` で取得した
+`publicleaderboard-2026-09-20T06:36:21.csv`（3,745チーム）を集計。
+金=rank16/score0.960、銀=rank187/score0.948、銅=rank374/score0.947。
+現行incumbent E23（Issue #16, Public LB 0.924）とのギャップ: 銀まで+0.024。
+参考: 08-30時点の同様の実測（2,869チーム）はgold圏proxy 15位0.945だった（同じ0.2%式で整合）。
+
+### division項の探索履歴の再確認（新規実験ではない・棚卸し）
+
+E6〜E20の記録を再読し、division信号探索（順/逆softmax・patch CNN・幾何・GBDT・運動・division向け
+fine-tune）が全チャネル失敗済みであることを確認（E18判定 2026-08-25「division 信号探索の最終結論」、
+E20-b実提出でLB 0.906=現行より悪化）。結論は「第2子に質量を割かないのは学習目標（1-to-1追跡loss）の
+帰結」であり、同一チャネルの再訪はAGENTS.mdの「no identical blind retry」に抵触するため対象外とする。
+
+### 公開ノートブック調査（読み取りのみ・未提出）
+
+`kaggle kernels list --competition biohub-cell-tracking-during-development` で発見した高スコア系列:
+`evgendvorkin/biohub-0-942-lb-proxy-score-0-9417`（現行採用中の0.923系と同一作者の後継版）、
+`hahuyy`/`zhincez`の"0.947 LB, runnable with public datasets"、`haideptry`の"0.948+"、
+`beraterolelk`の"0.947"等。Discussion #742064で、これら0.947系が依拠する公開事前学習重み
+（pilkwang系）はtrain全199本で学習済みと判明——ローカルeval-12/36はこれらに対してin-sampleで
+判定不能（LB照会でのみ判定可）。
+
+`megayak/the-0-966-notebooks-used-a-patched-metric-bug`（読み取り確認、pull済み・未実行）:
+2026-07-17のcommit `aa65e90`でdivision指標の弱連結成分exploitがパッチ済みと確認。現行リーダーボード
+上位（9月提出）はこのexploitと無関係。同ノートブックの本編（division gate監査）は、shipped safe-division
+gate（divergence>=2.25µm, symmetry<=60%）が151件の真division中35件しか通過させないこと、
+gateを緩めるだけではランキング（frame-budget内で幾何最近傍を優先する既存ロジック）がボトルネックで
+逆効果（held-out 1本でscore 0.9508→0.9341）になることを実証。この知見はE6〜E20の「探索チャネル全滅」
+結論と整合し、新しい実験の根拠にはならない（ranking改善策自体は未解決のまま）。
+
+### ユーザー訂正2件（同日）とその反映
+
+1. 「最終はPrivateなので、PublicにオーバーFitはやめて下さい」: Issue #18本文のTrack Aを
+   「Publicスコア模倣」から「機序として妥当な改善抽出のみ・LB反復照会での選抜禁止」へ再定義した。
+2. 「学習にはローカル環境を使用してもいい」: 実機確認の結果、CLAUDE.mdの「ローカルRAM 3.8GB」は
+   誤りと判明（実機はApple M4 Pro・RAM48GB・空き179GB・torch 2.13.0 MPS対応）。CLAUDE.mdを訂正し、
+   Track Bの選択肢にローカル学習を追加した。
+
+### 現在の状態
+
+Track A（公開ノートブック調査）はCodexプラグインのサンドボックスにネットワークアクセスがなく
+（`kaggle kernels pull`がDNS解決失敗）実行不能と判明。Claude自身が直接pullして調査を完了した
+（下記E35のTrack B結果を参照）。Kaggle実行・新規提出は0件。commit/pushなし。
+
+### Track A調査結果（Claude自身が直接実施、2026-09-20）
+
+`evgendvorkin/biohub-0-942-lb-proxy-score-0-9417`（自身の0.923版の後継）、
+`hahuyy`/`zhincez`の`biohub-0-947-lb-runnable-with-public-datasets`をkaggle kernels pullで取得・精読。
+
+- 3notebookとも`dataset_sources`が完全一致（pilkwang系3点）で、我々自身の
+  `notebooks/base2_dual_seed_harmonic/kernel-metadata.json`と同一——**我々の現行E23パイプラインも
+  既に同じpilkwang事前学習重みに依存している**（新たなリスクではなく既存の前提）。
+- `hahuyy`のnotebookは「Reyhan Ksatriaの0.947notebookのモデルパスをpilkwang公開版に差し替えただけ」
+  と明記。検証SHA256の primary `12f6881e...` は**我々が現在使用しているprimaryチェックポイントと同一**
+  ——0.923→0.947は別モデルではなく同じ検出器＋改良後処理によるものと確認。
+- evgendvorkinの942版notebookは自己文書化された変更履歴（ロシア語）を含み、0.923→0.934は
+  safe-division閾値・BIDIR重み等のパラメータ探索（我々がE6-E20で既に失敗済みの領域と同種）、
+  0.934→0.947はモデル横断で収束した"eight-view TTAを検出だけでなくエッジ特徴量にも拡張する"
+  という技術（evgendvorkin系・reyhanksatria/hahuyy系の双方が独立に到達）が核心と判明。
+
+### E35: エッジ特徴量TTA平均化 — 事前登録とローカルA/B結果（2026-09-20、Codex実装・採点）
+
+**仮説**: 既存の8-view検出TTA（3 flip+2 rot90+transpose+anti-transpose、`det_logits`のみ平均化）を、
+`predict_edges`が使う`unet_out`特徴量にも拡張すればedge品質が上がるはず（機序: 視点アンサンブルに
+よる分散低減。E6-E20のdivision信号探索とは異なる新規チャネル）。
+
+**実装**: `outputs/local/e23_collection_verified_20260912/tracking_repo/scripts/predict_unet_transformer.py`
+（sha256 `8e7ac19e...`、notebook記載の期待値`c44e771...`とは不一致だがE23の3保存先と相互一致、
+現行8-view実装を直接含む唯一の候補として採用）をscratchコピーし、既存det_tta実装と同じ
+flip/rot90/transpose逆変換で`unet_out`も累積平均するよう変更（`outputs/local/e35_edge_tta/`）。
+primaryチェックポイント`12f6881e...`（`outputs/kaggle/st_r3_checkpoint_recovery/primary/`）で検証。
+forward pass数はbaseline/patchedとも792回（99 windows×8 views）で完全一致——追加推論コストなし。
+
+**結果（ローカルtrain 2本、公式metric採点、CPU実行）**:
+
+| 動画 | Adjusted edge Jaccard (base→patched) | Δ | 備考 |
+|---|---|---|---|
+| 44b6_d754aa59 | 0.976927→0.975859 | −0.001067 | node recall不変 |
+| 6bba_0e7c0d07 | 0.852329→0.830848 | **−0.021480** | edge TP 184→183, FP 17→21, FN 14→15 |
+
+2/2動画でcombined scoreが悪化（平均Δ≈−0.01127）。実行時間差は±0.4%以内で追加コストなし。
+MPSは`torch.backends.mps.is_available()`が実行時FalseとなりCPUへフォールバック（要因未特定）。
+
+**判定**: **不採用**。Kaggle提出・base2.ipynbへの移植は行わない。
+E35はTrack Bの新規チャネルとしては失敗に終わったが、E6-E34とは異なる機序のため
+「同一チャネルの再訪」には該当しない。
+
+**機序分析（Codex追加委任、2026-09-20完了）**: 6bba_0e7c0d07の悪化は丸め誤差ではない。
+- 全`unet_out`のTTA平均はcanonical比で相対MAE 20.55%（cosine類似度0.9726）。
+  `_index_features`で抽出したnode位置の22ベクトルではcosine類似度0.9981（方向はほぼ同じ）だが
+  ノルム比0.861〜1.143（最大±14%）と変動——**方向は保たれるが大きさが動く**。
+- このノルム変動がedge Transformer/source-softmaxによる候補間の相対確率競合、および
+  既存のforward/reverse harmonic fusionを通じて増幅され、0.48閾値付近で複数pairの採否が反転
+  （例: 新規FP化 t67 harmonic prob 0.4148→0.5277、Lost TP #162 harmonic prob 0.5075→0.4734）。
+  最終的にILPのグローバル最適化がendpoint選択を変え、連続するTPを失う（retained TP 181,
+  lost TP 3, gained TP 2 = 正味−1）。raw logitがほぼ不変/上昇でも確率が下がるpairがあり、
+  「対象pair自体のsignal劣化」ではなく「同じtargetを争う他sourceとの相対順位変化」が主因。
+- 検出logit側もTTA平均で完全にequivariantではない（8-view平均のsigmoid確率MAE 0.0382、
+  cosine 0.9710）が、baseline/patched共通のため今回のA/B差の原因ではない。
+- 公開notebook（evgendvorkin, reyhanksatria/hahuyy）との差についての仮説（未確認・外部コード未参照）:
+  彼らは「UNet特徴量をpredict_edges前に平均」ではなく「view毎に完全なpredict_edgesを実行し、
+  edge確率を事後に平均」していた可能性が高い（非線形なTransformer/softmax/harmonic fusionを
+  経由後の確率平均は、経由前の特徴平均と数学的に等価ではないため）。次にこの方向を再検討する
+  なら「view毎predict_edges→事後確率平均」と「forward-only vs harmonic分離ablation」が
+  妥当な次の検証設計。ただし現時点でKaggle投入の根拠はない。
+- 詳細: `outputs/local/e35_edge_tta/mechanism_probe.py` / `mechanism_probe.json`。
+
+### E36: view別full edge scoring後の確率TTA平均 — ローカルA/B結果（2026-09-20）
+
+**仮説**: E35の失敗は、非線形なedge Transformerより前で8-view UNet特徴を平均し、node feature
+normと候補間softmax競合を歪めたことが原因である。各viewをinverse-alignした後、それぞれ独立に
+`predict_edges`とforward/reverse harmonic fusionへ通し、最終softmax確率だけを平均すれば、
+E35のscale distortionを避けつつview ensembleの分散低減を得られる。
+
+**source/実装**: E35と同じ
+`outputs/local/e23_collection_verified_20260912/tracking_repo/scripts/predict_unet_transformer.py`
+を使用前にsha256検証し、指定値`8e7ac19e8b436d6777576b7ea2269464c4ed8842990b45448d40bf178f8f62de`
+と一致。scratchは`outputs/local/e36_edge_tta_posthoc/`。8枚のinverse-aligned `unet_out`を
+平均せず保持し、各viewでforward/reverse `predict_edges`→harmonic calibration→source方向softmaxを
+完了してから確率を等重み平均した。候補alignmentは、既存の8-view平均detectorが生成するcanonical
+座標の同一`n_src × n_tgt` dense Cartesian productを全viewで共有する方式。view別top-k/pruningを
+行わないためcandidate unionは全viewで同一となり、missing candidateやsilent intersection dropはない。
+E35と同じprimary checkpoint単独のisolation testで、canonical-only secondary edge pathとの混合は
+未定義としてscratch実装内で明示的に拒否する。
+
+**評価条件**: E35と同じreal-GT付き100-frame動画2本、primary checkpoint `12f6881e...`、
+det threshold 0.96875、edge threshold 0.48、bidirectional harmonic weight 0.20、同一ILP。
+baseline CSVはE35の同一設定成果物をscratchへコピーし、E36とともに`src/biohub/evaluate.py`経由の
+公式metricで再採点。MPSは今回もruntime unavailableのためCPU。Kaggle実行・提出なし。
+
+| 動画 | Adjusted edge Jaccard / combined (base→E36) | Δ | Division J | Node recall |
+|---|---|---:|---:|---:|
+| 44b6_d754aa59 | 0.976926541→0.976183109 | **−0.000743432** | 0→0 | 1.0→1.0 |
+| 6bba_0e7c0d07 | 0.852328531→0.856922453 | **+0.004593921** | 0→0 | 0.990430622→0.990430622 |
+
+paired mean Δは**+0.001925245**だが、2動画で符号不一致かつ常設の0.005判定不能幅未満。
+6bbaはedge TP/FP/FN 184/17/14→185/17/13と実改善した一方、44b6はedge count不変で
+選択node 5632→5671によるadjustment penaltyだけが増えた。divisionは両armとも検出0。
+
+**計算量**: 各動画99 windowsでencodeは両方式とも792回。harmonic有効時の`predict_edges`は
+baseline 198回相当からE36 1584回へ正確に8倍。実測（推論+ILP）は44b6
+543.24→547.28秒（+0.74%）、6bba 547.64→574.29秒（+4.87%）、平均
+545.44→560.78秒（**+2.81%**）。encoderがCPU時間を支配するためwall-clock増は8倍ではないが、
+8 feature mapsを同時保持する追加memoryと、GPUでの比率は未実測。CPU直列200動画外挿は約31.2時間
+（2 shardなら約15.6時間）で、12時間budgetを保証できない。
+
+**機序診断**: 6bbaの公式matchingはretained TP 182、lost TP 2、gained TP 3（正味+1）。
+E35でthreshold反転した4 pairにおけるcanonical harmonic probabilityからの平均絶対移動は
+E35 0.08147に対しE36 0.05185（約36%減）。例: E35新規FP t67は
+0.4148→0.5277だったがE36は0.4463で0.48未満を維持し、t75の別FPもE35 0.4847に対し
+E36 0.4599で回避。したがってpost-hoc確率平均がpre-softmax feature平均よりscale distortionを
+抑える機序は支持された。一方、lost TP #158/#159はE36でもendpointがILPから脱落し、view別
+probability rangeも例として0.4578〜0.5613、0.6165〜0.6586と残る。局所改善はあるが、
+graph-level効果はdetector/ILPの離散選択に依存し、動画横断で安定していない。
+
+**判定（n=2時点）**: 現時点ではbase2.ipynbへportせず、Kaggle提出しない。E35より機序は健全で6bbaに
+実改善があるため完全な無効仮説ではないが、n=2・符号不一致・mean Δ<0.005・primary-only・GPU
+memory/runtime未検証で採用根拠に不足。`inconclusive / do-not-port`として記録。
+
+**サンプル拡張（n=6、2026-09-20、Codex実装・同一harness）**: 未使用のローカルtrain動画4本
+（44b6_706092f0, 44b6_74d0c52e, 6bba_07e24132, 6bba_207c6aaf）を追加評価。
+
+| 動画 | Δ(combined) |
+|---|---:|
+| 44b6_706092f0 | −0.009654 |
+| 44b6_74d0c52e | −0.008457 |
+| 6bba_07e24132 | −0.017502 |
+| 6bba_207c6aaf | +0.011231 |
+
+6動画paired mean Δ=**−0.003422**（改善2/6、悪化4/6）。44b6系は3/3すべて悪化（strain平均−0.006285）、
+6bba系は2改善1悪化（strain平均−0.000559）。division Jaccardは全動画・両armで0。
+n=2→6でmean符号が反転し、追加4本単独の平均も−0.006と負——n=2時点の「6bbaで改善」は
+再現しなかった。
+
+**実行コスト**: 平均+22.62秒/動画（+4.14%、baseline546.91s→E36 569.52s）。200動画換算では
+CPU直列31.64時間・理想2-way shard 15.82時間。既存E23ベースラインの200動画換算約11.95時間に
+この+4.14%を掛けると**約12.44時間となり、12時間のhard limitを超過**する。
+
+**最終判定**: **不採用（clearly negative）**。base2.ipynbへのport・Kaggle提出は行わない。
+精度面（4/6動画悪化、44b6系は全滅）・実行時間面（12時間上限超過の見込み）の両方で採用根拠なし。
+これによりTTA平均化アプローチ（E35: 特徴量レベル、E36: 確率レベルとも）はこのモデル構成では
+クローズとする。次候補は別の機序（例: secondaryモデル込みの見直し、検出器自体の改善、
+公開notebookの他の差分要素）を検討する。
+詳細: `outputs/local/e36_edge_tta_posthoc/additional4_and_six_video_summary.json`。
+
+### E37: 公開notebook(evgendvorkin v27=0.934)とのパラメータ差分調査（2026-09-20、Codex実施・分析のみ）
+
+**目的**: E35/E36でクローズしたTTA平均化とは別に、evgendvorkinの自己文書化changelog（v10=0.923→
+v27=0.934、TTA導入前）と我々の現行E23直結config（`notebooks/pub923_repro/pub923_repro.ipynb`）を
+突き合わせ、E6-E20で未試験の組合せがないか精査。`outputs/local/e37_config_diff/`に対象notebook
+（evgendvorkin_942.ipynb, hahuyy_947.ipynb）をコピーして分析（推論実行なし）。
+
+**判明した差分と既評価状況**（詳細表は`outputs/local/e37_config_diff/`参照、要点のみ）:
+- Secondary detection weight: v27=0.80 vs 現行0.475 — **未試験**
+- Bidirectional edge weight: v27=0.15 vs 現行0.30(pub923)/0.20(base2) — **未試験**（E22は0.20→0.30の
+  み検証・採用バー未達）
+- Secondary edge weight: v27は notebook内で0.15/0.20が矛盾記載・確定不能。現行0.15
+- Safe-div parent/sister: v27=7.0/12.0 vs 現行8.0/11.0(pub923) — E15はmax=6.0との組合せのみ検証・
+  棄却済みだが、7/12のexact組合せは未試験
+- ILP division/disappearance weight: v27=1.2/2.0（推定） vs 現行1.0/1.5 — E13で近傍値検証済み・
+  ほぼ不感（division数不変）
+- DeepCenter epoch: v27=500/checkpoint_last vs 現行2/best.pt、veto: v27=off vs 現行on — 未試験だが
+  E7ではveto onがdiv FPを改善した記録があり、offに戻す根拠は弱い
+
+hahuyyの独自changelog（0.934→0.939の変更点）は、safe-div 7/12・DeepCenter epoch500/veto-offという
+v27状態を部分的に補強する一方、BIDIR=0.30（evgendvorkinのv27=0.15と矛盾）としており、association
+系設定の全体一致は得られていない。
+
+**結論**: 「差分は全て既に試した」とは言えない。特にSEC_DET=0.80・BIDIR=0.15・ILP 1.2/2.0の
+exact値、およびそれらの複合設定は未試験。ただし高信頼・低コストな単一パラメータ候補はなく、
+最有力候補（v27 association/detection複合設定）はモデル再推論を要する。→ E38として実行。
+
+### E38: evgendvorkin v27 association複合設定（SEC_DET=0.80, BIDIR=0.15, secondary有効）— **採用検討可（Adopt-worthy）**
+
+E37で特定した最有力未試験候補をローカルA/Bで検証（Codex実施、2026-09-20）。E35/E36とは異なり
+secondaryモデルを実際に有効化（primary-only条件から離れる）。baselineはE23の実配置設定
+（pub923_repro.ipynb実値: SEC_DET=0.475, BIDIR=0.30, secondary edge=0.15）とし、E35/E36のCSVは
+再利用せず同一条件・同一6動画で採点し直した（primary-onlyのE35/E36 baselineとは公平比較にならない
+ため）。
+
+**設定変更**: secondary detection weight 0.475→0.80、bidirectional edge weight 0.30→0.15、
+secondary edge weight 0.15→0.20（EDGE_WEIGHTはnotebook内に0.15/0.20の矛盾記載があり、
+v27専用表と複数のまとめが一致する0.20を採用。0.15 sub-variantは未検証）。primary/secondary
+checkpointはE23と同一（`12f6881e...`/`9bac2fa0...`、sha256検証済み）。
+
+**結果（6動画、公式metric、baseline→v27）**:
+
+| 動画 | Δ(combined) |
+|---|---:|
+| 44b6_d754aa59 | −0.000438 |
+| 6bba_0e7c0d07 | +0.013665 |
+| 44b6_706092f0 | −0.000489 |
+| 44b6_74d0c52e | +0.005737 |
+| 6bba_07e24132 | +0.010695 |
+| 6bba_207c6aaf | +0.008877 |
+
+paired mean Δ=**+0.006341**（改善4/6、悪化2/6）。**6bba系は3/3改善（strain平均+0.011079）**、
+44b6系は1/3改善・2件は約−0.0005の軽微な悪化。改善例ではedge FPが一貫して減少
+（例: 16→13, 16→14, 83→79）。division Jaccardは全条件0（この6本では両armとも検出0、
+division効果は未測定）。node recallは平均−0.002988（6bbaでノード数を減らしFPを抑えるトレード
+オフ）。SEC_DET=0.80の実適用は600フレーム中408（32%はretention guardでprimaryへfallback）。
+
+**実行コスト**: baseline/v27とも約1087〜1094秒/動画（差+0.58%、誤差範囲）。secondary有効化により
+E35/E36のprimary-only baseline（546.91秒/動画）の約2.00倍——ただしこれはE23の実配置設定に
+既に内在するコストであり、E38固有の追加ではない（forward pass回数はbaselineと同一）。
+CPU直列200動画外挿は約60.77時間だが、これはローカルCPUの話でありKaggle T4 GPU実測ではない。
+台帳记载のE23 notebook実測（約11.95時間、hard limit 12時間に対し余裕約3分）に対し、E38は
+同一計算グラフ・同一forward回数のため**構造的な追加コストはない**と考えられるが、GPU上での
+直接検証はまだ行っていない。
+
+**判定**: **Adopt-worthy（採用検討可）**。paired mean+0.006341・改善4/6・6bba 3/3改善・
+edge FP削減という一貫した機序・evgendvorkin本人の実LB0.934という独立した外部根拠、の四点が揃う。
+E35/E36と異なりTTA由来の追加forwardがなく、現行E23と同一計算グラフである点も採用障壁を下げる。
+一方、division効果未測定・node recall平均低下・EDGE_WEIGHT記述矛盾（0.20採用、0.15未検証）・
+GPU実測runtimeの直接確認がまだという留保があり、「即座にincumbent置換」ではなく
+**Kaggle実行での実測確認とA/B提出候補**として次に進める。
+詳細: `outputs/local/e38_v27_combo/`（run_e38.py, predict_unet_transformer.py, 各動画のJSON/CSV）。
+
+### E38 Kaggle提出（事前登録、2026-09-20）
+
+**実行時間リスクの評価**: 台帳記載の「200動画換算11.95時間」（4463-4477行）は公開test4本の
+ログ区間からの外挿であり、team自身が「hiddenの構成・規模・shard偏りも不明なので正式な12時間
+超過判定には使わない」と明記している。E23（この計算グラフを使用）は既にhidden実行でCOMPLETE・
+Public 0.924を達成済み——実際のruntimeが12時間以内であることは既に実証されている。E38は
+secondary detection/bidirectional/secondary edge weightの3スカラー値のみ変更し、forward pass
+回数・計算グラフはE23と同一のため、実行時間はE23と同等になると予測する（事前登録）。
+
+**変更内容**: `notebooks/pub923_repro/pub923_repro.ipynb`（E23を生成した提出notebook本体）に
+E38のパラメータ（SEC_DET 0.475→0.80、BIDIR 0.30→0.15、secondary edge 0.15→0.20）を適用
+（Codex実装、configuration guard・receipt・説明文も含め一貫して更新、parse検証PASS）。
+他の定数・checkpoint・モデルパス・セル構造は変更していない。
+
+**判定規則（読み出し前に固定）**: Kaggle実行が成功（COMPLETE、CSV検証PASS）し、実行時間が
+12時間以内に収まることを最低条件とする。Public LBスコアがE23の0.924を上回れば採用候補とし
+incumbent更新を検討する。スコアが同等または下回る場合、あるいは12時間超過・エラーで失敗した
+場合は不採用とし、その旨を記録する。
+
+**実行**: `kaggle kernels push -p notebooks/pub923_repro` でversion 2をpush（2026-09-20）。
+kernel実行はKaggle側でCOMPLETE（実時間は台帳未記録、hidden実行なので直接測定不可）。
+生成された`submission.csv`（237,320行、4動画分）をダウンロードし、`scripts/local_eval.py`で
+公開test4本（=trainと同一・GT付き）に対し構造検証・in-sample採点を実施: score=0.8959,
+adj_edge_jaccard=0.8959, division_jaccard=0.0000（TP=0/FP=5/FN=3）, node_recall=0.9823。
+CSV構造は正常（`score_submission()`がraiseなしで完了）。E23側のこの4本local値は台帳に
+未記録のため直接比較はできない（in-sample値であり汎化性能の判定には使わない、既存プロトコル通り）。
+
+**Kaggle提出**: 通常の`kaggle competitions submit -f`は競技側で400 Bad Requestとなり失敗
+（コード提出専用競技のため、生CSVアップロードではなくkernel version経由が必要と判明）。
+`kaggle competitions submit -k taichiiiii/biohub-pub923-repro -v 2 -f submission.csv`で
+再試行し受理成功。submission ID **56400188**、2026-09-20 15:44:30 UTC、状態PENDING。
+本日の提出枠は残り4/5。
+
+**認証切れ（2026-09-21）**: 提出後、約4時間PENDINGを定期確認していたところKaggle CLIの認証が
+切れ、`Authentication required to call the Kaggle API`エラーとなった。AGENTS.mdの方針に従い
+再試行・資格情報ファイルの読み取りは行わず、監視を停止してユーザーに再認証を依頼した。
+submission 56400188の採点結果は再認証後に確認する。それまでの最終確認時点では引き続きPENDING
+だった（COMPLETE/スコアは未確認）。
+
+**採点結果（2026-09-21、再認証後確認）**: submission 56400188は**COMPLETE、Public LB = 0.930**。
+E23 incumbent（0.924）に対し**+0.006**——ローカル6動画A/B予測（paired mean +0.006341）とほぼ
+一致した。事前登録した判定規則（E23の0.924を上回れば採用検討）を満たす。
+
+**判定: 採用（E23→E39としてincumbent更新）**。E38（=このLB提出をE39と呼称、以後の台帳・Issueは
+E39で参照）はTTA平均化（E35/E36、不採用）とは異なり、公開notebook作者本人の実LB検証済み設定を
+移植した初めての成功例。銀メダルライン0.948までのギャップは+0.024→**+0.018**に縮小。
+
+**残タスク**: (1) 今回のnotebook変更（`notebooks/pub923_repro/pub923_repro.ipynb`のSEC_DET/BIDIR/
+secondary edge weight変更）をcommit（ユーザー承認後）、(2) Issue #18の受入基準に沿って結果を記録し
+Issueを更新、(3) EDGE_WEIGHT=0.15 sub-variantの未検証、division効果未測定、node recall平均低下と
+いった留保事項への対応要否を検討、(4) 次の候補（E37で識別した他の未試験パラメータ: ILP division/
+disappearance weight 1.2/2.0、DeepCenter epoch500等）の要否をユーザーと相談。
 
 ---
 
