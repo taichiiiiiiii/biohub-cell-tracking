@@ -6978,7 +6978,7 @@ consensus保護は本番では無効。
 | linefit | +0.002060 | −0.008338 | +−+ / −+−（符号割れ） | 除去非推奨 |
 | centroid refinement | −0.007723 | −0.012305 | −−+ / −−− | 除去非推奨（維持） |
 | short-track filter | −0.002712 | −0.002517 | −−− / −−−（全悪化） | 除去非推奨（維持） |
-| DeepCenter gap veto | −0.001168 | −0.001656 | −−− / −−−（全悪化） | 除去非推奨（維持） |
+| DeepCenter gap veto | −0.000834 | −0.001656 | −−− / −−−（全悪化） | 除去非推奨（維持） |
 | edge sanitation／single-parent repair／isolated prune | 0 | 0 | 000/000 | 最終出力no-op（安全ガードとして維持） |
 
 **division FP=7の発生源**: safe-division段のみ。除去するとdivision集計0/7/7→0/0/7（TPは0のまま
@@ -7002,6 +7002,49 @@ centroid refinement・short-track filter・DeepCenter gap vetoは6動画中5-6�
 そのまま信用してはならない。
 
 **判定**: E39は維持しつつ、上記3ステージ除去の複合効果をローカルA/Bで検証するE43を次に実施する。
+
+### E43: R（座標整数丸め廃止）/G（GAP1 fill無効化）/S（safe-division無効化）複合アブレーション — **R+Sを採用推奨、R+G+Sは見送り**（2026-09-21、Codex実施・ローカルA/B、再推論不要）
+
+**目的**: E42で単独leave-one-out推奨となった3ステージ（R/G/S）の複合効果・相互作用を、同じ
+E40 candidate cacheで検証した。E39本番のArm full再計測値はE41/E42と全6動画で一致。
+
+**動画横断集計（公式micro平均、full E39比のΔ）**:
+
+| Arm | 単純平均Δ(vs full) | 公式microΔ(vs full) | 符号一致性 |
+|---|---:|---:|---|
+| R+G | +0.010573 | +0.013973 | 改善5・悪化1 |
+| R+S | +0.015011 | +0.015870 | **改善6/6** |
+| G+S | +0.011383 | +0.008884 | 改善5・悪化1 |
+| R+G+S | +0.014171 | +0.016564 | **改善6/6**（内部相互作用大） |
+
+E42単独効果の単純加算との差（interaction）: R+G −0.009988、R+S **+0.000073（ほぼ加算的）**、
+G+S −0.001768、R+G+S −0.008641。
+
+**R+Sが最も安定**: full比でedge TP+7・FP−21・FN−7、division TP/FP/FN=0/0/7（FP 7→0を維持しつつ
+edge correctness自体も改善）。6動画すべて改善、44b6系統平均+0.015921・6bba系統平均+0.014101と
+系統間でも同程度。単独効果とほぼ加算的で強い相互作用がない。
+
+**R+G+Sを見送る理由**: microではR+Sを+0.000694上回るが単純平均は−0.000840悪化。Gの追加は
+R+S比で改善4・悪化2（`44b6_74d0c52e`−0.012860、`6bba_0e7c0d07`−0.001972）。GAP1除去は
+`44b6_706092f0`（total_node_ratio−0.61→G/S適用後−0.66）・`44b6_74d0c52e`（−0.42→−0.48）の
+過少予測をさらに進める。現行metricは負方向total_node_ratioをclampしないため、これ自体はscore上
+利得になるが、`44b6_74d0c52e`ではG+S/R+G+SでTP−1・FN+1という実edge損失をnode-count adjustment
+で覆い隠している成分がある。R+Sは同動画でTP135/FP3/FN4・score 0.994566と、node adjustmentに
+頼らずedge correctness自体が改善しており、Private汎化の安全性でR+Sに劣る。
+
+**R+G+S非加算性の主因**: Rはtopologyを変えないが、G/S適用後の座標に対する7µm matching境界を
+移動させる。G+S→R+G+Sでnode/edge数は完全同一なのに`6bba_0e7c0d07`は−0.017877、
+`6bba_07e24132`は+0.019461、`6bba_207c6aaf`は+0.015146と動画ごとに逆方向へ動く。
+
+**bare ILP（Arm 0）との比較**: いずれの複合armもbare ILP（単純平均0.854506、micro 0.792996）を
+下回ったまま（R+Sでmicro差−0.004659）。本番postprocessの一部除去はfullの損失をかなり回収するが
+完全には回収しない。
+
+**判定**: Private向け優先順位は**R+S > R単独 > R+G+S > G+S/R+G**。**R+Sを次のnotebook変更・
+LB検証候補として採用**する。R+G+Sの一括採用は見送り、GAP1 fill（G）は当面手を付けない。
+
+**残タスク**: notebook（`notebooks/pub923_repro/pub923_repro.ipynb`）への実装（R: writerの
+座標float化、S: `BIOHUB_OUTPUT_SAFE_DIVISIONS=0`）→ローカル検証→E44として事前登録・Kaggle提出。
 
 ---
 
