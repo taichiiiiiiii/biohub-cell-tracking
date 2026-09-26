@@ -10716,6 +10716,72 @@ E58/E59 が採用されれば best-Public はそちらへ移る。**best-mechani
   実装が終わったら**その日のうちに kernel を回して提出する**。
 - **監視は張り直す。** monitor はセッション寿命なので、再開時に必ず張り直す。
 
+### 公開 0.951 監査を 4 層で完了させた（2026-09-26 06:5x UTC）
+
+`a0c5bbb` で「env だけを見て def/class を見なかったから density-group を見落とした」と訂正した反省から、
+監査を層に分けて全部埋めた。我々側は commit `94b3f7f`（E58）。
+
+| 層 | 方法 | 0.951 にあって我々に無いもの |
+|---|---|---|
+| 1. env 名 | `os.environ[...] = ` の集合 | 4 件（DivNet ×2、PPSWEEP meta ×2） |
+| 2. def / class 名 | 定義名の集合 | 7 件（DivNet ×4、sweep の `write_test_submission`、呼出 0 の `_process_one_dataset`、`determine_density_group`） |
+| 3. モジュール定数 | 列 0 の ALL_CAPS 代入 | **1 件のみ: `DENSITY_GROUP_OVERRIDES`** |
+| 4. **同名関数の本体** | 正規化後の sha256 比較 | 57 件中 **50 件が完全一致**、相違 7 件 |
+
+層 4 の相違 7 件のうち品質に関わるのは 3 件:
+`motion_relink_edges`（E59 が移植中）、`filter_output_graph`（E58 で移植済み）、
+そして **`add_safe_divisions_postlink`** — 以下が本節の発見。
+残り 4 件（`_sha256_file`、`_dc_checkpoint_candidates`、`_merge_prediction_shards`、
+`divnet_score_division` の char 差）は artifact 処理か分割器の見かけ上の差で品質に無関係。
+
+#### ★発見 1: 死んでいた 3 カウンタの出自が判明した
+
+E53 で「初期化・印字されるが一度も increment されない」と記録した
+`safe_division_mutual_nn_rejected` / `safe_division_divergence_rejected` /
+`safe_division_geometric_candidates` は、**0.951 の `add_safe_divisions_postlink` では実際に increment される。**
+
+我々はカウンタの宣言と印字だけをその系統から引き継ぎ、制約本体は**別系統の再実装**で入れたため
+increment が存在しなかった。cell 13 の該当箇所には
+`# === PORTED from kunaldesale2408/biohub-cell-tracking (6 div TP vs our 0) ===` というコメントが残っている。
+**我々の safe-division チェーンは公開 0.951 の実装ではなく、別の公開 notebook からの移植＋自前制約である。**
+E56 の tau（+0.007）は、この我々の変種の中に挿入したものだった。
+
+#### ★発見 2: 構造差 3 点
+
+| | 0.951 | 我々 |
+|---|---|---|
+| mutual-NN 制約 | `SAFE_DIV_REQUIRE_MUTUAL_NN` で **env 切替可能** | **ハードコードで常時 ON**（C2） |
+| divergence 制約 | `SAFE_DIV_REQUIRE_DIVERGENCE` で **env 切替可能** | **ハードコードで常時 ON**（C3） |
+| source の一意性 | **`used_sources` で 1 source あたり 1 division** | 相当物が見当たらない |
+
+いずれの `REQUIRE_*` も 0.951 の cell 2 では**設定されていない**（env 60 件に含まれない）ので既定値で走る。
+
+#### 自分の推測を先に潰しておく（誤りやすい点）
+
+「我々は候補を source 周り `SAFE_DIV_MAX_UM`(9.0) で事前フィルタし、0.951 は全候補を回すのだから、
+0.951 のほうが到達範囲が広い」は **誤り**。0.951 も後段で `parent_dist > SAFE_DIV_MAX_UM` で切るため
+**同じ 9.0 µm 境界**である。列挙の仕方が違うだけで到達範囲は同一。
+したがって **E55 が示した「候補が親半径内に存在しない 14 件」には 0.951 の実装でも届かない。**
+E55 の結論（recall は幾何学的に閉じている）は、この発見では覆らない。
+
+#### E60 候補: `add_safe_divisions_postlink` を 0.951 の実装に合わせる
+
+- 機序: **`used_sources` により 1 source 1 division となり division が減る。**
+  4 点の LB 曲線（103 → 0.944 / 175 → 0.937 / 296 → 0.935 / 341 → 0.935）は
+  **103〜341 の範囲で少ないほど良い**と言っており、方向が一致する。
+- 公開実装なので過適合プロトコル 6 を満たす。
+- リスク: 我々の変種には自前制約が入っており、丸ごと置換すると **E56 の +0.007 を生んだ土台自体が変わる**。
+  tau の挿入位置も移す必要がある。**単一変数 arm にならない**点が弱み。
+- したがって優先度は **E59 の次**。E59 の結果を見てから、枠と時間が残っていれば読む。
+- **E44（safe-division 完全 OFF）= 0.893** があるので、「減らせば良い」を外挿しないことは引き続き守る。
+
+#### 監査の残差（ここまでやっても残るもの）
+
+層 1〜4 で捕まらないのは、**関数内のインラインな数値リテラル差**と、
+**同名だが正規化後に一致した関数の中の、意味を変えない書き換え**。前者は層 4 の sha256 比較で
+一致した 50 件については存在しない（正規化は空白とコメントのみを落としているため）。
+したがって残差は小さいと判断する。**この 4 層の手順を、以後の公開実装比較の標準とする。**
+
 ## 撤回した結論
 
 後から誤りと分かった結論をここに集める。**消さずに残す。** 撤回したら
