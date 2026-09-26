@@ -11432,3 +11432,69 @@ f"edge threshold={cfg.threshold:.3f}",
 （E57 で R ≥ 3 を拒否条件に使ったのと同じ規則を流用する）。
 閾値を選ぶ際は、回収数だけでなく R_cand が小さい側を優先する。
 
+
+---
+
+## 2026-09-27 設計見直し（ユーザー指摘「設計の見直しはいらないですか？」を受けて）
+
+### 先に閉じている軸を測定で確認した（思い込みで閉じていない）
+
+| 軸 | 状態 | 根拠 |
+|---|---|---|
+| **edge モデルの再学習** | **閉**（測定済み） | `outputs/local/association_candidates/` に 2026-09-22 の学習実行が2本。`frozen-association-20260922-v1` と `-xyflip-v1`、各10 epoch・447 s/epoch。**両方 gate `verdict = FAIL`**。理由は品質側で `primary selector failed recomputed threshold` / `noninferiority improved_videos failed recomputed threshold`（v1）、加えて `44b6_precision`（xyflip）。best_epoch 2 と 4 / 10 で早期に過学習、val loss は 0.00147 で平坦。インフラ障害ではなく**非劣性を満たせなかった**。 |
+| **公開実装のさらなる移植** | **閉**（期待値ほぼ0） | E62 の4層監査。`TIGHT_UM 5.5` は LB no-op（E51 実測）、DivNet は既定 off で dead code、density 群は 121,274 中 21 edge、PP sweep は出荷時 `VALIDATOR_ENABLE=0` で dead、`CACHE_EDGE_THRESHOLD=1.0` は `probs > 1.0` で no-op。0.953 の内訳・実行 output・LB 出典は notebook 内に存在しない。 |
+| **node 数による metric 悪用** | **閉** | `total_node_ratio` は −0.150（倍率 1.015）。これ以上稼ぐには node を減らすしかないが、`n_total` は test 時に必要なメタデータであり、かつ**狙って偽 node を消す操作は E65 と同一問題に帰着する**。無選別の削減は GT 注釈が全 node の 2.7% しかないため TP を比例で失う。**09-29 の締切圧力下で再開しないよう閉として記録する。** |
+
+### 設計上の問題1（明文化していなかった）: E65 と E66 の利得は加算できない
+
+E65 の +0.0095 は誤 motion edge 81 本の**除去**、E66 の価値はその空いた slot を**埋める**ことから来る。
+しかし E66 は候補集合を変えるので ILP 出力が変わり、**motion_relink が見る slot 自体が変わる**。
+つまり two-stage の利得は加算ではない。さらに **E66 の「清浄な12件」は現行グラフ上で数えた値であり、
+E65 のグラフ上の値ではない（stale）**。
+
+**決定（事前登録）: E66 は E65 の勝ち arm のキャッシュ上で測る。** 理由は出荷される構成がそれだから。
+その際 **+0.0038 という数値は無効として再計算する**。E65 の勝ち arm 確定後に、
+world (a) の out-slot 占有状況（`wrong_edge_in_raw_candidates` の True/False/空の内訳）を
+E65 グラフ上で再集計してから E66 の期待値を引き直す。
+
+### 設計上の問題2（これが本当の見直し点）: scorer の「順位付け」軸は閉じていない
+
+再学習の gate FAIL が閉じたのは **scorer を置き換えること**であって、
+**推論時に incumbent の順位付けを改善すること**ではない。そして E64 の最大バケットは
+**73/110 件で「誤 pair が 0.82、正 pair が 0.48 未満」** という *confidently wrong* な順位付け失敗で、
+**E65 も E66 もこれには触れない**（閾値を下げても 0.82 に負け、motion_relink を止めても正解は入らない）。
+
+推論側の既存 knob は cell 3 / cell 9 に揃っている:
+`BIOHUB_EDGE_FEATURE_TTA=1`、`BIOHUB_SECONDARY_EDGE_FEATURE_TTA=1`、
+`BIOHUB_SECONDARY_EDGE_FEATURE_TTA_WEIGHT=0.75`、`BIOHUB_BIDIRECTIONAL_FUSION_MODE=harmonic_probability`、
+`BIOHUB_SECONDARY_EDGE_WEIGHT=0.20`。唯一 LB 先行証拠があるのは edge-feature TTA（E48: 0.930→0.932、
+ただし事前基準 0.935 未満で**判定不能帯**）。
+
+**E66-prep がローカル推論を解禁したことで、この軸が初めてローカルでゲート可能になった。**
+これまで 12 arm すべてが後処理に居たのは、凍結グラフ上でしか測れなかったからである。
+
+**ただし 1.5–2 時間の MPS を使う前に、安い判定を先に行う（事前登録）**:
+E66-prep が 110 件の実確率を出したら、**73 件の blocked ケースについて
+gap = `wrong_candidate_score_raw` − 新規実測 correct prob を計算する**。
+- gap の median が **< 0.10** なら、TTA 深化で順位が反転しうる → 推論 arm を 1 本回す。
+- gap の median が **> 0.30** なら、推論時アンサンブルでは覆らない → **推論軸に着手しない**。
+この数値なしに推論パスを始めない。E64 の `wrong_candidate_score_raw` median 0.8198 は既知。
+
+### 設計上の問題3: 計算資源の直列化は設計制約であり脚注ではない
+
+MPS 1基・CPU 1基を E65（ILP 再解）と E66-prep（推論）が既に共有している。
+**第3の推論ジョブを並列で足すと3本すべてが遅くなり、Kaggle 読取 + 採点遅延 9 時間に間に合わなくなる。**
+
+**直列順序を固定する**: E65 結果 → E66-prep 結果 → 上記 gap 判定 → （通れば）推論 arm 1本
+→ E65 キャッシュ上での E66 sweep。**並列にしない。**
+
+### 最終選択規則を今のうちに事前登録する（09-28 に web UI で2枠）
+
+現状 best-Public は E57 0.945 だが、その上積み（DeepCenter TTA +0.001）は**判定不能**のまま。
+E65 が通って提出し +0.003 を読んだ場合、0.004 の幅に3候補が並び「best-mechanism」の定義が曖昧になる。
+
+**事前登録**: 
+- **枠1 = best-Public**: 単純に Public LB 最高値の arm。
+- **枠2 = best-mechanism**: **ローカルで測定された機序を持ち、その機序の測定値が LB ゲートを満たした arm のうち最高スコアのもの**。LB 読取が最高でも機序が測定されていない arm（E57 が該当）は枠2 に選ばない。
+- 両枠が同一 arm になる場合、枠2 は次に機序が強い arm とする。
+
