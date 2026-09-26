@@ -11395,3 +11395,40 @@ E66 は E65 の勝ち arm の上に載せる第2ループ。
 E50 の mutual-best rank bonus は **0.48 の門を越える edge を増やす**方向の変更で、
 LB は E49 比 **−0.001**。弱いが「この門を通す edge を増やす」ことに関する唯一の LB 証拠であり、**正ではない**。
 
+
+### E66 の梃子が Kaggle 提出経路で効くことを先に確認した（効かなければローカル通過が無駄になるため）
+
+notebook cell 11 は公式 predict モジュールに**ソース文字列置換**でパッチを当てており、
+その置換文字列（`ast` で抽出、該当は1件のみ）の中に次がある:
+
+```python
+edge_candidate_threshold = float(
+    os.environ.get("BIOHUB_DUAL_SEED_EDGE_THRESHOLD", str(cfg.threshold))
+)
+if not 0.0 < edge_candidate_threshold < 1.0:
+    raise ValueError("BIOHUB_DUAL_SEED_EDGE_THRESHOLD must be strictly between 0 and 1")
+cfg.threshold = edge_candidate_threshold
+...
+f"edge threshold={cfg.threshold:.3f}",
+```
+
+| 確認項目 | 結果 |
+|---|---|
+| env が推論時に読まれるか | **読まれる。`cfg.threshold` を直接上書きする** |
+| 現在の設定箇所 | cell 9 L654 `os.environ["BIOHUB_DUAL_SEED_EDGE_THRESHOLD"] = "0.48"` |
+| 提出ログで作動確認できるか | **できる。`edge threshold=0.xxx` を print する** → 提出前チェックに使える |
+| 値域 guard | `0.0 < x < 1.0` 以外は `ValueError`。0.05〜0.45 はすべて通る |
+
+よって **E66 は env 1 個の変更で提出可能**であり、ローカルで通れば即提出できる。
+
+### ただし E66 には runtime リスクがあり、事前チェックに追加する
+
+閾値を下げると候補 edge が増え、**ILP の問題規模が膨らむ**。現行 kernel は E57 で 48.01 分
+（上限に対して余裕はあるが無限ではない）。E66-prep に「各閾値で新規に入る候補 edge の総数」を
+報告させているので、その増加率と ILP solve 時間から提出前に判定する。
+
+**E66 の提出前 runtime ゲート（事前登録）**: 候補 edge 総数の増加率を R_cand、
+ローカル ILP solve 時間の増加率を R_ilp とし、**R_ilp ≥ 3 なら提出しない**
+（E57 で R ≥ 3 を拒否条件に使ったのと同じ規則を流用する）。
+閾値を選ぶ際は、回収数だけでなく R_cand が小さい側を優先する。
+
