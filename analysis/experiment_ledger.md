@@ -11009,3 +11009,90 @@ E57（TTA）と E59（density groups）の採点を待つ。両方が平坦な�
 | 「0.947→0.951 の +0.004 は DivNet と density-group overrides のどちらか、または両方」（`a0c5bbb` の訂正） | 2026-09-26 07:5x UTC E58（kernel v13）が完全 no-op（`submission.csv` の sha256 が E56 と同一、`divnet_vetoed_divisions=0`）。原因は veto を囲む `OUTPUT_DIVISION_GEOMETRY_FILTER` が既定 OFF で、**公開 0.947 / 公開 0.951 / 我々の 3 本すべてで一度も有効化されていない**（出現はリーダー 1 箇所のみ、直接代入・setdefault・True 代入すべて 0 件） | **DivNet は公開 0.951 でも dead code。** したがって +0.004 は DivNet ではありえず、**`DENSITY_GROUP_OVERRIDES`（E59）に帰属する。** E58 は提出しない（枠を節約）。`OUTPUT_DIVISION_GEOMETRY_FILTER=1` にすれば両方が生きるが、公開はその設定で提出していないため外部 LB 実証がなく、過適合プロトコル 6 により採用候補にしない |
 | 「Public 0.948 で銀圏」という本プロジェクトの目標値（E48 以降ずっと使用） | 2026-09-26 Codex 調査（`outputs/local/medal_threshold/report.md`）: 0.948 の出所は **2026-09-20 当時の LB 実測**で、公式メダル規定から算出した値ではない。3920 チームでの境界は金 17 位・銀 **196 位**・銅 392 位。09-22 の LB では 0.001 当たり 18〜161 位と極端に非線形 | **「0.948 = 銀圏」は支持されない（判定不能）。** 現在必要なスコアの粗い推定は **0.950〜0.954（中心 ~0.952）**だが不安定な外挿であり断定しない。確定には LB ページの 190〜200 位のスコアが必要で、これは API では取得できずユーザの操作を要する。0.944 との差は +0.004 ではなく **+0.006〜+0.010** の可能性がある |
 | 「0.947→0.951 の +0.004 は density-group overrides に帰属する」（`0dd5c3d`） | 2026-09-26 11:2x UTC 0.951 cell 2 のコメント実読: `# 2. Winning hyperparameter from Version 9 0.947 LB validation sweep:` に続いて `MOTION_RELINK_TIGHT_UM = "5.5"` が置かれている。**作者は利得の本体を TIGHT_UM 5.5 と申告している** | 利得の申告本体は density groups ではなく **`TIGHT_UM = 5.5`**。そしてそれは **E51 で LB 実測済みの完全 no-op（0.000）**。DivNet は dead code、density groups は 21 edges、速度 knob は品質無関係、sweep は 0.951 に存在しない。**0.951 の申告利得の全成分が、我々の stack では転移しないと示された。** 我々が実際に得た +0.007（tau 0.6）は公開が利得として申告していない項目だった |
+
+---
+
+## 2026-09-27 E57 LB結果 / E63 parity訂正 / 初の損失分解
+
+### E57 = 0.945（LB自己最高、ただし採用は inconclusive）
+
+E56 0.944 → E57 0.945、**Δ = +0.001**。事前登録ゲートは adopt ≥ +0.003 / refute ≤ −0.002 なので
+**inconclusive バンド**に着地した。E51 で測った LB ノイズ床 0.000（同一構成の再現差）と量子化 0.001 を
+踏まえると +0.001 は「符号は正だが機序の証明にはならない」。DeepCenter TTA は incumbent に残すが、
+「+0.001 の実体があった」とは主張しない。runtime は 48.01 分で余裕あり。
+
+E59（density群）は採点待ち。
+
+### E63 の「再現ゲート不成立」は私の基準値誤りだった（訂正）
+
+E63 は `adj_edge_jaccard = 0.926820424` を得て、私が渡した基準 `0.928483` と不一致のため
+自ら「以降の分解は無効」と宣言した。検算の結果、**不一致の原因は2つとも私の側にある**：
+
+1. 基準値 `0.928483` は **E61 の8動画 A-base** の値であり、E63 は **12動画** 集計。異なる母集団の値を
+   ゲートに指定したのは私のミス。
+2. E63 の aggregate 行は **micro 集計**（TP/FP/FN を合算して1回 Jaccard）で adj を出していた。
+   公式 `metrics.py:470-535` の `adj_edge_jaccard` は **per-sample を w=TP+FP+FN で加重平均**。
+   E63 の per_video.csv を公式規則で加重平均すると
+
+   `0.918802610579356`
+
+   = **E54 の12動画 base `0.918802610579356` と15桁完全一致**。
+
+したがって **per-video 測定は parity を満たしており、A〜E 分解は有効**。無効なのは aggregate 行1セルの
+集計規則のみ。`division 4/9/14`・`n_pred 243933`・`n_total 287137`・`ratio 0.849535239` も E54 と一致。
+
+教訓（propagation 規則の再確認）: **ゲート基準値は、それが測られた母集団（動画本数・base構成）を
+同じ行に書く**。E63 は「8動画の値を12動画のゲートにした」典型例で、H52 の
+「base=0.939 を 0.947 と書き換えた」propagation 失敗と同種である。
+
+### 初めて得られた edge 損失の内訳（12動画, TP 7259 / FP 359 / FN 332）
+
+| 類 | 定義 | 件数 | 群内比 |
+|---|---|---:|---:|
+| A | linker miss（両端とも GT に match、だが別相手と結合） | **201** | FN の 60.5% |
+| B | detector miss（片端が非match） | 65 | FN の 19.6% |
+| C | detector miss（両端が非match） | 66 | FN の 19.9% |
+| D | 誤結合（両端match・GT edge なし） | **3** | FP の 0.8% |
+| E | 片端が非match の予測 edge | **356** | FP の 99.2% |
+
+`metrics.py:194` の `pred_valid = out_valid(source) | in_valid(target)` を確認した。両端が非match の
+edge は `fill_null(False)` で両方 False になり **分母に入らない**。よって class E の 356 本はすべて
+「**GT が注釈している節点から、GT に存在しない（または7 µm 超ずれた）節点へ**」張った edge である。
+
+A の 201 本のうち **195 本は別相手と結合済み**（pair 距離 median 8.483 µm / p90 12.329 µm）。
+つまり A の FN と E の FP は同一事象の表裏で、**真の後継と偽/変位した近傍節点が競合し、linker が
+偽側を選んでいる**という単一の故障モードに収束する。D=3 は「両端正しく存在するのに誤結合」が
+ほぼ皆無であることを意味し、**linker の組合せ最適化自体は健全、入力候補集合の汚染が問題**。
+
+密度別では A/FN が low 40.0% → middle 65.3% → high 75.0% と**密度とともに単調増加**。
+D は low の 3 件のみ。混雑が競合を生むという解釈と整合する。
+
+### 感度（micro 近似、×1.0150465 の node bonus 込み）
+
+| 仮想シナリオ | adj J |
+|---|---:|
+| 現状 | 0.926820 |
+| class A の 10% を正しく張り替え | 0.931600 (**+0.0048**) |
+| class A の 20% | 0.936522 (+0.0097) |
+| class A 全件 | 0.976434 |
+| class E の FP 全除去（TP 増なし） | 0.970269 |
+
+**これまで触ってきた division 軸（重み0.1、div_J 0.148）と桁が違う。** division FP 9 件を全滅させても
++0.0074 だが、class A の 10% だけで +0.0048 が edge 側（重み1.0）で得られる。
+E56 以降の全 arm（tau, TTA, density）はいずれも edge 側の class A/E に触っていない。
+
+### 次ループの対象を A/E に確定
+
+E62 監査が挙げた6候補のうち、A/E に直接作用するのは **#3 neighbourhood-flow motion prior**
+（`MOTION_RELINK_FLOW_MODE="seed"` + `FLOW_GATE="1"`、既定 `"off"/"0"`）。近傍の運動場で予測位置を
+作り gate と cost に入れるので、「偽の近傍より真の後継を選ぶ」という A/E の故障モードに正面から当たる。
+#4 readmission / #5 gapfill は B/C（detector miss 131件、FN の 39.5%）側。
+#1 TTA は E57 で済み、#2 tight=5.5 は E51 で LB no-op 実測済み、#6 secondary weight 0.15 は
+E38 で 0.20 を採用した際の逆方向。
+
+**事前登録ゲート（プロトコル準拠、ローカル paired）**: eval12 で
+(a) class A 件数が −20 以上減少、(b) class E 件数が増えない、(c) paired 加重平均 adj edge J の
+Δ ≥ +0.003、(d) median Δ 非負、(e) 最悪動画 Δ ≥ −0.002、(f) 44b6 / 6bba の両系統で Δ 非負、
+(g) division TP 減少なし。**(d)(e)(f) を先に効かせる**（in-sample バイアスに強い条件）。
+これを満たさない限り Kaggle 枠は使わない。
+
