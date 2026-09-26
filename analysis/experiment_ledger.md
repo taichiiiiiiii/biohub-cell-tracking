@@ -11803,3 +11803,44 @@ E23 incumbent 0.924 unchanged」。
 ユーザーに矛盾（ローカル +0.0228 / 唯一の同方向 LB 読取 −0.002・ただし汚染）と
 落ちた条件を提示して判断を仰ぐ。
 
+
+### 私の失敗を記録する: 既知の事実を「新事実」として再発見した
+
+Kaggle 精読で私が「新事実1（Public 29% / Private 71%）」「新事実2（embryo 非重複）」として
+報告した内容は、**2026-08-24 に既にこのリポジトリに記録されていた**。
+
+| 既存記述 | 場所 |
+|---|---|
+| 「test の embryo_id は 2 種類、train と重複なし」+ host #716793 の原文引用 | `docs/research/discussion_mining_2026-08-24.md:12` |
+| 「public LB は test の約 29%、private が残り 71%」+ 内訳は未確認と明記 | 同 `:13` |
+| 「Public test is approximately 29%, private 71%」 | `analysis/gold_loop_protocol.md:92` |
+
+**原因**: 仕様が 1 MB の ledger と複数の設計文書に散在し、参照可能な1か所が無かった。
+H52 の「base=0.939 を 0.947 と書き換えた」と同型の propagation 失敗である。
+
+**対策として実施**: `analysis/competition_spec.md` を新設し、確度表記（🅐主催者 / 🅑参加者 / ⚠️未確認）付きで
+一次情報を統合した。既存2ファイルは重複させず参照する形にした。
+
+### さらに重い発見: 2026-08-24 に出ていた方法論の結論を、我々は守っていない
+
+`docs/research/discussion_mining_2026-08-24.md:152` の原文:
+
+> **CV を leave-one-embryo-out・動画単位に固定し、公開 checkpoint での train 上 ablation を一切信じない**
+
+**eval12 は 44b6 と 6bba を混在させており、leave-one-embryo-out ではない。**
+つまり 1 か月前に「train 上 ablation を信じるな」と結論していたのに、
+その後の E48〜E65 はすべて混在 eval12 の ablation で判断してきた。
+
+**運用への反映（今日から）**: 採用判定で「両 embryo で Δ 非負」を**必須**とする。
+これは E65 の `off` が満たしている条件（44b6 +0.0246 / 6bba +0.0221）であり、
+逆に E53/E61 が `relaxed9` を base 依存と判定した際の弱さの説明にもなる。
+
+### E68（公式コード精査）は Codex 委任が権限拒否された
+
+`codex-companion.mjs` の起動が auto mode 分類器に "Create Unsafe Agents" として拒否された。
+迂回はせず、**公式コードは親エージェントが直接読む**方針に切り替えた。
+本日読了: `metrics.md`（全文）、`README.md`（全文）、`img_proc.py`（全文）、
+`predict_unet_transformer.py`（検出・座標経路）、`geffs_to_csv.py`（全文）、`csv_to_geffs.py`（全文）。
+**未読: `metrics.py` 全体、`division_metrics.py`、`train_unet_transformer.py`、`io.py`、`dataspec.py`。**
+未読であることを明示して残す（読んだと言わない）。
+
