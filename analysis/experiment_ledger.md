@@ -10604,6 +10604,64 @@ E53 は `tight55`（5.5 = **high 群の値**）と `relaxed9`（9.0 = **middle �
 **env だけを突き合わせて def/class を突き合わせていなかったために見落としていた。**
 env 監査は必要条件であって十分条件ではない。**以後、公開実装の比較では env と定義集合の両方を見る。**
 
+### E57 / E58 / E59 の提出前チェックを固定する（2026-09-26 06:1x UTC、**結果前**）
+
+#### E58（DivNet）— 「黙って no-op」の経路が実在するので必ず検出する
+
+公開の loader は checkpoint が見つからない場合に**例外を出さず**次を印字して `None` を返す:
+
+> `DivNet mitosis checkpoint not found. Operating in geometric baseline mode.`
+
+この場合 `divnet_score_division` は `None` を返し、veto 条件 `_div_prob is not None and ...` が
+短絡して **DivNet は完全な no-op** になる。この状態で提出すると **E56 の再提出**にしかならず枠を捨てる。
+（我々には never-incremented カウンタが 3 個あった前例がある。同じ型の失敗。）
+
+**提出前チェック（両方満たすこと。1 つでも欠ければ提出しない）**:
+1. kernel log に **`[OK] DivNet loaded successfully`** が出ていること
+   （`checkpoint not found` / `Failed loading` が出ていないこと）
+2. `run_stats.csv` の **`divnet_vetoed_divisions > 0`**
+
+加えて記録する量: `safe_divisions_added`（E56 = 103 からの変化）、node/edge 数（N_pred 項）。
+
+#### E57（TTA）— 実行時間のみで決める。スコアは見ない
+
+公開 0.951 は TTA を有効にしたまま `deepcenter-fast-ilp-**19m**` と自称し、速度 knob 2 件
+（`UNET_BATCH_SIZE=8`、`VALIDATOR_ENABLE=0`）を併用している。我々は両方とも逆側にある。
+
+**判定規則（結果前に固定）**:
+- v12 の kernel wall-clock を v11（E56）と比較して倍率 R を出す。
+- **R が 3 倍以上なら提出しない。** hidden 採点は E49〜E56 が約 9 時間で完了しており、
+  その余裕が未知である以上、3 倍は許容できない。TTA は候補 3 本の中で最も弱い
+  （公開 0.947 のみ、veto の heatmap を精緻化するだけで veto 受理率はほとんど動かない）。
+  弱い候補に「採点が落ちる」リスクを取らない。
+- **R < 3 なら提出する。**
+- R が 3 倍以上で、かつ E58/E59 を読み終えても銀圏に届かない場合のみ、
+  `VALIDATOR_ENABLE=0` を足して R を下げた構成で再考する
+  （validator は CSV 書き換え経路を持たないので品質に無害。CSV sha256 で裏取り可能）。
+
+**この判定はスコアと完全に独立**であり、v12 の Public を見てから覆さない。
+
+#### E59（density-group overrides）— まだ実装していない。ゲートを先に置く
+
+- 基準 **E56 = 0.944**。採用 **≥ +0.003** / 反証 **≤ −0.002** / 中間は判定不能。
+- 値は公開 0.951 の `DENSITY_GROUP_OVERRIDES` を**そのまま**使う。3 群 × 4 knob = 12 値、
+  **1 つも動かさない。** 境界（120 / 400 nodes/frame）も動かさない。
+- **提出前チェック**: 公開 4 本の density 群判定が **middle / middle / low / high** と出ること
+  （E56 の submission.csv から算出した 256.9 / 216.9 / 62.8 / 711.9 に一致）。
+  4 本すべてが同一群に落ちたら判定関数の移植が壊れているので提出しない。
+- 併せて記録: 群ごとの適用値が実際に効いていること（`motion_relink_tight_edges` /
+  `_relaxed_edges` が E56 から動くこと）。動かなければ適用箇所が誤りなので提出しない。
+
+#### 3 本の序列（過適合プロトコル 7 用、結果前に固定）
+
+| arm | 機序 | 外部実証 | 対象項 | 序列 |
+|---|---|---|---|---|
+| E59 density groups | 密度適応 motion relink。公開 0.951 が実装、公開 test 3/4 で値が 3〜6 倍違う | 0.951 | **edge（重み 1.0）** | **強** |
+| E58 DivNet | 学習済み mitosis veto。division FP 抑制は我々の LB で実証済み（E56 +0.007） | 0.951 | division（重み 0.1） | 中 |
+| E57 TTA | veto heatmap の 8-view 平均 | 0.947 のみ | division 経路のみ | 弱 |
+
+**小差分帯（≤ +0.003）に複数着地した場合、この序列の上から 1 本だけ採る。**
+
 ## 撤回した結論
 
 後から誤りと分かった結論をここに集める。**消さずに残す。** 撤回したら
