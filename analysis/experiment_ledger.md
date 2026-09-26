@@ -11553,3 +11553,112 @@ E59 の description に提出前に明記していた: 「footprint は tiny —
 UTC 09-26 は 2/5 使用（E57, E59）、残 3 は**未使用のまま失効させる**（ローカル通過候補が無いため）。
 00:00 UTC にリセット。09-27/28/29 で約15枠。E65 → E66-prep → gap 判定 の直列順序は変更なし。
 
+
+---
+
+## 2026-09-27 Kaggle 一次情報の精読（ユーザー指示「コンペの内容を隅々まで理解して下さい」）
+
+出所は Kaggle の Overview / Data / Rules / Discussion と `official/` 実装。以下はすべて一次情報の引用または実測。
+
+### 確認できた既知事項（我々の理解と一致）
+
+| 項目 | 値 |
+|---|---|
+| score | `adjusted_edge_jaccard + 0.1 × division_jaccard` |
+| node matching | 最適二部割当、**最大 7.0 µm**、物理スケール **z=1.625, y=x=0.40625 µm/voxel** |
+| node penalty | `max(0, J·(1 − 0.1·(T_pred − T_true)/T_true))` |
+| 集計 | adj edge は per-sample を `w=TP+FP+FN` 加重平均、division は micro |
+| 提出 | notebook のみ、CPU/GPU **12時間**以内、**インターネット不可**、`submission.csv` |
+| 外部データ | **公開・無償なら許可（事前学習モデル含む）** |
+| 提出上限 | **1日5回**、**最終選択2つ** |
+| 締切 | 2026-09-29 23:59 UTC。Entry/Merger は 09-22 で既に終了 |
+| 賞金 | 1位 $18,000 … 7位 $5,000、計 $60,000。Research、medal 対象 |
+| 規模 | 3,929 teams / 13,475 entrants / 87,465 submissions。現在 **1436位** |
+| `official/` の鮮度 | HEAD `075fc5f`(2026-07-18) = **上流最新と同一**。division exploit patch `aa65e90` を含む。ローカル採点は権威あり |
+
+Overview の注記も確認: **「it is possible for scores to exceed 1.0」** — node 数の過少予測ボーナスは
+仕様として認識されている（我々の倍率 1.015 は不正でも偶発でもない）。
+
+### 新事実1: Public LB は test の **29%**、Private は残り **71%**
+
+Discussion #716793 に Kaggle の定型表示が引用されている:
+「This leaderboard is calculated with approximately **29%** of the test data. The final results will be
+based on the other **71%**」。
+
+我々はこれまで Public/Private の分割比を知らずに運用していた。**含意**:
+- Public の 1 read は test の 3 割弱でしか測っていない。**LB 量子化 0.001 と E51 の noise floor 0.000 は
+  この 29% 上での再現性**であり、Private 上の再現性ではない。
+- 最終選択が 2 枠しかないのに Private は 71% で決まる。**Public への過適合リスクはユーザー指摘どおり実在する。**
+
+### 新事実2（設計に最も影響）: train と test は **embryo 非重複**
+
+Data ページ原文: 「Folder names follow the pattern `{embryo_id}_{field_of_view}` … **Train and test sets are
+embryo-disjoint — no embryo appears in both.**」
+ホスト Thibgolds の回答（#716793）: 「indeed there are **two unique embryo_ids in the training set**.
+You can assume the test set is roughly similar in size, with **no overlap in embryo_ids** between train and test」。
+さらに test/ は「**Example test samples (copies from train)**」で、提出時に hidden test が差し替わる。
+hidden test の規模は「approximately the same size as the training dataset」。
+
+**これが我々のローカル評価の性質を決定的に変える:**
+- eval12 は `44b6_*` と `6bba_*`、すなわち **train の 2 embryo**。
+- hidden test は**それとは別の embryo**。しかも Public 29% と Private 71% は
+  異なる embryo 群に割れている可能性がある（#716793 の議論もその前提）。
+- よって **ローカル paired 利得は「同一 embryo 内の改善」であり、LB は「未知 embryo への転移」を測っている。**
+  E56 が局所 +0.0038 → LB +0.007 と拡大したのも、E59/E51 が厳密 0 だったのも、この二重構造の下での観測。
+
+**プロトコルの「44b6 と 6bba の両系統で Δ 非負」という条件は、偶然ではなく
+唯一利用可能な embryo 間汎化の代理指標だった。** 今後この条件を最優先で効かせる根拠が一次情報から得られた。
+
+### 新事実3: `T_true`（node penalty の分母）は **test 時に手元に無い**
+
+Data ページ: 「The `estimated_number_of_nodes` field in the **.geff** metadata provides an estimate of the
+true total cell count per sample」。**`.geff` は train のみ**（test は `.zarr` だけ）。
+よって hidden test の `T_true` は採点側にしか無い。
+
+**訂正**: 設計見直しで私は「`n_total` は test 時に必要なメタデータ」と書き、暗に取得可能と示唆した。
+**取得できない。** node 数を狙って `T_true` 比に合わせる操作は原理的に不可能であり、
+node 数 exploit が閉じている理由はこちらの方が強い。
+
+### 新事実4（最大の仮説）: GT 注釈は「cell corner」寄りで、我々の重心とは系統的にずれている可能性
+
+Discussion #740145（hengck23, 18日前〜11日前）の一次記述:
+- 「**kaggle annotation is based on Ultrack segmentation i think it sometimes annotates "cell corners"**.
+  my annotation is based on focus3d, which is cell center.」 → **注釈規約のドメインシフト**
+- 「quite a number of **FPs are actually very close to the truth node**」
+- 「during linking, my zxy must change, the node must shift to better position.
+  So actually **you cannot detect and fix a location**」
+- 別参加者 Satwik(167位): 「there are definitely **errors in kaggle annotations**」
+
+**これが我々の実測と正面から噛み合う:**
+| 我々の実測（E63/E64） | 値 | 7.0 µm 閾値との関係 |
+|---|---:|---|
+| class E の相手 node の最近 GT 距離 | **median 7.159 µm** | **閾値 7.0 のすぐ外側** |
+| 同 p10 | 4.984 µm | 内側 |
+| class A の matched pair 距離 | median 8.201 / p90 12.304 µm | — |
+
+**class E FP の約半数は、7 µm の一致判定を「わずかに」外している。**
+系統的なオフセットが存在するなら、それを補正するだけで
+**B/C（detector miss 131件）が match に変わり、E（FP 356件）が TP 側に転じうる。**
+これは linking の問題ではなく **node 位置の問題**で、我々が 12 arm 触ってこなかった軸である。
+
+関連する既知の負の証拠: **E47**（float 座標保持）= LB 0.917 で当時の 0.924 から大きく悪化。
+ただし提出仕様は「**integer** centroid coordinates in voxels」なので、
+float を書いたこと自体が形式違反に近く、**オフセット補正の是非を測った実験ではない**。
+なお z は 1 voxel = **1.625 µm** なので、z の整数丸めだけで最大 ±0.8125 µm の誤差が入る。
+
+### 次の実験（E67）を事前登録: 注釈規約オフセットの実測
+
+**測ること**: eval12 の **match 済み** node について、予測重心 − 対応 GT 重心の**符号付き差**を
+z/y/x 各軸で集計する（µm 単位、embryo 別 44b6 / 6bba 別、密度群別）。併せて
+- 未 match の予測 node の最近 GT 距離分布（7.0 の内外）
+- 仮に全 node を推定オフセット分だけ平行移動したとき、match 数・class B/C/E がどう動くか（再推論不要、座標変換のみ）
+
+**採否ゲート（プロトコル準拠、変更しない）**: (a) match 数が増え class E が減る、
+(b) paired w 加重 adj edge J の Δ ≥ +0.003、(c) median Δ 非負、(d) 最悪動画 Δ ≥ −0.002、
+**(e) 44b6 と 6bba の両 embryo で Δ 非負（embryo 非重複が判明した今、これを最優先）**、
+(f) division TP 減少なし。
+
+**事前に明記する反証条件**: オフセットが embryo ごとに符号違い・大きさ違いであれば、
+それは「注釈規約」ではなく embryo 固有の性質であり、**未知 embryo には転移しないので採用しない**。
+両 embryo で同方向・同程度に出て初めて規約差の証拠になる。
+
