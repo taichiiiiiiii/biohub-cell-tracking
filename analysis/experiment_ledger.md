@@ -11184,3 +11184,89 @@ E56 の tau veto（実 LB +0.007）は division 側でこの上限に近いと�
 したがって **linking 前の節点 dedup** が第一候補（モデル変更不要、E61 harness で回せる、
 節点が減るので `total_node_ratio` はさらに負＝微小 bonus 側）。E64 の問い3の答えを待って着手する。
 
+
+---
+
+## E64 provenance: 誤 edge の発生源は `motion_relink_edges` 一箇所だった
+
+`outputs/local/e64_classA_attribution/`、runtime 340.5 秒。**parity 5項目すべて PASS**
+（official w 加重 adj edge J = `0.918802610579356` が E54 と15桁一致、division 4/9/14、
+n_pred 243933、n_total 287137、instrumented post-process が E54 固定 CSV と 12/12 node/edge 完全一致）。
+よってこの分解は解釈可能。
+
+### 1. 生成段の排他的分類 — primary ILP は 1 件も出していない
+
+| origin | class A の競合 edge | class A の source out-slot | class E FP |
+|---|---:|---:|---:|
+| **primary_ilp** | **0** | **0** | **0** |
+| **motion_relink_edges** | **187** | **142** | **333** |
+| gap_fill | 7 | 7 | 14 |
+| gap2 | 1 | 1 | 1 |
+| safe_division_postlink | 0 | 0 | 8 |
+| short_track_rescue | 0 | 0 | 0 |
+
+**class A の競合 edge の 93.0%（187/201）、class E FP の 93.5%（333/356）が `motion_relink_edges` 由来。**
+主 ILP は誤 edge をゼロ本しか作っていない。`D=3` と合わせ、**主 linking は健全**が確定した。
+edge FP 359 本のうち 333 本が単一の後処理関数の出力である。
+
+### 2. 支配 world は (a) = 候補集合に正解が無い
+
+| world | 件数 | 定義 |
+|---|---:|---|
+| **(a)** | **110/201** | 正解 pair が raw candidate set に無い |
+| (b) | 82 | 正解あり・wrong より高 score、または比較可能な out-slot 競合が無い（制約側） |
+| (c) | 9 | 正解あり・score が wrong 以下 |
+
+**(c) は 9 件しかない。** scorer/feature の問題はほぼ存在しない。事前確定した分岐のうち
+**「(c) なら 3 日では不可能なので着手しない」は発動しない**。正解候補がある 91 件の rank は
+median 2.0 / max 3、margin は positive 56 / negative 9。つまり候補が在れば scorer はほぼ正しく並べている。
+
+(1) と (2) を合わせた読み: **正解が候補に無い gap を `motion_relink_edges` が埋めに行き、
+埋める相手を間違えている。** これが A と E の 9 割を単独で説明する。
+
+### 3. class E の相手節点
+
+| 性質 | 件数 |
+|---|---:|
+| duplicate competition（既 match GT node から 7 µm 以内） | 164/356 |
+| isolated spurious leaf（degree=1 かつ最近 GT > 7 µm） | 9/356 |
+| frame boundary | 1/356 |
+| 排他分類の other | 183/356 |
+
+最近 GT 距離 median 7.159 µm（p10 4.984 / p90 10.710）。
+**advisor が第一候補に挙げた「検出段の節点 dedup」は主因ではない**（duplicate は 164/356 = 46%、
+かつ誤 edge を作っているのは検出段ではなく motion_relink）。dedux は副次手段に降格する。
+
+### 4. 密度別
+
+| density | A | E | A (a/b/c) | A 候補present | E の primary/motion |
+|---|---:|---:|---|---:|---|
+| low | 30 | 36 | 4/25/1 | 26/30 | 0/34 |
+| middle | 147 | 277 | 84/57/6 | 63/147 | 0/258 |
+| high | 24 | 43 | 22/0/2 | **2/24** | 0/41 |
+
+**high 密度では候補 present が 2/24 しかなく、margin の median は −0.200**（唯一の負）。
+混雑ほど候補生成が破綻し、motion_relink の誤埋めが増える、という一貫した像。
+
+### 次ループの単一因果因子: `motion_relink_edges` の寄与を測る（移植ではなく測定が先）
+
+これまで motion_relink に触った arm は2本だけで、どちらもこの関数が FP の 93% を作っていると知らずに打った:
+- **E26**（motion relink OFF）= LB 0.922 vs 当時の incumbent E23 0.924 → **−0.002**。ただし base は
+  edge-TTA / harmonic fusion / rank bonus の全て**以前**（0.924世代）。
+- **E51**（`TIGHT_UM` 6.0→5.5）= LB no-op（E50 と同値）。
+- **E59**（density override）= 121,274 本中 21 本しか動かず。
+
+E26 が負だったことは **motion_relink が TP も大量に作っている**ことを意味する。したがって問うべきは
+「切るか否か」ではなく **「TP/FP 比がどこで最良か」**。
+
+**E65（次ループ, ローカルのみ）**: cached eval12 上で、`motion_relink_edges` が追加した edge を
+origin タグ付きで TP/FP/FN に帰属させ、寄与を直接測る。そのうえで OFF / 各 gate 値の arm を
+**`paired_stats.py`（E64 が納品した official w 加重・median・最悪動画・44b6/6bba 系統別）** で報告する。
+コード移植は行わない（E62 #3 flow prior は motion_relink 内の機序なので provenance 上は妥当だが、
+まず現行実装の TP/FP 曲線を知らずに移植しない）。
+
+**事前登録ゲート（プロトコル準拠、変更なし）**: (a) class A −20 以上、(b) class E 増加なし、
+(c) paired w 加重 adj edge J の Δ ≥ +0.003、(d) median Δ 非負、(e) 最悪動画 Δ ≥ −0.002、
+(f) 44b6 / 6bba 両系統で Δ 非負、(g) division TP 減少なし。**(d)(e)(f) を先に効かせる。**
+これを通るまで Kaggle 枠は使わない。
+
