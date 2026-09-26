@@ -10782,6 +10782,72 @@ E55 の結論（recall は幾何学的に閉じている）は、この発見で
 一致した 50 件については存在しない（正規化は空白とコメントのみを落としているため）。
 したがって残差は小さいと判断する。**この 4 層の手順を、以後の公開実装比較の標準とする。**
 
+### E60 を提出せずに閉じる（2026-09-26 07:1x UTC、局所検証のみ）
+
+前節で「`add_safe_divisions_postlink` を 0.951 に揃える E60」を候補に積んだが、
+**3 つの構造差のすべてが我々では効かないか、有害であることが分かったので閉じる。**
+
+#### 差 3: `used_sources`（1 source 1 division）は **我々では no-op**
+
+我々の採用段（cell 13）には `used_targets` がある:
+
+```python
+if candidate_id in used_targets or candidate_id in incoming:
+    continue
+...
+used_targets.add(candidate_id)
+```
+
+これは **target（候補子）の一意性**であり、公開の `used_sources`（**source の一意性**）とは別物である。
+しかし我々に `used_sources` は要らない。理由: **我々の C2（mutual-NN）はハードコードで常時 ON** であり、
+
+```python
+_mn_d, _mn_i = _ctree.query(_cpt)
+_mutual = candidate_ids[int(_mn_i)] if _mn_d <= SAFE_DIV_SISTER_MAX_UM else None
+if candidate_id != _mutual: continue
+```
+
+`_mutual` は (source, existing_child) に対して**一意**なので、**1 source から通る候補は最大 1 件**。
+したがって out_degree 3 は構造的に生じ得ず、`used_sources` を足しても挙動は変わらない。
+
+公開側が `used_sources` を持つのは、**`SAFE_DIV_REQUIRE_MUTUAL_NN` で mutual-NN を無効化できる**ため、
+その場合に out_degree 3 を防ぐ安全網が必要だからである。公開の最終検査にも
+`assert _e.source_id.value_counts().max() <= 2` がある。
+
+#### 差 1・差 2: `REQUIRE_MUTUAL_NN` / `REQUIRE_DIVERGENCE` を切れるようにしても、切る理由がない
+
+E55 の実測では、取りこぼした GT division 14 件のうち mutual-NN で死んだのは **2 件**、
+C3 divergence で死んだのは **1 件**（gain 1.905 vs 要求 2.25 で 0.345 µm 不足）。残り 11 件は
+候補不在（幾何学的に到達不能）か検出取りこぼし。
+
+- mutual-NN を外すと、**上記の暗黙の一意性が崩れて `used_sources` が必須になり**、かつ
+  候補が爆発して division FP が増える。我々の 4 点 LB 曲線は **division が増えると悪化**（175→296→341 で −0.002）
+  と言っており、方向が逆。
+- C3 を外すのも同様に増量方向。
+
+**したがって E60 は「移植しても no-op」か「曲線と逆方向」のいずれかであり、提出枠を使わない。**
+この判定は LB を一度も叩かずローカルのコード読解と E55 の実測だけで下した。
+
+#### これで公開 2 本の移植可能項目は本当に尽きた（4 層監査の結論）
+
+| 項目 | 状態 |
+|---|---|
+| env 4 件 | DivNet ×2 → **E58**（採点待ち）、PPSWEEP meta ×2 → 下記 |
+| def/class 7 件 | DivNet ×4 → E58、`determine_density_group` → **E59**、`write_test_submission` → 下記、`_process_one_dataset` → 呼出 0 の dead code |
+| モジュール定数 1 件 | `DENSITY_GROUP_OVERRIDES` → **E59** |
+| 同名関数の本体 相違 3 件 | `motion_relink_edges` → E59、`filter_output_graph` → E58、`add_safe_divisions_postlink` → **本節で閉鎖** |
+
+#### 残る唯一の公開由来の道: **PP sweep を新しい土台で回し直す**
+
+`write_test_submission` + `PPSWEEP_SELECT_MARGIN` / `PPSWEEP_MAX_ADJ_LOSS` は公開の**選択手続き**そのもの。
+E53 はこれを eval12 で回して 7 候補すべて陰性と判定したが、**当時の土台は E49/E50 相当**で、
+tau（E56）も DivNet（E58）も density groups（E59）も入っていなかった。さらに E53 は
+公開の margin **0.001 ではなく 0.002** を使い、**combo arm の自動合成もしていなかった**（`bfcea26` で訂正済み）。
+
+⇒ **E58/E59 が着地した後、その土台の上で公開の手続きを忠実に（margin 0.001、combo arm 込み）
+回し直す**のは、公開由来の provenance を保った唯一の残る手であり、**陽性候補が出るまで提出枠を消費しない。**
+これを E61 として、E58/E59 の判定後に実施する。
+
 ## 撤回した結論
 
 後から誤りと分かった結論をここに集める。**消さずに残す。** 撤回したら
