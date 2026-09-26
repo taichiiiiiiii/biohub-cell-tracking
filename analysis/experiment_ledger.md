@@ -10848,6 +10848,68 @@ tau（E56）も DivNet（E58）も density groups（E59）も入っていなか�
 回し直す**のは、公開由来の provenance を保った唯一の残る手であり、**陽性候補が出るまで提出枠を消費しない。**
 これを E61 として、E58/E59 の判定後に実施する。
 
+### E58 は提出しない: DivNet は**公開 0.951 でも dead code** だった（2026-09-26 07:5x UTC, kernel v13）
+
+#### 提出前チェックの結果
+
+| チェック | 結果 |
+|---|---|
+| 1. `[OK] DivNet loaded successfully` | **PASS**。`/kaggle/input/biohub-divnet-v2/best_overall.pt` から読込。不在/失敗/無効は 0 件 |
+| 2. `divnet_vetoed_divisions > 0` | **FAIL。0 件** |
+
+さらに **run_stats の全指標が E56 と完全一致**し、**`submission.csv` の sha256 が E56 と同一**
+（`311f6a8c…`）。E58 は**完全な no-op**。
+
+事前登録の規則「両方満たさなければ提出しない」に従い **提出しない**。枠を 1 つ節約した。
+
+#### 原因（構造的で、我々の移植ミスではない）
+
+veto は `filter_output_graph` の中の
+
+```python
+if OUTPUT_DIVISION_GEOMETRY_FILTER and edges:
+```
+
+の内側にある。そして
+
+```python
+OUTPUT_DIVISION_GEOMETRY_FILTER = os.environ.get("BIOHUB_OUTPUT_DIVISION_GEOMETRY_FILTER", "0") != "0"
+```
+
+**既定は OFF。** 3 つの notebook（公開 0.947 / 公開 0.951 / 我々）すべてを走査した結果、
+`BIOHUB_OUTPUT_DIVISION_GEOMETRY_FILTER` の出現は**リーダーの 1 箇所のみ**で、
+直接代入 0 件・`setdefault` 0 件・`True` 代入 0 件。**どこでも有効化されていない。**
+
+⇒ **DivNet は公開 0.951 においても実行されない dead code。**
+checkpoint の読込だけは無条件に走るのでログには `[OK]` が出るが、veto 本体には到達しない。
+
+#### ★帰結: +0.004 の帰属が確定した
+
+`a0c5bbb` で「+0.004 は DivNet と density groups のどちらか、または両方」と訂正したが、
+**DivNet が両方の stack で実行されない以上、+0.004 は DivNet ではありえない。**
+0.951 固有の機序は 2 つしかないので、**残るのは `DENSITY_GROUP_OVERRIDES` = E59 である。**
+
+これは E59 の事前期待を大きく上げる:
+- 0.947→0.951 の **+0.004 の全額が E59 の機序に帰属する**（公開の自己申告値ベース）
+- E59 は **edge 項**（スコア重み 1.0）で、公開 test 4 本中 3 本で `learned_bonus` が 3〜6 倍違う
+- 我々が必要なのは **+0.004**（E56 0.944 → 銀圏 0.948）
+
+**ただしゲートは変更しない**（採用 ≥ +0.003 / 反証 ≤ −0.002）。期待が上がったからといって
+ゲートを緩めるのは、本セッションで 2 度拒否した「数値を見た後の再解釈」と同型である。
+
+#### 記録: provenance を持たない候補が 1 つ増えた（採用禁止）
+
+`BIOHUB_OUTPUT_DIVISION_GEOMETRY_FILTER=1` にすれば、division geometry filter と DivNet が
+**同時に**有効になる。コードは公開由来だが、**公開はこれを OFF のまま提出している**ので
+**外部 LB 実証が存在しない**。過適合プロトコル 6（採用できる機序は公開が実装済みのものに限る）は
+「コードが存在する」ではなく「公開がその設定で提出した」を要求するので、**これは採用候補にしない。**
+候補として存在することだけを記録する。
+
+#### E58 の副産物
+
+kernel total **39.03 分**（E56 43.14 / E57 48.01）。DivNet の checkpoint 読込と TTA OFF の組み合わせで
+むしろ速い。DivNet 自体の実行コストはゼロ（到達しないため）。
+
 ## 撤回した結論
 
 後から誤りと分かった結論をここに集める。**消さずに残す。** 撤回したら
@@ -10871,3 +10933,4 @@ tau（E56）も DivNet（E58）も density groups（E59）も入っていなか�
 | 「density-group motion relink は公開コード内でも no-op」（公開技法 4 件の反証リストの 1 件） | 同日同時刻: それは **0.947 を見た判定**。0.951 では定義 1 / 呼出 2 で**生きている** | 0.951 の density-group overrides は未検証の候補として復活。E59 として読む |
 | E53「`tight55`(5.5) と `relaxed9`(9.0) は陰性」・E51「`TIGHT_UM=5.5` は LB で完全 no-op」から導いた「motion relink 系の knob は我々の系統で効かない」 | 同日同時刻: 5.5 は `DENSITY_GROUP_OVERRIDES` の **high 群**の値、9.0 は **middle 群**の値。両検定は**密度で条件付けるべき値を無条件に大域適用**していた | 「効かない」の証拠にならない。群ごとに正しい値を当てる検定は未実施。公開 test 4 本は middle/middle/low/high と 3 群にまたがり、3 本が公開より 3〜6 倍小さい `learned_bonus` で走っている |
 | 「E57 と E58 を読み切れば公開 2 本から移植できるものは完全に枯れる」（`43c4d66`） | 同日同時刻: env 57 変数のみを突き合わせて **def/class 集合を突き合わせていなかった**ため density-group 機序を見落としていた | env 監査は必要条件であって十分条件ではない。以後、公開実装の比較では env と定義集合の両方を見る |
+| 「0.947→0.951 の +0.004 は DivNet と density-group overrides のどちらか、または両方」（`a0c5bbb` の訂正） | 2026-09-26 07:5x UTC E58（kernel v13）が完全 no-op（`submission.csv` の sha256 が E56 と同一、`divnet_vetoed_divisions=0`）。原因は veto を囲む `OUTPUT_DIVISION_GEOMETRY_FILTER` が既定 OFF で、**公開 0.947 / 公開 0.951 / 我々の 3 本すべてで一度も有効化されていない**（出現はリーダー 1 箇所のみ、直接代入・setdefault・True 代入すべて 0 件） | **DivNet は公開 0.951 でも dead code。** したがって +0.004 は DivNet ではありえず、**`DENSITY_GROUP_OVERRIDES`（E59）に帰属する。** E58 は提出しない（枠を節約）。`OUTPUT_DIVISION_GEOMETRY_FILTER=1` にすれば両方が生きるが、公開はその設定で提出していないため外部 LB 実証がなく、過適合プロトコル 6 により採用候補にしない |
