@@ -10910,6 +10910,79 @@ checkpoint の読込だけは無条件に走るのでログには `[OK]` が出�
 kernel total **39.03 分**（E56 43.14 / E57 48.01）。DivNet の checkpoint 読込と TTA OFF の組み合わせで
 むしろ速い。DivNet 自体の実行コストはゼロ（到達しないため）。
 
+### E61 と、公開移植プログラムの**完全な決算**（2026-09-26 11:2x UTC、提出ゼロ）
+
+#### E61: 公開の sweep を忠実に再現 → **両方の土台で `base` を選択**
+
+公開の選択規則（margin **0.001**＝0.951 cell 2 が既定 0.002 を上書き、陽性バー +0.0005、
+adj loss ≤ 0.0005、陽性 2 件以上で combo 自動合成、holdout 8 本＝`VALIDATOR_N_PER_TYPE=4` × prefix 2）を
+コード引用付きで再現し、cached holdout 8 本（再推論なし、raw graph 同一性 8/8 PASS）で回した。
+
+| 土台 | 選択 | 最良 arm | Δproxy |
+|---|---|---|---:|
+| A = E56（density OFF） | **base** | bonus125 | +0.000154 |
+| B = E59（density ON） | **base** | **relaxed9** | **+0.000831** |
+
+**★E53 の結論を条件付きで覆す発見**: `relaxed9` は土台 A で **−0.002107**、土台 B で **+0.000831** と
+**符号が反転する**。E53 の「motion relink 系は効かない」が土台依存の判定だったことの直接証拠であり、
+`a0c5bbb` の訂正 3 を支持する。
+
+**ただし +0.000831 は公開自身の採用 margin 0.001 を跨がない。** したがって
+**公開の手続きを忠実に適用した結果は「base を出荷」であり、`relaxed9` は公開が出荷する構成ではない。**
+過適合プロトコル 6（公開が「その設定で提出した」ことを要求）により **relaxed9 は提出しない。**
+
+#### 保存データの完全性: 欠損ではなく**意図的削除**だった
+
+Codex が「保存 0.951 に `PP_CANDIDATES` / `score_validator_config` / combo 本体が無い」と報告したため、
+監査が truncated なファイルに対して行われた疑いが生じた。実測:
+
+| | code cells | 総字数 | `PP_CANDIDATES` | `score_validator_config` |
+|---|---:|---:|---:|---:|
+| 0.947 | 12 | 206,298 | 7 | 4 |
+| 0.951 | **8** | 185,709 | **0** | **0** |
+
+**しかし 0.951 cell 2 のコメントが理由を明示している**:
+
+> `# 4. Fast Submission Mode: Disable 90-minute offline training validation sweep`
+
+⇒ **0.951 は sweep セルを意図的に削除している。** 我々の保存が欠損しているのではない。
+したがって 4 層監査は有効なファイルに対して行われていた。**sweep は 0.947 固有の機構であり、
+0.951 には存在しない。**
+
+#### ★公開移植プログラムの決算: 0.951 の利得の全成分を我々の stack で検証し終えた
+
+0.951 cell 2 のコメントは**利得の正体を作者自身が申告している**:
+
+> `# 2. Winning hyperparameter from Version 9 0.947 LB validation sweep:`
+> `os.environ["BIOHUB_MOTION_RELINK_TIGHT_UM"] = "5.5"`
+
+すなわち **0.947 → 0.951 の利得は「0.947 の sweep が選んだ `TIGHT_UM = 5.5`」**である。
+
+| 0.951 の成分 | 我々の stack での検証結果 | 種別 |
+|---|---|---|
+| **`MOTION_RELINK_TIGHT_UM = 5.5`**（作者申告の利得本体） | **E51 で LB 実測 = 完全 no-op（0.937 = E50、差 0.000）** | **LB 実測** |
+| DivNet | `OUTPUT_DIVISION_GEOMETRY_FILTER` が既定 OFF・3 notebook すべてで未設定 ⇒ **公開でも dead code**。E58 の CSV は E56 と sha256 同一 | 構造的証明 |
+| `DENSITY_GROUP_OVERRIDES` | E59 で 121,274 → 121,295 edges（**+21 本 = 0.017%**）、tight_edges 不変。採点待ち | 局所実測 |
+| `UNET_BATCH_SIZE=8` / `VALIDATOR_ENABLE=0` | 速度 knob。validator は CSV 書換経路を持たない | 構造的に品質無関係 |
+| PP sweep | 0.951 には**存在しない**（意図的削除）。E61 で忠実再現 → 両土台で base 選択 | 局所実測 |
+
+**⇒ 0.951 の申告利得の全成分について、我々の stack では LB 実測または構造的証明により
+転移しないことが示された。公開由来の候補は本当に尽きた。**
+
+そして我々が実際に得た +0.007（E56 = tau 0.6）は、**公開が利得として申告していない項目**だった。
+公開の自己申告と実際に効く項目は一致しない。
+
+#### 残り 3 日 12 時間の見通し（結果前に記録）
+
+E57（TTA）と E59（density groups）の採点を待つ。両方が平坦なら、
+**我々の Public は 0.944 で打ち止め**となる可能性が高い。
+過適合プロトコル 6 により、公開が出荷していない設定（`OUTPUT_DIVISION_GEOMETRY_FILTER=1`、
+`relaxed9` 単独、tau の sweep、density override の tight/relaxed 配線）は採用しない。
+**これらは「試せるが採用しない」候補として明示的に保留する。**
+
+銀圏の閾値自体が未確定（推定 0.950〜0.954、`medal_threshold/report.md`）であり、
+0.944 との差は +0.006〜+0.010 の可能性がある。**残る候補の規模（21 edges 級）では届かない。**
+
 ## 撤回した結論
 
 後から誤りと分かった結論をここに集める。**消さずに残す。** 撤回したら
@@ -10934,3 +11007,5 @@ kernel total **39.03 分**（E56 43.14 / E57 48.01）。DivNet の checkpoint �
 | E53「`tight55`(5.5) と `relaxed9`(9.0) は陰性」・E51「`TIGHT_UM=5.5` は LB で完全 no-op」から導いた「motion relink 系の knob は我々の系統で効かない」 | 同日同時刻: 5.5 は `DENSITY_GROUP_OVERRIDES` の **high 群**の値、9.0 は **middle 群**の値。両検定は**密度で条件付けるべき値を無条件に大域適用**していた | 「効かない」の証拠にならない。群ごとに正しい値を当てる検定は未実施。公開 test 4 本は middle/middle/low/high と 3 群にまたがり、3 本が公開より 3〜6 倍小さい `learned_bonus` で走っている |
 | 「E57 と E58 を読み切れば公開 2 本から移植できるものは完全に枯れる」（`43c4d66`） | 同日同時刻: env 57 変数のみを突き合わせて **def/class 集合を突き合わせていなかった**ため density-group 機序を見落としていた | env 監査は必要条件であって十分条件ではない。以後、公開実装の比較では env と定義集合の両方を見る |
 | 「0.947→0.951 の +0.004 は DivNet と density-group overrides のどちらか、または両方」（`a0c5bbb` の訂正） | 2026-09-26 07:5x UTC E58（kernel v13）が完全 no-op（`submission.csv` の sha256 が E56 と同一、`divnet_vetoed_divisions=0`）。原因は veto を囲む `OUTPUT_DIVISION_GEOMETRY_FILTER` が既定 OFF で、**公開 0.947 / 公開 0.951 / 我々の 3 本すべてで一度も有効化されていない**（出現はリーダー 1 箇所のみ、直接代入・setdefault・True 代入すべて 0 件） | **DivNet は公開 0.951 でも dead code。** したがって +0.004 は DivNet ではありえず、**`DENSITY_GROUP_OVERRIDES`（E59）に帰属する。** E58 は提出しない（枠を節約）。`OUTPUT_DIVISION_GEOMETRY_FILTER=1` にすれば両方が生きるが、公開はその設定で提出していないため外部 LB 実証がなく、過適合プロトコル 6 により採用候補にしない |
+| 「Public 0.948 で銀圏」という本プロジェクトの目標値（E48 以降ずっと使用） | 2026-09-26 Codex 調査（`outputs/local/medal_threshold/report.md`）: 0.948 の出所は **2026-09-20 当時の LB 実測**で、公式メダル規定から算出した値ではない。3920 チームでの境界は金 17 位・銀 **196 位**・銅 392 位。09-22 の LB では 0.001 当たり 18〜161 位と極端に非線形 | **「0.948 = 銀圏」は支持されない（判定不能）。** 現在必要なスコアの粗い推定は **0.950〜0.954（中心 ~0.952）**だが不安定な外挿であり断定しない。確定には LB ページの 190〜200 位のスコアが必要で、これは API では取得できずユーザの操作を要する。0.944 との差は +0.004 ではなく **+0.006〜+0.010** の可能性がある |
+| 「0.947→0.951 の +0.004 は density-group overrides に帰属する」（`0dd5c3d`） | 2026-09-26 11:2x UTC 0.951 cell 2 のコメント実読: `# 2. Winning hyperparameter from Version 9 0.947 LB validation sweep:` に続いて `MOTION_RELINK_TIGHT_UM = "5.5"` が置かれている。**作者は利得の本体を TIGHT_UM 5.5 と申告している** | 利得の申告本体は density groups ではなく **`TIGHT_UM = 5.5`**。そしてそれは **E51 で LB 実測済みの完全 no-op（0.000）**。DivNet は dead code、density groups は 21 edges、速度 knob は品質無関係、sweep は 0.951 に存在しない。**0.951 の申告利得の全成分が、我々の stack では転移しないと示された。** 我々が実際に得た +0.007（tau 0.6）は公開が利得として申告していない項目だった |
