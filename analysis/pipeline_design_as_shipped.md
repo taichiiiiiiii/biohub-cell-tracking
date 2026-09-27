@@ -1,180 +1,359 @@
-# 提出パイプライン設計書（現状の書き起こし）
+# 提出パイプライン アーキテクチャ設計書（詳細・現状の書き起こし）
 
 **最終更新: 2026-09-27**
 
-この文書は**いま提出しているもの（`notebooks/pub923_repro/pub923_repro.ipynb`）の現状の設計**を書き起こしたもの。
+この文書は**いま提出しているもの（`notebooks/pub923_repro/pub923_repro.ipynb`）のアーキテクチャ**を、コードを読んで書き起こしたもの。
 新しい設計の提案ではない。仕様は `analysis/competition_spec.md`、計画は `analysis/endgame_plan_20260927.md`、
-採否の記録は `analysis/experiment_ledger.md` を参照し、ここには重複させない。
+採否の記録は `analysis/experiment_ledger.md` にあり、ここには重複させない。
 
-- 対象の状態: notebook の commit `ba5480d`（E71-B）＝ **E70 提出物（`1a0c71f`、kernel v15）に validator 計測（`VALIDATOR_N_PER_TYPE=6`）を足しただけ**。`submission.csv` は E70 と同一。
-- 確度表記: ✅ コードで確認（cell 番号と行番号つき） ／ 📏 実行ログや出力で実測 ／ ⚠️ 未確認
-- cell 番号は notebook の 0 始まり、行番号はその cell の source 内の行。
+- 対象: notebook の commit `ba5480d`（E71-B）。**E70 の提出物（`1a0c71f`、kernel v15）に validator の計測設定（`VALIDATOR_N_PER_TYPE=6`）を足しただけ**で、`submission.csv` は E70 と同一（📏 両者のファイルサイズ 12,703,555 byte が一致）。
+- 確度: ✅ コードで確認（cell 番号と行番号つき） ／ 📏 実行ログや出力で実測 ／ ⚠️ 未確認
+- cell 番号は notebook の 0 始まり。行番号はその cell の source 内の 1 始まり。official は `official/scripts/predict_unet_transformer.py`。
 
 ---
 
-## 1. 全体の流れ
+## 目次
+
+1. 全体構成
+2. 実行環境とプロセス構成
+3. 設定の仕組みと防護
+4. 予測段（検出 → エッジ候補 → ILP）
+5. 後処理段（9 段）
+6. motion relink（E70 の因子）の詳細
+7. 出力と監査
+8. validator（計測系）
+9. 効いていない設定
+10. ローカル検証環境との違い
+11. 既知のリスクと未確認事項
+
+---
+
+## 1. 全体構成
 
 ```text
-test/*.zarr
+test/<stem>.zarr  (T=100, Z=64, Y=256, X=256, uint16)
   │
-  ├─[cell 9]  オフラインの依存関係とモデル成果物を解決・sha256 で検証
-  ├─[cell 11] official の predict_unet_transformer.py を文字列置換で改造して、GPU 2 枚で分割実行
-  │     検出（8 方向 TTA、2 シード混合、frame retention guard）
-  │     → エッジ候補のスコア（双方向 harmonic 融合 → 2 シード low-margin 混合 → edge-feature TTA → rank bonus）
-  │     → ILP（tracksdata）→ 動画ごとの .geff
-  ├─[cell 13] .geff → filter_output_graph（後処理 9 段）→ submission.csv
-  ├─[cell 15] submission.csv の独立監査（スキーマ・id 連番・データセット一致・retention guard の記録）
-  ├─[cell 17-19] validator: train の 12 本で同じパイプラインを回し、公式指標で採点（計測のみ）
+  ├─[cell 9]  依存関係とモデル成果物の解決・sha256 検証（オフライン）
+  │
+  ├─[cell 11] official 予測スクリプトを文字列置換で改造 → GPU 2 枚でサブプロセス分割実行
+  │     ┌ 検出: 8 方向 TTA → 2 シード混合 → frame retention guard → 局所最大
+  │     ├ エッジ候補: 全ペアのスコア → harmonic 双方向融合 → low-margin 2 シード混合
+  │     │            → edge-feature TTA → rank bonus → softmax → 閾値 0.48
+  │     └ ILP（tracksdata ILPSolver）
+  │     出力: tracking_repo/predictions/<user>/unet_transformer/split_0/<stem>.geff
+  │
+  ├─[cell 13] 動画ごとに .geff → filter_output_graph（後処理 9 段）→ submission.csv / run_stats.csv
+  ├─[cell 15] submission.csv の独立監査
+  ├─[cell 17-19] validator: train 12 本で予測と後処理をもう一度実行し、notebook 内の再実装採点器で採点（計測のみ）
   └─[cell 21] 全機構の実際の状態を表示（manifest）
 ```
 
+**データの流れの要点**
+- 動画は独立に処理される。動画をまたぐ情報は無い。
+- 後処理は動画ごとに、`nodes_by_id: dict[int, dict]` と `edges: list[dict]` を各段で受け渡す。各段は `stats: dict[str,int]` にカウンタを積み、それが `run_stats.csv` の列になる。
+- 後処理は画像（zarr のフレーム）を 2 か所で読み直す。合成ノードの位置補正（§5.4）と DeepCenter の veto（§5.4・§5.5）。
+
 ---
 
-## 2. 設定と防護（cell 3・5・7）
+## 2. 実行環境とプロセス構成
 
 | 項目 | 内容 | 出所 |
 |---|---|---|
-| 設定の書き方 | すべて `os.environ["BIOHUB_*"]` に文字列で入れる | ✅ cell 3 |
-| 設定を読む場所 | 主に cell 7 L43-151 で `os.environ.get(名前, 既定値)`。一部は cell 9 L644-655 と cell 11 のパッチ内で読む | ✅ |
-| **既定値の罠** | cell 3 で設定しなかった変数は **cell 7 の既定値**になる。E70 以前の `OUTPUT_MOTION_RELINK` は未設定なので既定値 `"1"`（ON）だった | ✅ cell 7 L65 |
-| Configuration guard | cell 5 の `_EXPECTED_TEXT` と実際の環境変数を突き合わせ、違えば停止。現在 26 キー | ✅ cell 5 |
-| パッチの防護 | cell 11 の置換はすべて「置換元が 1 か所だけにあること」と「置換結果が残っていること」を確認し、違えば `RuntimeError` | ✅ cell 11 L54-295 |
-| 無効化の防護 | rank bonus は最初に掛けた bonus が全ゼロなら `RANK_BONUS_NO_OP` で停止 | ✅ cell 11 L262-266 |
+| マシン | Kaggle T4（GPU 有効）、インターネット無効 | ✅ `kernel-metadata.json` |
+| 入力 dataset | 主モデル・副モデル・DeepCenter・DivNet の 4 つ（§4.1） | ✅ 同上 |
+| GPU 分割 | GPU 数 ≥ 2 なら `--slice i::2` で動画を 2 つに分け、別々のサブプロセスで予測。終了後に .geff をマージし、重複や欠落があれば停止 | ✅ cell 11 L472-518、L403-468 |
+| GPU 必須 | CUDA が無ければ停止（CPU で黙って走らない） | ✅ cell 11 L1-8 |
+| 実行時間 | E70 で 40.83 分（上限 12 時間） | 📏 |
 
 ---
 
-## 3. 予測段（cell 9・11）
+## 3. 設定の仕組みと防護
 
-### 3.1 モデル
+### 3.1 設定値の経路
 
-| 役割 | 成果物（Kaggle dataset） | 出所 |
+| 段階 | 内容 | 出所 |
 |---|---|---|
-| 主モデル（検出＋エッジ予測） | `pilkwang/biohub-tracking-support-pack-50ep-v1` の `weights/unet_transformer/split_0/edge_predictor_best.pth` | ✅ cell 7 L34-36 |
-| 副モデル（2 シード目） | `pilkwang/biohub-temporal-unet3d-seed314159-v1` | ✅ kernel-metadata.json、cell 9 L573-644 |
-| DeepCenter（後処理の veto） | `pilkwang/biohub-deepcenter-unet3d-center-prior-v1` の `full_frame_center/best.pt`（epoch 2） | ✅ cell 3 |
-| DivNet | `giorgosi/biohub-divnet-v2`。**読み込むが使っていない**（§6） | ✅ |
+| 書く | cell 3 で `os.environ["BIOHUB_*"] = "文字列"` | ✅ cell 3 |
+| 読む（大半） | cell 7 L43-151 の `os.environ.get(名前, 既定値)` でモジュール定数にする | ✅ |
+| 読む（一部） | cell 9 L644-655（副モデル関係と閾値 0.48）、cell 11 のパッチ文字列の中（予測サブプロセスが実行時に読む） | ✅ |
+| 予測への受け渡し | cell 11 が `predict_cmd` の引数（`--det-threshold`、ILP の重みなど）と、サブプロセスに引き継ぐ環境変数の両方で渡す | ✅ cell 11 L321-348、L490 |
 
-### 3.2 検出
+**既定値の罠**: cell 3 で設定しない変数は cell 7 の既定値になる。E70 以前は `OUTPUT_MOTION_RELINK` を設定していなかったため、既定値 `"1"`（ON）で動いていた（✅ cell 7 L65）。
 
-| 段 | 処理 | 設定 | 出所 |
-|---|---|---|---|
-| 検出 TTA | 反転 3 通り＋90° 回転 2 通り＋転置 2 通り＋原画像 = **8 方向**の logit 平均 | `det_tta` | ✅ cell 11 L13-54 |
-| 2 シード混合 | 検出 logit を `0.2·主 + 0.8·副` で混ぜる | `SECONDARY_DETECTION_WEIGHT=0.80` | ✅ cell 9 L651 |
-| frame retention guard | 混合後の候補数が主モデル単独の **90% 未満**になったフレームは主モデル単独に戻す | `DUAL_SEED_MIN_CANDIDATE_RETENTION=0.90` | ✅ cell 11 L84-125 |
-| ピーク抽出 | `F.max_pool3d` の局所最大かつ `sigmoid > 0.965` | `DET_THRESHOLD=0.965` | ✅ cell 3、official L283-286 |
-| 座標 | ダウンサンプル格子の index × `(1,4,4)`。**Y/X は 4 の倍数のみ** | — | ✅ official L494-496、📏 E67 |
-| 重心の補正 | 使っていない | `REFINE_CENTROIDS=0` | ✅ cell 3 |
+### 3.2 防護
 
-### 3.3 エッジ候補のスコア（適用順）
+| 防護 | 内容 | 出所 |
+|---|---|---|
+| Configuration guard | cell 5 の `_EXPECTED_TEXT`（26 キー）と実際の環境変数が違えば停止 | ✅ cell 5 |
+| パッチの一意性 | cell 11 の置換はすべて「置換元がちょうど 1 か所にある」ことと「置換後に残っている」ことを確認し、違えば `RuntimeError` | ✅ cell 11 L54-295 |
+| 無効化の検知 | rank bonus が全ゼロなら `RANK_BONUS_NO_OP` で停止 | ✅ cell 11 L262-266 |
+| モデルの完全性 | 成果物の sha256 を検証 | ✅ cell 9 L469-560 |
+| DeepCenter の版 | checkpoint の epoch が 2 でなければ読み込まない。1 つも読めなければ停止（`REQUIRE_DEEPCENTER_VETO=1`） | ✅ cell 13 L376-425 |
+
+---
+
+## 4. 予測段（cell 9・11 ＋ official）
+
+### 4.1 モデル
+
+| 役割 | 成果物 | 出所 |
+|---|---|---|
+| 主モデル（UNet エンコーダ＋Transformer のエッジ予測） | `pilkwang/biohub-tracking-support-pack-50ep-v1` の `weights/unet_transformer/split_0/edge_predictor_best.pth` | ✅ cell 7 L34-36 |
+| 副モデル（同じ構造の別シード） | `pilkwang/biohub-temporal-unet3d-seed314159-v1` | ✅ cell 9 L573-644 |
+| DeepCenter（細胞中心の heatmap。後処理の veto 専用） | `pilkwang/biohub-deepcenter-unet3d-center-prior-v1` の `full_frame_center/best.pt`（epoch 2） | ✅ cell 3 |
+| DivNet | `giorgosi/biohub-divnet-v2`。読み込むが使われない（§9） | ✅ |
+
+### 4.2 処理単位
+
+official の `predict_video` は `window_size` フレームの窓を stride `W−1` でずらし、連続する全フレーム対をちょうど 1 回ずつ処理する（✅ official L297-360）。窓ごとに UNet を 1 回通し、その特徴量をその窓内の全フレーム対のエッジ予測に使い回す。
+
+### 4.3 検出
 
 | 順 | 処理 | 設定 | 出所 |
 |---|---|---|---|
-| 1 | **双方向 harmonic 融合**: 順方向と逆方向の確率を重み付き調和平均し、順方向の logit スケールに合わせて戻す | `BIDIRECTIONAL_EDGE_WEIGHT=0.15`、`FUSION_MODE=harmonic_probability` | ✅ cell 11 L167-190 |
-| 2 | **2 シードの low-margin 混合**: 主モデルの margin が小さい候補だけ副モデルの logit を混ぜる | `SECONDARY_EDGE_WEIGHT=0.20`、`LINK_MODE=low_margin_consensus`、`LOW_MARGIN_MAX=0.35` | ✅ cell 9 L645-654、cell 11 L59-78 |
-| 3 | **edge-feature TTA**: エッジ特徴も TTA 平均（主 1.0、副 0.75） | `EDGE_FEATURE_TTA=1`、`SECONDARY_EDGE_FEATURE_TTA=1`、`_WEIGHT=0.75` | ✅ cell 11 L206-234 |
-| 4 | **rank bonus**: 列で最良なら +β、行で最良なら +0.5β、相互最良ならさらに +0.5β（β=0.12 固定） | `RANK_BONUS=1` | ✅ cell 11 L237-295 |
-| 5 | 候補の閾値 | `DUAL_SEED_EDGE_THRESHOLD=0.48` を `cfg.threshold` に代入 | ✅ cell 9 L655、cell 11 L66 |
+| 1 | **検出 TTA**: 原画像＋反転 3 通り＋90° 回転 2 通り＋転置＋反転置 = **8 方向**の検出 logit を平均 | `det_tta` | ✅ cell 11 L13-54 |
+| 2 | **2 シード混合**: `(1−0.8)·主 + 0.8·副`。副も同じ 8 方向 TTA をかけ、平均と標準偏差を主に合わせてから混ぜる（標準偏差の比は 0.5〜2.0 にクリップ） | `SECONDARY_DETECTION_WEIGHT=0.80` | ✅ cell 9 L651、cell 11 L63（置換文字列内） |
+| 3 | **frame retention guard**: フレームごとに、混合後の候補数が主モデル単独の 90% 未満なら、そのフレームは主モデル単独の logit を使う | `DUAL_SEED_MIN_CANDIDATE_RETENTION=0.90` | ✅ cell 11 L94-125 |
+| 4 | **局所最大**: `F.max_pool3d` の局所最大かつ `sigmoid > 0.965` | `DET_THRESHOLD=0.965` | ✅ cell 3、official L283-286 |
+| 5 | **座標**: ダウンサンプル格子の index に `(1,4,4)` を掛ける。**Y/X は 4 の倍数だけ**になり、int16 に丸める | — | ✅ official L494-496、📏 E67 |
 
-### 3.4 ILP
+重心による位置補正は使っていない（`REFINE_CENTROIDS=0`、✅ cell 3）。
+
+### 4.4 エッジ候補のスコア
+
+official はフレーム対ごとに、**全 source × 全 target の組**についてエッジ logit `(n_src, n_tgt)` を出す（✅ official L407-460）。そのあと次の順で加工する。
+
+| 順 | 処理 | 設定 | 出所 |
+|---|---|---|---|
+| 1 | **双方向 harmonic 融合**: 順方向と逆方向の確率を重み付き調和平均（`1/((1−w)/p_fwd + w/p_rev)`）し、正規化後に順方向の logit の中心とスケールへ戻す（スケール比は 0.5〜2.0 にクリップ） | `BIDIRECTIONAL_EDGE_WEIGHT=0.15`、`FUSION_MODE=harmonic_probability` | ✅ cell 11 L167-190 |
+| 2 | **low-margin 2 シード混合**: 主モデルの margin が `LOW_MARGIN_MAX` より小さい候補だけ、margin が小さいほど強く副モデルの logit を混ぜる（上限の重み 0.20） | `SECONDARY_EDGE_WEIGHT=0.20`、`LINK_MODE=low_margin_consensus`、`LOW_MARGIN_MAX=0.35`、`MIX_TEMPERATURE=1` | ✅ cell 9 L645-654、cell 11 L59-78 |
+| 3 | **edge-feature TTA**: エッジ予測に使う UNet 特徴量も TTA で平均（主 1.0、副 0.75） | `EDGE_FEATURE_TTA=1`、`SECONDARY_EDGE_FEATURE_TTA=1`、`_WEIGHT=0.75` | ✅ cell 11 L206-234 |
+| 4 | **rank bonus**: 列（target ごと）で最良なら +β、行（source ごと）で最良なら +0.5β、相互最良ならさらに +0.5β（β=0.12 固定）を logit に足す | `RANK_BONUS=1` | ✅ cell 11 L237-295 |
+| 5 | **確率化**: `softmax(dim=0)`、つまり **target ごとに親候補で正規化** | `edge_activation`（⚠️ 設定値はモデルの config 由来で未確認。softmax の場合の挙動） | ✅ official L462-465 |
+| 6 | **閾値**: `prob > 0.48` の組を候補エッジにする。ILP を使うため、親や子の数の上限はここでは掛けない | `DUAL_SEED_EDGE_THRESHOLD=0.48` → `cfg.threshold` | ✅ cell 9 L655、cell 11 L66、official L85-93、L460-490 |
+
+候補エッジは `(source, target, edge_prob, edge_dist)` として保存される。`edge_dist` はダウンサンプル格子の voxel 単位で、µm ではない（✅ official L482-485）。
+
+### 4.5 ILP
 
 | 項目 | 値 | 出所 |
 |---|---|---|
-| 重み | edge −1.0、出現 0.0、消滅 2、分裂 1.2 | ✅ cell 3、cell 7 L46-49 |
-| **ILP 出力の分裂数** | **0**（4 本とも fork 0、merge 0） | 📏 E70 の生 .geff |
+| ソルバ | `td.solvers.ILPSolver` | ✅ official L555-563 |
+| 目的関数の重み | エッジ `−1.0 × edge_prob`、出現 0.0、消滅 2、分裂 1.2 | ✅ cell 3、cell 7 L46-49、official L556-560 |
+| **ILP 出力の分裂** | **0**（E70 の 4 本すべてで fork 0、merge 0） | 📏 E70 の生 .geff |
 
-**→ 提出物の分裂はすべて後処理の safe-division 段が作っている（§4 の 5）。**
-
----
-
-## 4. 後処理段（cell 13 `filter_output_graph`、L1458-1693）
-
-動画ごとに .geff を読み（L1833-1858）、次の順で処理する。右 2 列は全 4 本の合計（📏 `run_stats.csv`）。
-
-| 順 | 段 | 内容 | 主な設定 | E59（ON） | E70（OFF） |
-|---|---|---|---|---:|---:|
-| 0 | 入力 | ILP の .geff | — | node 127,379 / edge 120,665 | 同左 |
-| 1 | エッジ検査 | t+1 以外と 14 µm 超を削除 | `OUTPUT_EDGE_MAX_UM=14.0` | — | — |
-| 2 | **motion relink** | §5。ON なら**エッジ集合を丸ごと置き換える** | `OUTPUT_MOTION_RELINK` | 121,295 本で置換 | **実行しない** |
-| 3 | 単一親の修復 | 入次数 >1 のノードで最良 1 本だけ残す | `OUTPUT_SINGLE_PARENT_REPAIR=1` | 削除 0 | 削除 0 |
-| 4a | 1 フレーム欠損の補完 | 欠けたフレームに合成ノードを入れる。DeepCenter の heatmap で veto | `GAP_CLOSE_*`、`DEEPCENTER_GAP_*` | +629 node | +740 node |
-| 4b | 2 フレーム欠損の補完 | 厳しい条件で 2 フレーム欠損をつなぐ | `OUTPUT_GAP2_RECOVERY=1` | +294 node | +310 node |
-| 5 | **safe-division** | 幾何条件 → DeepCenter veto → 姉妹の非対称 veto（tau=0.6）→ 上限。**提出物の分裂はこれが全部** | `SAFE_DIV_*`、`DEEPCENTER_SAFE_DIV_*` | +99（tau で 99 件却下） | +101（tau で 118 件却下） |
-| 6 | 分裂の幾何フィルタ | **既定で OFF**（DivNet はこの中でしか呼ばれない） | `OUTPUT_DIVISION_GEOMETRY_FILTER` 未設定→0 | 無効 | 無効 |
-| 7 | 孤立ノードの削除 | エッジを持たないノードを削除 | `OUTPUT_PRUNE_ISOLATED=1` | −52 | −4 |
-| 8 | 短いトラックの削除 | 長さ 6 未満の成分を削除（分裂を含む成分は残す）。削りすぎたら救済 | `OUTPUT_MIN_TRACK_LEN=6`、`ADAPTIVE_SHORT_TRACK_RESCUE=1` | −3,421 | −3,999（救済 +119） |
-| 9 | 直線当てはめ平滑化 | 前後 2 フレームの直線で座標を 0.8 の重みで寄せる | `OUTPUT_LINEFIT_*` | 124,821 node | 124,410 node |
-| — | 出力 | 座標を四捨五入して CSV に書く。dangling edge は停止 | — | **node 124,829 / edge 120,463 / 分裂 99** | **node 124,426 / edge 119,595 / 分裂 101** |
-
-採点側（`metrics.py`）が落とす重複・非 t+1・出次数 >2・merge は、提出物では**すべて 0 件**（📏 E72）。
+**→ 提出物の分裂はすべて後処理の safe-division（§5.5）が作っている。** ILP は分裂 1.2 のコストのため、分裂を 1 つも選んでいない。
 
 ---
 
-## 5. motion relink（E70 の因子）
+## 5. 後処理段（cell 13 `filter_output_graph`、L1458-1693）
 
-`motion_relink_edges`（cell 13 L543-669）の処理:
+cell 13 の主ループ（L1829-1920）が .geff を読み、`nodes_by_id`（`t,z,y,x` は voxel 単位の float）と `raw_edges`（`edge_prob` つき）にして渡す。
 
-- **ILP のエッジを使わない。** 全ノードをフレームごとに `linear_sum_assignment` で 1 対 1 に割り当て直す。ILP の確率は bonus としてコストに入るだけ。
-- コスト = `|target − 予測位置| + 0.05·|target − source| − bonus·prob`。予測位置は直前の速度 × `velocity_weight` で外挿する。
-- 6 µm の tight pass で割り当て、残りを 10 µm の relaxed pass で割り当てる。
-- **1 対 1 なので分裂は作れない。** ただし ILP も分裂 0 なので、ON/OFF で分裂の扱いは変わらない。
-- 1 フレームのノードが 2,600 を超える動画ではスキップする。
+### 5.1 段の一覧と実測
 
-**OFF にすると連動して無効になるもの**（どちらも motion relink の中でしか使われない）:
+右の 2 列は全 4 本の合計（📏 `run_stats.csv`）。
+
+| 順 | 段 | 関数・行 | E59（relink ON） | E70（relink OFF） |
+|---|---|---|---:|---:|
+| 0 | 入力（ILP の .geff） | L1833-1858 | node 127,379 / edge 120,665 | 同左 |
+| 1 | エッジ検査 | L1529-1542 | — | — |
+| 2 | motion relink | `motion_relink_edges` L543-669、呼び出し L1544-1575 | 121,295 本で置換 | 実行しない |
+| 3 | 単一親の修復 | L1577-1586 | 削除 0 | 削除 0 |
+| 4a | 1 フレーム欠損の補完 | `close_single_frame_gaps` L671-937 | +629 node | +740 node |
+| 4b | 2 フレーム欠損の補完 | `recover_strict_gap2` L954-1101 | +294 node | +310 node |
+| 5 | safe-division | `add_safe_divisions_postlink` L1104-1256 | +99 分裂（tau で 99 件却下） | +101 分裂（tau で 118 件却下） |
+| 6 | 分裂の幾何フィルタ | L1635-1677 | 無効 | 無効 |
+| 7 | 孤立ノードの削除 | L1679-1685 | −52 | −4 |
+| 8 | 短いトラックの削除 | `filter_short_track_components` L1260-1381 | −3,421 | −3,999（救済 +119） |
+| 9 | 直線当てはめ平滑化 | `linefit_smooth_output_graph` L1384-1455 | 124,821 node | 124,410 node |
+| — | 出力 | L1866-1905 | **node 124,829 / edge 120,463 / 分裂 99** | **node 124,426 / edge 119,595 / 分裂 101** |
+
+採点側（`metrics.py`）が落とす重複エッジ・非 t+1・出次数 >2・merge は、提出物では**すべて 0 件**（📏 E72）。
+
+### 5.2 段 1: エッジ検査
+
+`t_target ≠ t_source + 1` のエッジと、長さが 14 µm を超えるエッジを捨てる（`OUTPUT_ENFORCE_NEXT_FRAME=1`、`OUTPUT_EDGE_MAX_UM=14.0`）。
+
+### 5.3 段 3: 単一親の修復
+
+入次数が 2 以上のノードについて、`edge_sort_key` が最大のエッジを 1 本だけ残す（✅ L1577-1586）。子の数の修復（`OUTPUT_SINGLE_CHILD_REPAIR`）は既定 0 で無効。
+
+### 5.4 段 4: 欠損の補完
+
+**4a. 1 フレーム欠損（`close_single_frame_gaps`）**
+
+| 手順 | 内容 |
+|---|---|
+| 対象 | フレーム t で終わるトラックの末端と、フレーム t+2 で始まるトラックの先頭 |
+| 距離の上限 | `GAP_CLOSE_UM × 2 = 10 µm`。周囲 3 近傍の間隔の中央値が基準 6.5 µm より広ければ上限を広げ、狭ければ狭める（1 ステップあたり ±0.125 µm まで、`GAP_DENSITY_*`） |
+| 割当 | `linear_sum_assignment` で末端と先頭を 1 対 1 に対応づける |
+| 中間ノード | t+1 の孤立ノードが中点から 3.2 µm 以内にあれば再利用し、無ければ合成ノードを作る（上限: 全ノードの 5% または 2,000 個） |
+| 合成ノードの位置 | 中点のまわり（z±1, y/x±3 voxel）の輝度重心に動かす。3.2 µm を超えて動くなら中点のまま（`refine_synthetic_midpoint` L175-219） |
+| DeepCenter の veto | **合成ノード**かつ**端点間が 8.5 µm 以上**のときだけ、DeepCenter heatmap の値が 0.25 未満なら取り消す |
+| **注意** | `GAP_CLOSE_MAX_GAP=2` と設定しているが、コード内で `min(GAP_CLOSE_MAX_GAP, 1)` に固定されており、**実際は常に 1**（✅ L758） |
+
+**4b. 2 フレーム欠損（`recover_strict_gap2`）**
+
+| 手順 | 内容 |
+|---|---|
+| 対象 | フレーム t で終わる末端と、t+3 で始まる先頭 |
+| 条件 | 総距離 ≤ 10.2 µm かつ 1 ステップ ≤ 4.4 µm。前後のトラックの向きと速度が大きく食い違わないこと（cos > −0.25 かつ速度差 ≤ 6 µm） |
+| 選び方 | コストの小さい順に貪欲に選ぶ。上限は全エッジの 0.45% または 180 本、フレームごとの上限も 0.6% |
+| 中間ノード | 1/3 と 2/3 の位置に合成ノードを 2 個置き、4a と同じ輝度重心の補正をかける |
+| DeepCenter | **使わない**（4a と違い veto が無い） |
+
+### 5.5 段 5: safe-division（提出物の分裂はすべてここから）
+
+フレーム t ごとに次の条件をすべて満たす組を分裂として追加する（✅ L1104-1256）。
+
+| 順 | 条件 | 値 |
+|---|---|---|
+| 1 | 親は子を 1 つだけ持ち、その子（既存の子）は t+1 にいて距離 ≤ 10 µm | `SAFE_DIV_EXISTING_CHILD_MAX_UM=10.0` |
+| 2 | 親はトラックの途中にある（親自身に入ってくるエッジがある） | — |
+| 3 | 候補（新しい子）は t+1 の「入ってくるエッジが無い」ノードで、親から 9 µm 以内 | `SAFE_DIV_MAX_UM=9.0` |
+| 4 | 候補は、既存の子から見て**最も近い**親なしノードで、その距離（姉妹間距離）≤ 14 µm | `SAFE_DIV_SISTER_MAX_UM=14.0` |
+| 5 | DeepCenter heatmap の候補位置の値 ≥ 0.25 | `DEEPCENTER_SAFE_DIV_THRESHOLD=0.25` |
+| 6 | 姉妹が t+2 でどちらも 1 本だけ続き、t+2 での距離が t+1 より 2.25 µm 以上広がる | `SAFE_DIV_DIVERGE_UM=2.25` |
+| 7 | **姉妹の非対称 veto（E56）**: `|d(親,既存の子) − d(親,候補)| / 平均 > 0.6` なら却下 | `SAFE_DIV_SISTER_SYMMETRY_TAU=0.6` |
+| 8 | スコア `d(親,候補) + 0.15·姉妹間距離` の小さい順に採用。上限はフレームごとに親候補数の 0.76%、全体で全エッジの 0.375% | `SAFE_DIV_FRAME_FRAC_CAP`、`GLOBAL_FRAC_CAP` |
+
+コードの注意点:
+- 条件 4 の変数名は `_mutual` だが、実際は**片方向**の最近傍しか見ていない（✅ L1182-1188）。
+- `SAFE_DIV_REQUIRE_DIVERGENCE` と `SAFE_DIV_REQUIRE_MUTUAL_NN` は cell 7 で読まれるが、この関数では使われず、条件 4・6 は常にかかる（✅ cell 7 L128-129 と本関数）。
+- `safe_division_geometric_candidates` と `safe_division_mutual_nn_rejected` / `divergence_rejected` は、どこでも加算されない。そのためログの `deepcenter_rejected=` は意味のある値にならない（✅ L1623-1633）。
+
+### 5.6 段 6-9
+
+| 段 | 内容 | 出所 |
+|---|---|---|
+| 6 分裂の幾何フィルタ | `OUTPUT_DIVISION_GEOMETRY_FILTER` が既定 0 なので**実行されない**。DivNet はこの中でしか呼ばれない | ✅ L1635-1677 |
+| 7 孤立ノードの削除 | エッジを 1 本も持たないノードを消す | ✅ L1679-1685 |
+| 8 短いトラックの削除 | 弱連結成分のノード数が 6 未満なら消す（分裂を含む成分は残す）。削除が全体の 10% 以上になった動画だけ救済: 長さ 4〜5 で、平均 `edge_prob` ≥ 0.88、平均エッジ長 ≤ 3.0 µm の成分を、スコア順に予算（全ノードの 1.2% または 120 個）まで戻す | ✅ L1260-1381 |
+| 9 直線当てはめ平滑化 | 各ノードについて前後 2 フレーム（分岐しない範囲）で 1 次式を当てはめ、元の位置と `0.2·元 + 0.8·当てはめ` で混ぜる。グラフの形は変えない | ✅ L1384-1455 |
+
+**段 8 の救済は `edge_prob` を使う。** relink ON のときの `edge_prob` は motion relink が付けた学習確率（無ければ 0）で、OFF のときは ILP の .geff の確率。そのため ON と OFF では救済の対象が変わる（E70 では +119 node、E59 では 0）。
+
+### 5.7 DeepCenter veto の共通動作
+
+| 項目 | 内容 | 出所 |
+|---|---|---|
+| heatmap | フレームを Y/X 方向に 4 分の 1 に平均プーリング → 百分位で正規化 → UNet3D → sigmoid。直近 8 フレーム分をキャッシュ | ✅ L434-478 |
+| 点の評価 | 点のまわり（z±1、y/x±2 のプーリング後の格子）の最大値 | ✅ L481-506 |
+| **失敗時** | モデルが無い・値が取れない場合は**受け入れる**（fail-open）。ただし `REQUIRE_DEEPCENTER_VETO=1` のため、モデルが読めなければ起動時に停止する | ✅ L509-533 |
+| TTA | `DEEPCENTER_TTA=0` で無効（E57 で試し、採用していない） | ✅ cell 3、L455-472 |
+
+---
+
+## 6. motion relink（E70 の因子）の詳細
+
+### 6.1 処理（`motion_relink_edges`、L543-669）
+
+- **ILP のエッジを使わない。** 全ノードをフレームごとに `linear_sum_assignment` で 1 対 1 に割り当て直す。ILP の確率はコストの bonus として入るだけ。
+- コスト = `|target − 予測位置| + 0.05·|target − source| − bonus·prob`。予測位置は、直前に割り当てた親からの速度に `velocity_weight` を掛けて外挿する。
+- まず 6 µm で割り当て（tight）、残りを 10 µm で割り当てる（relaxed）。
+- 1 対 1 なので分裂は作れない。ILP も分裂 0 なので、ON と OFF で分裂の数は変わらない。
+- 1 フレームのノードが 2,600 を超える動画ではスキップし、ILP のエッジのまま進む。
+
+### 6.2 OFF にすると一緒に無効になるもの
 
 | 機構 | 理由 | 出所 |
 |---|---|---|
-| density group の上書き（E59） | `if OUTPUT_MOTION_RELINK:` ブロックの中でしか読まれない | ✅ cell 13 L1544-1575 |
-| `MOTION_RELINK_LEARNED_BONUS` / `TIGHT_UM` / `RELAXED_UM` | 同上 | ✅ |
+| density group の上書き（E59） | `if OUTPUT_MOTION_RELINK:` ブロックの中でしか読まれない | ✅ L1544-1575 |
+| `MOTION_RELINK_LEARNED_BONUS` / `VELOCITY_WEIGHT` / `TIGHT_UM` / `RELAXED_UM` | 同上 | ✅ |
 
-**→ E70 は実質「E56 − motion relink」。** ON/OFF の差は §4 の 2 段目だけでなく、その後の 4〜9 段の入力が変わることでも生じる（補完 +111 node、短トラック削除 +578 など）。
+density group は、1 フレームあたりの平均ノード数が 120 未満なら low、400 未満なら middle、それ以上なら high。ON のときは `velocity_weight` と `learned_bonus` だけがグループごとに変わる（`tight_um` / `relaxed_um` は表示されるが適用されない。公開 0.951 と同じ、✅ L1-26、L1560-1569）。
+
+**→ E70 は実質「E56 − motion relink」。**
+
+### 6.3 ON/OFF の差が伝わる経路
+
+OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変わる。
+
+| 段 | 変化（E59 → E70、4 本合計） | 理由 |
+|---|---|---|
+| 4a 1 フレーム補完 | +629 → +740 node | ILP は途切れたトラックを多く残す（relink は全ノードをつなぎ直す） |
+| 5 safe-division | 分裂 99 → 101、tau の却下 99 → 118 | 親なしノードの集合が変わる |
+| 8 短トラック削除 | −3,421 → −3,999、救済 0 → +119 | 同上。救済が発動するかどうかも変わる |
 
 ---
 
-## 6. 効いていない設定（読まれるが結果に影響しない）
+## 7. 出力と監査
+
+| 項目 | 内容 | 出所 |
+|---|---|---|
+| CSV の列 | `id,dataset,row_type,node_id,t,z,y,x,source_id,target_id`。node 行の source/target は −1、edge 行の node 列は −1 | ✅ L28-29、L1860-1897 |
+| 座標 | `max(0, round(値))` の整数で書く | ✅ L1873-1875 |
+| 書き込み時の検査 | dangling edge、データセットの過不足、行カウンタの不一致、ヘッダの不一致があれば停止 | ✅ L1887、L1922-1929 |
+| cell 15 の監査 | 書き終えた CSV を読み直し、列・id の連番・行種別・データセット集合・retention guard のログを検査 | ✅ cell 15 |
+| run_stats.csv | 動画ごとの全カウンタと予測時間 | ✅ L1899-1933 |
+
+---
+
+## 8. validator（計測系、cell 17-19）
+
+### 8.1 構成
+
+| 項目 | 内容 | 出所 |
+|---|---|---|
+| 動画の選び方 | train を embryo の接頭辞（44b6 / 6bba）ごとに分け、「GT に分裂がある」動画を優先して名前順に `VALIDATOR_N_PER_TYPE` 本ずつ選ぶ。6 本ずつで計 12 本 ＝ eval12 と同じ集合 | ✅ cell 17 L10-54、📏 E71 |
+| test との重複除外 | `TEST_DIR` にある stem は除外する | ✅ cell 17 L13-17 |
+| 予測 | 本番と同じ予測コマンドを、method 名 `unet_transformer_val` で実行 | ✅ cell 17 L131 |
+| 後処理 | **本番と同じ `filter_output_graph`**。フレームを読むために `TEST_DIR` を一時的に `TRAIN_DIR` に差し替え、終わったら必ず戻す | ✅ cell 19 L355-368 |
+| submission.csv への影響 | なし（CSV を書いて監査した後に実行する） | ✅ |
+
+### 8.2 採点器は公式の再実装（重要）
+
+**cell 19 は `official/src/tracking_cellmot/metrics.py` を import していない。** notebook 内に独自の採点器がある（✅ cell 19 L1-300）。
+
+| 部分 | 公式との関係 | 評価 |
+|---|---|---|
+| ノード対応 | フレームごとに µm 距離で `linear_sum_assignment`、7 µm で打ち切り | 公式（tracksdata の `DistanceMatching`）と同等と思われるが ⚠️ 未検証 |
+| edge の TP/FP/FN | 「source が対応する GT ノードに出るエッジがある、または target が対応する GT ノードに入るエッジがある」ものを FP の対象にする | 公式の `pred_valid` と同じ論理。公式の前処理（重複・非 t+1・merge・出次数 >2）は提出物では 0 件なので影響しない（📏 E72） |
+| adj と集計 | `w=TP+FP+FN` の加重平均、`T_true` は GT の `estimated_number_of_nodes` | 公式と同じ式 |
+| **division** | 弱連結成分を使った独自の判定（GT の姉妹の子孫が、GT 分裂の親と同じ予測成分に入り、その成分に fork があれば TP） | **公式と別物**。公式は窓単位の対応＋4 種類の FP 規則（`competition_spec.md` §7.2） |
+
+**影響**: E71 で「実パイプラインの division 5/5/13 とローカル port の 3/10/15 の差は、tau veto の有無と整合する」と書いたが、2 つの数字は**別の採点器**で出している（ローカルは公式の `division_metrics.py`）。**差がどこから来たか（tau veto か採点器か）は切り分けられていない。** edge 側の比較（0.920452 と 0.918091）は同じ論理の採点器なので比較できる可能性が高いが、ノード対応の同等性は未検証。
+
+---
+
+## 9. 効いていない設定（読まれるが結果に影響しない）
 
 | 設定 | 状態 | 理由 | 出所 |
 |---|---|---|---|
-| DivNet（`DIVNET_VERIFY`、`DIV_MIN_PROB`） | 死んだコード | `OUTPUT_DIVISION_GEOMETRY_FILTER` が既定 0 で、DivNet はその中でしか呼ばれない。公開 0.951 でも同じ | ✅ cell 13 L1635-1678、📏 E58（CSV が E56 と完全一致） |
-| `DENSITY_GROUP_OVERRIDES=1` | OFF では無効 | §5 | ✅ |
-| `DEEPCENTER_TTA=0` | 無効 | E57（0.945）で採用していない | ✅ cell 3 |
+| DivNet（`DIVNET_VERIFY=0`、`DIV_MIN_PROB`） | 死んだコード | 段 6 が既定 0 で実行されず、DivNet はその中でしか呼ばれない。公開 0.951 でも同じ | ✅ L1635-1677、📏 E58（CSV が E56 と完全一致） |
+| `DENSITY_GROUP_OVERRIDES=1` | OFF では無効 | §6.2 | ✅ |
+| `GAP_CLOSE_MAX_GAP=2` | 実際は 1 | コード内で 1 に固定 | ✅ L758 |
+| `SAFE_DIV_REQUIRE_DIVERGENCE`、`SAFE_DIV_REQUIRE_MUTUAL_NN` | 無視される | 条件は常にかかる | ✅ §5.5 |
+| `DENSITY_GROUP_OVERRIDES` の `tight_um` / `relaxed_um` | 適用されない | 公開 0.951 と同じ | ✅ L1560-1569 |
+| `DEEPCENTER_TTA=0` | 無効 | E57 で試し、採用していない | ✅ cell 3 |
 | `REFINE_CENTROIDS=0` | 無効 | Discussion で公開 LB −0.002 の報告 | ✅ cell 3 |
-| `OUTPUT_SINGLE_CHILD_REPAIR` | 既定 0 | — | ✅ cell 7 L63 |
 | `RUN_OUTPUT_DIAGNOSTICS=0` | 無効 | — | ✅ cell 3 |
 
 ---
 
-## 7. 監査と validator（cell 15・17-19）
-
-| cell | 役割 | submission.csv への影響 |
-|---|---|---|
-| 15 | submission.csv を読み直し、列・id 連番・行種別・データセット集合・retention guard のログを検査 | 読むだけ |
-| 17 | train から `VALIDATOR_N_PER_TYPE` 本ずつ選ぶ（6 → 12 本＝eval12 と同じ集合）。**TEST_DIR にある stem は除外** | なし（書き込み後に実行） |
-| 19 | 公式指標（7 µm、w 加重）で採点 | なし |
-
-**限界**: validator は train の同じ 2 embryo で採点する。**hidden test は別 embryo** なので、embryo をまたいだ汎化は測れない。
-
----
-
-## 8. ローカル検証環境との違い（パリティ）
+## 10. ローカル検証環境との違い
 
 | 項目 | 提出パイプライン | ローカル（`src/biohub/public_postproc/`＋ローカル予測） | 出所 |
 |---|---|---|---|
 | 姉妹の非対称 veto（tau） | あり（0.6） | **なし**（`SYMMETRY_TAU` の出現 0 件） | ✅ grep |
 | edge-feature TTA | あり | **なし** | ✅ grep |
 | rank bonus | あり | **なし** | ✅ grep |
-| eval12 の adj edge（base） | **0.920452** | 0.918091 | 📏 E71 |
-| eval12 の division（base） | **5/5/13** | 3/10/15 | 📏 E71 |
-| base → off の Δ | **+0.023468** | +0.023214 | 📏 E71 |
+| 採点器 | notebook 内の再実装（§8.2） | 公式 `metrics.py` / `division_metrics.py` | ✅ |
+| eval12 の adj edge（base） | 0.920452 | 0.918091 | 📏 E71 |
+| eval12 の division（base） | 5/5/13（再実装の採点器） | 3/10/15（公式の採点器） | 📏 E71。**採点器が違うため比較できない** |
+| base → off の adj の Δ | +0.023468 | +0.023214 | 📏 E71 |
 
-**運用ルール**: 採否の判定には、提出 notebook の validator（cell 17-19）の値を使う。ローカルの値は予備スクリーニングにだけ使う。
+**運用ルール**: 採否の判定には、提出 notebook の validator の **adj edge** を使う。division は、公式の採点器で採点し直すまで判定に使わない。ローカルの値は予備スクリーニングにだけ使う。
 
 ---
 
-## 9. 既知のリスクと未確認事項
+## 11. 既知のリスクと未確認事項
 
 | 項目 | 内容 |
 |---|---|
 | embryo をまたぐ汎化 | どの測定系でも測れない。E26 では同じ因子がローカル +0.021 → LB −0.002 |
 | 最悪の動画 | OFF は 44b6_12dfb391 で −0.002388。採用ゲート (e) を 0.0004 差で満たさない（📏 E71） |
-| 実行時間 | 約 41 分 / 12 時間。hidden test の規模でも余裕あり（📏 E70 40.83 分） |
-| ⚠️ 未確認 | ILP の制約の細部（official 側）、副モデルの学習条件、DeepCenter の学習条件、`close_single_frame_gaps`・`recover_strict_gap2`・`add_safe_divisions_postlink` の内部の分岐（この文書では入出力と設定だけ確認） |
+| validator の division | 公式と別の判定（§8.2）。公式で採点し直すには、validator の後処理済みグラフを保存する必要がある（現在は生の .geff だけが残る） |
+| 実行時間 | 約 41 分 / 12 時間。hidden test の規模でも余裕がある |
+| ⚠️ 未確認 | ILP の制約の細部（tracksdata 側）、`edge_activation` の実際の設定値、主・副・DeepCenter の学習条件、tracksdata の `DistanceMatching` と validator のノード対応が同じか |

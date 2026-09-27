@@ -12265,3 +12265,14 @@ E70 の LB 待ちの間に、11844 行で未読と明示した `official/src/tra
 
 依然未読（読んだと言わない）: `io.py`、`train_unet_transformer.py`、`scripts/dataspec.py`。いずれも採点経路ではない。
 E70 は 06:30 UTC 時点で PENDING。事前登録（adopt ≥ 0.947 / refute ≤ 0.942、base E59 = 0.944）は変更しない。
+
+### E73（2026-09-27）訂正: validator の division は公式の採点器ではない
+
+詳細な設計書（`analysis/pipeline_design_as_shipped.md` §8.2）を書くために cell 19 を読んだところ、notebook の validator は
+`official/src/tracking_cellmot/metrics.py` を import しておらず、**notebook 内の再実装で採点している**ことが分かった。
+edge 側は公式の `pred_valid` と同じ論理だが、**division は弱連結成分を使った別の判定**（公式は窓単位の対応と 4 種類の FP 規則）。
+
+- **E71 で書いた「division 5/5/13（実パイプライン）と 3/10/15（ローカル port）の差は、tau veto の有無と正確に整合する」を撤回する。** 2 つの数字は別の採点器で出しており、差が tau veto から来たのか採点器から来たのかは切り分けられていない。
+- edge 側の比較（0.920452 と 0.918091、base→off の Δ +0.023468 と +0.023214）は同じ論理の採点器による値なので、比較できる可能性が高い。ただしノード対応の同等性（tracksdata の `DistanceMatching` と `linear_sum_assignment`）は未検証。
+- E71 の division 基準（TP ≥ +4）の判定も、この再実装の値に基づいている。
+- 運用: validator の division は、公式の採点器で採点し直すまで採否の判定に使わない。そのためには validator の後処理済みグラフを保存する必要がある（現在は生の .geff だけが残る）。
