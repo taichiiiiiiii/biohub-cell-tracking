@@ -125,6 +125,36 @@ Research カテゴリ、**medal 対象**。勝者ライセンス **MIT**、デ�
 | **実測**: 予測 node 299,853 件の **Y mod 4 = 0 が 100%、X mod 4 = 0 が 100%**（`downsample=(1,4,4)`） | E67 |
 | **実測**: node recall は **7,803 / 7,839 = 99.54%**、match 済み平均距離 **1.70 µm**（7 µm 門の 1/4）。**node 位置に余地なし** | E67 |
 
+### 7.1 採点側のグラフ前処理（`metrics.py` 全文通読、2026-09-27）
+
+`_evaluate_matched_graph` は Jaccard 計算前に予測 edge を次の順で**落とす**（落ちた edge は TP にも FP にも数えない）:
+
+| 順 | 処理 | 出所 |
+|---|---|---|
+| 1 | 同一 (source,target) の重複 edge を 1 本に | `metrics.py:61-66` |
+| 2 | `t_target − t_source ≠ 1` の edge を削除 | 同 L74-87 |
+| 3 | 同じ GT edge に写る複数予測 edge は **EDGE_ID 最小の 1 本だけ残す**（merge の水増し防止） | 同 L94-135 |
+| 4 | **出次数 > 2 のノードは EDGE_ID 小さい 2 本だけ残す** | 同 L140-153 |
+| 5 | `pred_valid = out_valid(src) \| in_valid(tgt)`、未マッチは False → 両端が GT 外の edge は分母に入らない | 同 L165-195 |
+
+- `summarise`: adj edge は `w=TP+FP+FN` 加重平均、division は micro、`node_recall` は単純平均（`metrics.py:471-536`）。
+- `evaluate_datasets`（micro のみ）は LB の集計ではない。LB と同じ集計は `summarise`。
+
+### 7.2 division の FP 規則（`division_metrics.py` 全文通読、2026-09-27）
+
+FP = `(considered ∪ evaluable ∪ cross_component ∪ malformed) − TP`（fork ID の和集合、`division_metrics.py:389`）。
+
+| 集合 | 条件 | GT 依存 |
+|---|---|---|
+| considered | GT division の窓（親側マッチ node とその後継）に入った予測 fork で TP にならなかったもの | あり |
+| evaluable | fork 自身が GT node にマッチし、その GT node の out_degree ≥ 1 | あり |
+| cross_component | 異なる子枝の最寄りマッチ証拠が**別の GT 弱連結成分** | あり |
+| **malformed** | 子の predecessors が `{fork}` でない（子が merge 先）、または未マッチ子の孫が merge 先 | **子レベルは GT 非依存** |
+
+**malformed 規則は GT 注釈の外でも FP を生みうる**ため構造だけで検査できる。実測（E59 / E70 / E57 の submission.csv）:
+merge（入次数>1）**0**、出次数>2 **0**、非 t+1 edge **0**、merge 子を持つ fork **0**（fork 数 99 / 101 / 99）。
+**→ この規則から取れる点は無い（仮説棄却）。** 残る未検査は「未マッチ子の孫が merge 先」だが、merge が 0 件なので同じく 0。
+
 ## 8. 2026-08-24 時点で既に結論が出ていたのに、我々が守っていない方法論
 
 `docs/research/discussion_mining_2026-08-24.md:152` に既にこう書かれている:

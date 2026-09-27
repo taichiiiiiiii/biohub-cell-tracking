@@ -12253,3 +12253,15 @@ E26 の local +0.021 → LB −0.002 は、まさにこの embryo 間の壁で�
 参考として記録（外挿には使わない）: base の validator-12 score 0.942191 に対し
 E59 の LB は 0.944。n=1 では校正にならない。
 
+
+### E72（2026-09-27 06:40 UTC）公式採点コードの残り通読 + division malformed 規則の構造検査
+
+E70 の LB 待ちの間に、11844 行で未読と明示した `official/src/tracking_cellmot/metrics.py`（536 行）と
+`division_metrics.py`（574 行）を**全文**通読した。事実は `analysis/competition_spec.md` §7.1 / §7.2 に集約。
+
+- 採点前に予測 edge は 重複除去 → 非 t+1 削除 → 同一 GT edge への merge を最小 EDGE_ID 1 本に → 出次数 >2 を 2 本に、の順で**落とされる**（落ちた edge は TP にも FP にも入らない）。
+- division FP は 4 集合の和。うち **malformed（子が merge 先）は GT 非依存**で、注釈外でも FP を生みうる — ここに未回収の点があるか検査した。
+- **結果: E59 / E70 / E57 の submission.csv すべてで merge 0、出次数>2 0、非 t+1 0、merge 子を持つ fork 0。仮説棄却、この規則から取れる点は無い。**
+
+依然未読（読んだと言わない）: `io.py`、`train_unet_transformer.py`、`scripts/dataspec.py`。いずれも採点経路ではない。
+E70 は 06:30 UTC 時点で PENDING。事前登録（adopt ≥ 0.947 / refute ≤ 0.942、base E59 = 0.944）は変更しない。
