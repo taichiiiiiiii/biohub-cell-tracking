@@ -63,7 +63,7 @@ test/<stem>.zarr  (T=100, Z=64, Y=256, X=256, uint16)
 | 入力 dataset | 主モデル・副モデル・DeepCenter・DivNet の 4 つ（§4.1） | ✅ 同上 |
 | GPU 分割 | `worker_count = min(2, GPU 数, 動画数)` が 2 以上かつ `SLICE` が空なら、`--slice i::2` で動画を 2 つに分け、別々のサブプロセスで予測。終了後に .geff をマージし、重複や欠落があれば停止。それ以外（動画 1 本など）は単一プロセス | ✅ cell 11 L472-518、L403-468 |
 | GPU 必須 | CUDA が無ければ停止（CPU で黙って走らない） | ✅ cell 11 L1-8 |
-| 実行時間 | カーネル全体で E70 40.83 分、E71-B 46.5 分（上限 12 時間）。E70 の内訳は、依存関係の解決 約 9.4 分、test 4 本の予測 9.20 分（GPU 2 枚並列）、後処理 約 5 分、validator 4 本 約 8 分。E71-B は validator が 12 本になった分だけ長い。hidden test は動画数が多く、ここからの単純な外挿では 12 時間に収まるとは言えない。収まる根拠は、同じ経路の E59 などが hidden test で採点まで完了していること | 📏 ログの `time` と `Prediction completed in` |
+| 実行時間 | カーネル全体で E70 40.83 分、E71-B 46.5 分（上限 12 時間）。E70 の内訳: 依存関係の解決 9.4 分、test 4 本の予測 9.20 分（GPU 2 枚並列）、**DeepCenter checkpoint の探索と読み込み 10.4 分**（`/kaggle/input` 以下の glob と `torch.load`、cell 13 L282-317。E71-B では 4.1 分で、実行ごとにぶれる）、後処理の本体 1.3 分、validator 4 本 9.2 分。E71-B は validator が 12 本で約 +17 分だが、依存関係の解決（−5.4 分）と DeepCenter の読み込み（−6.3 分）が短かったため、総差は +5.7 分。hidden test では、依存関係の解決と DeepCenter の読み込みは 1 回きりの固定費で、動画数に比例して増えるのは予測と後処理。単純な外挿では 12 時間に収まる保証は無く、収まる根拠は同じ経路の E59 などが hidden test で採点まで完了していること | 📏 ログの `time`（`DivNet … disabled` → `Loaded DeepCenter …` → `Wrote … submission.csv` → `VALIDATOR: selected`） |
 
 ---
 
@@ -223,7 +223,7 @@ cell 13 の主ループ（L1829-1920）が .geff を読み、`nodes_by_id`（`t,
 コードの注意点:
 - 条件 4 の変数名は `_mutual` だが、実際は**片方向**の最近傍しか見ていない（✅ L1182-1188）。
 - `SAFE_DIV_REQUIRE_DIVERGENCE` と `SAFE_DIV_REQUIRE_MUTUAL_NN` は cell 7 で読まれるが、この関数では使われず、条件 4・6 は常にかかる（✅ cell 7 L128-129 と本関数）。
-- `safe_division_geometric_candidates` と `safe_division_mutual_nn_rejected` / `divergence_rejected` は、どこでも加算されない。そのためログに表示される `deepcenter_rejected=` は `0 − 採用候補数` の負の値になり、意味が無い（✅ L1623-1633）。
+- `safe_division_geometric_candidates` と `safe_division_mutual_nn_rejected` / `divergence_rejected` は、どこでも加算されない。そのためログに表示される `deepcenter_rejected=` は `0 − 全条件を通過した候補数（上限をかける前の safe_division_candidates。E70 で 110）` の負の値になり、意味が無い（✅ L1623-1633）。
 - ただし `run_stats.csv` の `deepcenter_safe_div_checked/rejected/accepted` は正しく数えられている。E70 では 5,348 件を検査して 4,116 件を却下（E59 は 4,804 件中 3,597 件）。**safe-division の最大の却下要因は DeepCenter** で、tau の却下（118 件）の約 35 倍（📏）。
 
 ### 5.6 段 6-9
@@ -325,7 +325,7 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 
 | 設定 | 状態 | 理由 | 出所 |
 |---|---|---|---|
-| DivNet（`DIVNET_VERIFY=0`、`DIV_MIN_PROB`） | 死んだコード | 段 6 が既定 0 で実行されず、DivNet はその中でしか呼ばれない。公開 0.951 でも同じ | ✅ L1635-1677、📏 E58（CSV が E56 と完全一致） |
+| DivNet（`DIVNET_VERIFY=0`、`DIV_MIN_PROB`） | 死んだコード | 段 6 が既定 0 で実行されず、DivNet はその中でしか呼ばれない。加えて `DIVNET_VERIFY=0` のため checkpoint 自体も読み込まない（L1737-1739）。二重に不活性。公開 0.951 でも同じ | ✅ L1635-1677、📏 E58（CSV が E56 と完全一致） |
 | `DENSITY_GROUP_OVERRIDES=1` | OFF では無効 | §6.2 | ✅ |
 | `GAP_CLOSE_MAX_GAP=2` | 実際は 1 | コード内で 1 に固定 | ✅ L758 |
 | `SAFE_DIV_REQUIRE_DIVERGENCE`、`SAFE_DIV_REQUIRE_MUTUAL_NN` | 無視される | 条件は常にかかる | ✅ §5.5 |
