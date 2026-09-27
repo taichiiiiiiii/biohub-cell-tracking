@@ -325,7 +325,7 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 
 | 設定 | 状態 | 理由 | 出所 |
 |---|---|---|---|
-| DivNet（`DIVNET_VERIFY=0`、`DIV_MIN_PROB`） | 死んだコード | 段 6 が既定 0 で実行されず、DivNet はその中でしか呼ばれない。加えて `DIVNET_VERIFY=0` のため checkpoint 自体も読み込まない（L1737-1739）。二重に不活性。公開 0.951 でも同じ | ✅ L1635-1677、📏 E58（CSV が E56 と完全一致） |
+| DivNet（`DIVNET_VERIFY=0`、`DIV_MIN_PROB`） | 死んだコード | 段 6 が既定 0 で実行されず、DivNet はその中でしか呼ばれない（**公開 0.951 でも同じ**）。加えて我々の設定では `DIVNET_VERIFY=0` のため checkpoint 自体も読み込まない（L1737-1739。公開 0.951 は `DIVNET_VERIFY=1` で読み込んでいた、台帳 L10486）。我々の設定では二重に不活性 | ✅ L1635-1677、📏 E58（CSV が E56 と完全一致） |
 | `DENSITY_GROUP_OVERRIDES=1` | OFF では無効 | §6.2 | ✅ |
 | `GAP_CLOSE_MAX_GAP=2` | 実際は 1 | コード内で 1 に固定 | ✅ L758 |
 | `SAFE_DIV_REQUIRE_DIVERGENCE`、`SAFE_DIV_REQUIRE_MUTUAL_NN` | 無視される | 条件は常にかかる | ✅ §5.5 |
