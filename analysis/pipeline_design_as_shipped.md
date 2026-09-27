@@ -63,7 +63,7 @@ test/<stem>.zarr  (T=100, Z=64, Y=256, X=256, uint16)
 | 入力 dataset | 主モデル・副モデル・DeepCenter・DivNet の 4 つ（§4.1） | ✅ 同上 |
 | GPU 分割 | `worker_count = min(2, GPU 数, 動画数)` が 2 以上かつ `SLICE` が空なら、`--slice i::2` で動画を 2 つに分け、別々のサブプロセスで予測。終了後に .geff をマージし、重複や欠落があれば停止。それ以外（動画 1 本など）は単一プロセス | ✅ cell 11 L472-518、L403-468 |
 | GPU 必須 | CUDA が無ければ停止（CPU で黙って走らない） | ✅ cell 11 L1-8 |
-| 実行時間 | カーネル全体で E70 40.83 分、E71-B 46.5 分（上限 12 時間）。E70 の内訳: 依存関係の解決 9.4 分、test 4 本の予測 9.20 分（GPU 2 枚並列）、**DeepCenter checkpoint の候補探索 10.4 分**（`_dc_checkpoint_candidates` が `/kaggle/input` 全体に `glob("**/full_frame_center/**/…")` を 3 回かける部分。cell 13 L301-303。読み込み自体は 0.3 秒。E71-B では 4.1 分で、実行ごとにぶれる）、後処理の本体 1.3 分、validator 4 本 9.2 分。E71-B は validator が 12 本で約 +17 分だが、依存関係の解決（−5.4 分）と DeepCenter の読み込み（−6.3 分）が短かったため、総差は +5.7 分。この glob は、cell 9 L561 が設定した明示パスが候補の 1 番目で読み込みに成功するため**結果に寄与しない無駄な処理**で、コストは attach された入力ツリー（コンペの train・test の zarr を含む）の大きさで決まる。hidden test では動画数に比例して予測と後処理が増え、glob も入力ツリーが大きくなれば増えうる。単純な外挿では 12 時間に収まる保証は無く、収まる根拠は同じ経路の E59 などが hidden test で採点まで完了していること | 📏 ログの `time`（`DivNet … disabled` → `Loaded DeepCenter …` → `Wrote … submission.csv` → `VALIDATOR: selected`） |
+| 実行時間 | カーネル全体で E70 40.83 分、E71-B 46.5 分（上限 12 時間）。E70 の内訳: 依存関係の解決 9.4 分、test 4 本の予測 9.20 分（GPU 2 枚並列）、**DeepCenter checkpoint の候補探索 10.4 分**（`_dc_checkpoint_candidates` が `/kaggle/input` 全体に `glob("**/full_frame_center/**/…")` を 3 回かける部分。cell 13 L301-303。読み込み自体は 0.3 秒。E71-B では 4.1 分で、実行ごとにぶれる）、後処理の本体 1.3 分、validator 4 本 9.2 分。E71-B は validator が 12 本で約 +17 分だが、依存関係の解決（−5.4 分）と DeepCenter の候補探索（−6.3 分）が短かったため、総差は +5.7 分。この glob は、cell 9 L561 が設定した明示パスが候補の 1 番目で読み込みに成功するため**結果に寄与しない無駄な処理**で、コストは attach された入力ツリー（コンペの train・test の zarr を含む）の大きさで決まる。hidden test では動画数に比例して予測と後処理が増え、glob も入力ツリーが大きくなれば増えうる。単純な外挿では 12 時間に収まる保証は無く、収まる根拠は同じ経路の E59 などが hidden test で採点まで完了していること | 📏 ログの `time`（`DivNet … disabled` → `Loaded DeepCenter …` → `Wrote … submission.csv` → `VALIDATOR: selected`） |
 
 ---
 
@@ -291,7 +291,7 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 | cell 15 の監査 | 書き終えた CSV を読み直し、列・id の連番・行種別・データセット集合・retention guard のログを検査する。さらに**グラフの形**も検査し、エッジが t→t+1 でない、入次数 >1、出次数 >2、座標が負、のどれかがあれば停止する | ✅ cell 15 L65-94 |
 | 監査レポートの注意 | cell 15 が書く `dual_seed_frame_retention_guard_report.json` の `configuration` ブロックは**ハードコードされた古い値**（`detector_threshold: 0.96875`、`ilp_disappearance_weight: 1.5`、`gap_close_um: 5.8`）で、実際の設定（0.965 / 2 / 5.0）と違う。実際の設定は cell 21 の manifest と cell 5 の guard を見る。同じ JSON の `diagnostics`（retention guard の発動数）は実測値として使える | ✅ cell 15 L136-148、cell 3 |
 | run_stats.csv | 動画ごとの全カウンタと予測時間 | ✅ L1899-1933 |
-| 出力ディレクトリの `*_single.jsonl` | `retention_guard_single.jsonl` と `detector_coordinates_*_single.jsonl` は **validator の記録**（validator の予測サブプロセスは `BIOHUB_GPU_SHARD` を設定しないため）。test の記録は `*_0_2.jsonl` / `*_1_2.jsonl`。cell 15 は validator より前に走るので、監査には影響しない | ✅ cell 17 L159-162、cell 11 L490-491 |
+| 出力ディレクトリの `*_single.jsonl` | `retention_guard_single.jsonl` と `detector_coordinates_*_single.jsonl` は **validator の記録**（validator の予測サブプロセスは `BIOHUB_GPU_SHARD` を設定しないため）。test の記録は `*_0_2.jsonl` / `*_1_2.jsonl`。これは test の予測が GPU 2 枚で分割実行されたときの話で、GPU 1 枚の単一プロセスに落ちた場合（cell 11 L506-515）は test の記録も `*_single` に混ざる。cell 15 は validator より前に走るので、監査には影響しない | ✅ cell 17 L159-162、cell 11 L490-492 |
 
 ---
 
@@ -318,7 +318,7 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 | adj と集計 | `w=TP+FP+FN` の加重平均、`T_true` は GT の `estimated_number_of_nodes` | 公式と同じ式 |
 | **division** | 弱連結成分を使った独自の判定（GT の姉妹の子孫が、GT 分裂の親と同じ予測成分に入り、その成分に fork があれば TP） | **公式と別物**。公式は窓単位の対応＋4 種類の FP 規則（`competition_spec.md` §7.2）。**偏りの向き**: validator の FP は「予測 fork の親が GT ノードに対応し、その GT ノードに出エッジがあり、TP の親でない」場合だけ（✅ cell 19 L171-178）。GT に対応しない fork や、GT の葉に対応した fork は数えない。そのため **FP は公式より系統的に少なく出る** |
 
-**影響**: E71 で「実パイプラインの division 5/5/13 とローカル port の 3/10/15 の差は、tau veto の有無と整合する」と書いたが、2 つの数字は**別の採点器**で出している（ローカルは公式の `division_metrics.py`）。**差がどこから来たか（tau veto か採点器か）は切り分けられていない。** edge 側の比較（0.920452 と 0.918091）は同じ論理の採点器なので比較できる可能性が高いが、ノード対応の同等性は未検証。
+**影響**: E71 で「実パイプラインの division 5/5/13 とローカル port の 3/10/15 の差は、tau veto の有無と整合する」と書いたが、2 つの数字は**別の採点器**で出している（ローカルは公式の `division_metrics.py`）。**差がどこから来たか（tau veto か採点器か）は切り分けられていない。** edge 側の比較（0.920452 と 0.918091）は同じ論理の採点器なので比較できる可能性が高い。ただしノード対応は目的関数が公式と違う（上の表）ので、細胞が密集した所で対応が変わる分の差は残る。
 
 ---
 
