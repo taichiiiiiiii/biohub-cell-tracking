@@ -6,9 +6,9 @@
 新しい設計の提案ではない。仕様は `analysis/competition_spec.md`、計画は `analysis/endgame_plan_20260927.md`、
 採否の記録は `analysis/experiment_ledger.md` にあり、ここには重複させない。
 
-- 対象: notebook の commit `ba5480d`（E71-B）。**E70 の提出物（`1a0c71f`、kernel v15）に validator の計測設定（`VALIDATOR_N_PER_TYPE=6`）を足しただけ**で、`submission.csv` は E70 と同一（📏 両者のファイルサイズ 12,703,555 byte が一致）。
+- 対象: notebook の commit `ba5480d`（E71-B）。**E70 の提出物（`1a0c71f`、kernel v15）に validator の計測設定（`VALIDATOR_N_PER_TYPE=6`）を足しただけ**で、`submission.csv` は E70 と同一（📏 cell 15 が記録する `submission.sha256` が E70 と E71-B で同一 `9206256c…`。E59 と E71-A も同一 `c89b500a…`）。
 - 確度: ✅ コードで確認（cell 番号と行番号つき） ／ 📏 実行ログや出力で実測 ／ ⚠️ 未確認
-- cell 番号は notebook の 0 始まり。行番号はその cell の source 内の 1 始まり。official は `official/scripts/predict_unet_transformer.py`。
+- cell 番号は notebook の 0 始まり。行番号はその cell の source 内の 1 始まり。official は `official/scripts/predict_unet_transformer.py`。実際に実行されるのは support pack 内の同名スクリプト（cell 9 L453 で sha256 を固定、import 名は `biohub_tracking`）だが、import 名を置き換えて diff すると official/ との差は cell 11 のパッチ挿入だけなので、行番号は official/ のもの（パッチ適用前）で示す。
 
 ---
 
@@ -63,7 +63,7 @@ test/<stem>.zarr  (T=100, Z=64, Y=256, X=256, uint16)
 | 入力 dataset | 主モデル・副モデル・DeepCenter・DivNet の 4 つ（§4.1） | ✅ 同上 |
 | GPU 分割 | `worker_count = min(2, GPU 数, 動画数)` が 2 以上かつ `SLICE` が空なら、`--slice i::2` で動画を 2 つに分け、別々のサブプロセスで予測。終了後に .geff をマージし、重複や欠落があれば停止。それ以外（動画 1 本など）は単一プロセス | ✅ cell 11 L472-518、L403-468 |
 | GPU 必須 | CUDA が無ければ停止（CPU で黙って走らない） | ✅ cell 11 L1-8 |
-| 実行時間 | カーネル全体で E70 40.83 分、E71-B 46.5 分（上限 12 時間）。E70 の内訳: 依存関係の解決 9.4 分、test 4 本の予測 9.20 分（GPU 2 枚並列）、**DeepCenter checkpoint の探索と読み込み 10.4 分**（`/kaggle/input` 以下の glob と `torch.load`、cell 13 L282-317。E71-B では 4.1 分で、実行ごとにぶれる）、後処理の本体 1.3 分、validator 4 本 9.2 分。E71-B は validator が 12 本で約 +17 分だが、依存関係の解決（−5.4 分）と DeepCenter の読み込み（−6.3 分）が短かったため、総差は +5.7 分。hidden test では、依存関係の解決と DeepCenter の読み込みは 1 回きりの固定費で、動画数に比例して増えるのは予測と後処理。単純な外挿では 12 時間に収まる保証は無く、収まる根拠は同じ経路の E59 などが hidden test で採点まで完了していること | 📏 ログの `time`（`DivNet … disabled` → `Loaded DeepCenter …` → `Wrote … submission.csv` → `VALIDATOR: selected`） |
+| 実行時間 | カーネル全体で E70 40.83 分、E71-B 46.5 分（上限 12 時間）。E70 の内訳: 依存関係の解決 9.4 分、test 4 本の予測 9.20 分（GPU 2 枚並列）、**DeepCenter checkpoint の候補探索 10.4 分**（`_dc_checkpoint_candidates` が `/kaggle/input` 全体に `glob("**/full_frame_center/**/…")` を 3 回かける部分。cell 13 L301-303。読み込み自体は 0.3 秒。E71-B では 4.1 分で、実行ごとにぶれる）、後処理の本体 1.3 分、validator 4 本 9.2 分。E71-B は validator が 12 本で約 +17 分だが、依存関係の解決（−5.4 分）と DeepCenter の読み込み（−6.3 分）が短かったため、総差は +5.7 分。この glob は、cell 9 L561 が設定した明示パスが候補の 1 番目で読み込みに成功するため**結果に寄与しない無駄な処理**で、コストは attach された入力ツリー（コンペの train・test の zarr を含む）の大きさで決まる。hidden test では動画数に比例して予測と後処理が増え、glob も入力ツリーが大きくなれば増えうる。単純な外挿では 12 時間に収まる保証は無く、収まる根拠は同じ経路の E59 などが hidden test で採点まで完了していること | 📏 ログの `time`（`DivNet … disabled` → `Loaded DeepCenter …` → `Wrote … submission.csv` → `VALIDATOR: selected`） |
 
 ---
 
@@ -87,7 +87,7 @@ test/<stem>.zarr  (T=100, Z=64, Y=256, X=256, uint16)
 |---|---|---|
 | Configuration guard | cell 5 の `_EXPECTED_NUMERIC`（13 キー）と `_EXPECTED_TEXT`（13 キー）の計 26 キーが実際の環境変数と違えば停止 | ✅ cell 5 |
 | パッチの一意性 | cell 11 の置換は、置換元がちょうど 1 か所にあることを確認し、違えば `RuntimeError`。**例外は最初の検出 TTA パッチ**で、見つからなければ警告を出して続行する（✅ L53-57）。ただし次のパッチの置換元がこのパッチの結果（`/ _nv`）を含むため、結果的にそこで停止する。置換後に残っていることの確認は edge-feature TTA・副の TTA・rank bonus の 3 つだけ（L215、L233、L294） | ✅ cell 11 |
-| 無効化の検知 | edge-feature TTA と副の TTA は、TTA 前後で特徴量が変わらなければ停止（`EDGE-TTA NO-OP` / `SECONDARY_EDGE_TTA_NO_OP`、L209、L221）。双方向の重みが 0.15 でなければ停止（L171-180）。各パッチの後に `compile()` で構文を確認。rank bonus の `RANK_BONUS_NO_OP`（L263-267）は、列ごとに必ず最良が 1 つあるため空でないフレーム対では発火し得ず、実質的な防護になっていない | ✅ cell 11 |
+| 無効化の検知 | edge-feature TTA と副の TTA は、TTA 前後で特徴量が変わらなければ停止（`EDGE-TTA NO-OP` / `SECONDARY_EDGE_TTA_NO_OP`、L209、L221）。双方向の重みが 0.15 でなければ停止（L171-180）。パッチの後に `compile()` で構文を確認（L79、L160、L203、L213、L231、L292）。ただし最初の検出 TTA パッチは compile しない。双方向パッチは単独では compile されず、座標 manifest のパッチと一緒に L203 で 1 回だけ確認される。rank bonus の `RANK_BONUS_NO_OP`（L263-267）は、列ごとに必ず最良が 1 つあるため空でないフレーム対では発火し得ず、実質的な防護になっていない | ✅ cell 11 |
 | モデルの完全性 | 成果物の sha256 を検証 | ✅ cell 9 L469-560 |
 | DeepCenter の版 | checkpoint の epoch が 2 でなければ読み込まない。1 つも読めなければ停止（`REQUIRE_DEEPCENTER_VETO=1`） | ✅ cell 13 L376-425 |
 
@@ -122,14 +122,14 @@ official の `predict_video` は `window_size` フレームの窓を stride `W�
 
 ### 4.4 エッジ候補のスコア
 
-**エッジ予測の入力特徴量（edge-feature TTA）**: 窓の encode の段階で、UNet の特徴量も 8 方向 TTA の平均にする（`unet_out = _unet_acc / _nv`、フレーム対のループより前）。この特徴量が順方向・逆方向どちらのエッジ予測の入力にもなる。副モデルの特徴量は `0.25·単発 + 0.75·8 方向平均` にする。設定は `EDGE_FEATURE_TTA=1`、`SECONDARY_EDGE_FEATURE_TTA=1`、`_WEIGHT=0.75`（✅ cell 11 L206-234）。
+**エッジ予測の入力特徴量（edge-feature TTA）**: 窓の encode の段階で、UNet の特徴量も 8 方向 TTA の平均にする（`unet_out = _unet_acc / _nv`、フレーム対のループより前）。この特徴量が順方向・逆方向どちらのエッジ予測の入力にもなる。副モデルの特徴量は `0.25·単発 + 0.75·8 方向平均` にする。**副の特徴量 TTA は `if secondary_detection_weight > 0.0: if cfg.det_tta:` の内側にある**ため、`SECONDARY_DETECTION_WEIGHT` を 0 にすると `SECONDARY_EDGE_FEATURE_TTA=1` のままでも黙って無効になる（✅ cell 11 L221）。設定は `EDGE_FEATURE_TTA=1`、`SECONDARY_EDGE_FEATURE_TTA=1`、`_WEIGHT=0.75`（✅ cell 11 L206-234）。
 
 official はフレーム対ごとに、**全 source × 全 target の組**についてエッジ logit `(n_src, n_tgt)` を出す（✅ official L407-453）。そのあと次の順で加工する。
 
 | 順 | 処理 | 設定 | 出所 |
 |---|---|---|---|
 | 1 | **双方向 harmonic 融合**: 順方向と逆方向の確率を重み付き調和平均（`1/((1−w)/p_fwd + w/p_rev)`）し、正規化後に順方向の logit の中心とスケールへ戻す（スケール比は 0.5〜2.0 にクリップ） | `BIDIRECTIONAL_EDGE_WEIGHT=0.15`、`FUSION_MODE=harmonic_probability` | ✅ cell 11 L167-190 |
-| 2 | **low-margin 2 シード混合**: (a) 副モデルの logit を、target 列ごとに主モデルの中心とスケールへ校正する（スケール比は 0.5〜2.0 にクリップ）。(b) target 列ごとの重みは `0.20 × clamp((0.35 − 主の margin)/0.35, 0, 1)`（margin = 親候補の softmax 確率の 1 位と 2 位の差）。(c) **主と副で最良の親が一致する列だけ**混ぜ、一致しない列の重みは 0。source が 2 未満のフレーム対も重み 0。**結果として、この混合は target ごとの最良の親を変えられない**（確率の鋭さだけを変える） | `SECONDARY_EDGE_WEIGHT=0.20`、`LINK_MODE=low_margin_consensus`、`LOW_MARGIN_MAX=0.35`、`MIX_TEMPERATURE=1` | ✅ cell 9 L645-654、cell 11 L64（置換文字列内） |
+| 2 | **low-margin 2 シード混合**: (a) 副モデルの logit を、target 列ごとに主モデルの中心とスケールへ校正する（スケール比は 0.5〜2.0 にクリップ）。(b) target 列ごとの重みは `0.20 × clamp((0.35 − 主の margin)/0.35, 0, 1)`（margin = 親候補の softmax 確率の 1 位と 2 位の差）。(c) **主と副で最良の親が一致する列だけ**混ぜ、一致しない列の重みは 0。source が 2 未満のフレーム対も重み 0。**結果として、この混合は target ごとの最良の親を変えられない**。ただし重みが target 列ごとに違うため、source ごとの順位（各 source の最良の子）は変わりうる。これは rank bonus の行・相互最良の項と ILP の入力に影響する | `SECONDARY_EDGE_WEIGHT=0.20`、`LINK_MODE=low_margin_consensus`、`LOW_MARGIN_MAX=0.35`、`MIX_TEMPERATURE=1` | ✅ cell 9 L645-654、cell 11 L64（置換文字列内） |
 | 3 | **rank bonus**: 列（target ごと）で最良なら +β、行（source ごと）で最良なら +0.5β、相互最良ならさらに +0.5β（β=0.12 固定）を logit に足す | `RANK_BONUS=1` | ✅ cell 11 L237-295 |
 | 4 | **確率化**: `softmax(dim=0)`、つまり **target ごとに親候補で正規化** | `edge_activation="softmax"`（`PredictConfig` の既定値。CLI からも config.json からも変更されず、cell 11 のパッチも触れない） | ✅ official L72、L172-200、L454-458、L646-653 |
 | 5 | **閾値**: `prob > 0.48` の組を候補エッジにする。ILP を使うため、親や子の数の上限はここでは掛けない | `DUAL_SEED_EDGE_THRESHOLD=0.48` → `cfg.threshold` | ✅ cell 9 L655、cell 11 L66、official L85-93、L460-490 |
@@ -144,7 +144,7 @@ official はフレーム対ごとに、**全 source × 全 target の組**につ
 | 目的関数の重み | エッジ `−1.0 × edge_prob`、出現 0.0、消滅 2、分裂 1.2 | ✅ cell 3、cell 7 L46-49、official L556-560 |
 | **ILP 出力の分裂** | **0**（E70 の 4 本すべてで fork 0、merge 0） | 📏 E70 の生 .geff |
 
-**→ 提出物の分裂はすべて後処理の safe-division（§5.5）が作っている。** これは偶然ではない。出現コストが 0、エッジの報酬が最大 1.0（`−1.0 × edge_prob`、prob ≤ 1）なのに対し分裂コストが 1.2 なので、目的関数が各項の線形和であれば、分裂を選ぶと必ず目的関数が悪化する。つまり**この重みでは分裂は選ばれ得ない**（⚠️ tracksdata の目的関数の形は未確認。E59・E70 の生 .geff 計 8 本で fork 0 を確認済み）。
+**→ 提出物の分裂はすべて後処理の safe-division（§5.5）が作っている。** これは偶然ではない。出現コストが 0、エッジの報酬が最大 1.0（`−1.0 × edge_prob`、prob ≤ 1）なのに対し分裂コストが 1.2 なので、目的関数が各項の線形和であれば、分裂を選ぶと必ず目的関数が悪化する。つまり**この重みでは分裂は選ばれ得ない**（✅ ローカルの tracksdata `0.1.0rc9.dev4` の `solvers/_ilp_solver.py` `_add_objective_and_variables` は、ノード・出現・消滅・分裂の各変数と各エッジ変数に係数を置いた線形和。⚠️ Kaggle 上の tracksdata の版は未確認。📏 E59・E70 の生 .geff 計 8 本で fork 0 を確認済み）。
 
 ---
 
@@ -224,7 +224,7 @@ cell 13 の主ループ（L1829-1920）が .geff を読み、`nodes_by_id`（`t,
 - 条件 4 の変数名は `_mutual` だが、実際は**片方向**の最近傍しか見ていない（✅ L1182-1188）。
 - `SAFE_DIV_REQUIRE_DIVERGENCE` と `SAFE_DIV_REQUIRE_MUTUAL_NN` は cell 7 で読まれるが、この関数では使われず、条件 4・6 は常にかかる（✅ cell 7 L128-129 と本関数）。
 - `safe_division_geometric_candidates` と `safe_division_mutual_nn_rejected` / `divergence_rejected` は、どこでも加算されない。そのためログに表示される `deepcenter_rejected=` は `0 − 全条件を通過した候補数（上限をかける前の safe_division_candidates。E70 で 110）` の負の値になり、意味が無い（✅ L1623-1633）。
-- ただし `run_stats.csv` の `deepcenter_safe_div_checked/rejected/accepted` は正しく数えられている。E70 では 5,348 件を検査して 4,116 件を却下（E59 は 4,804 件中 3,597 件）。**safe-division の最大の却下要因は DeepCenter** で、tau の却下（118 件）の約 35 倍（📏）。
+- ただし `run_stats.csv` の `deepcenter_safe_div_checked/rejected/accepted` は正しく数えられている。E70 では 5,348 件を検査して 4,116 件を却下（E59 は 4,804 件中 3,597 件）。コード上の評価順は DeepCenter（L1197）→ 分岐（divergence、L1209-1220）→ tau（L1221）。**この順序で数えたとき**、DeepCenter の却下は tau の却下（118 件）の約 35 倍（📏）。ただし DeepCenter で落ちた組には、後段の divergence や tau でも落ちたはずの組が含まれる。divergence の却下数はどこにも数えられていないため計測できない。
 
 ### 5.6 段 6-9
 
@@ -235,7 +235,7 @@ cell 13 の主ループ（L1829-1920）が .geff を読み、`nodes_by_id`（`t,
 | 8 短いトラックの削除 | 弱連結成分のノード数が 6 未満なら消す（分裂を含む成分は残す）。削除が全体の 10% 以上になった動画だけ救済: 長さ 4〜5 で、平均 `edge_prob` ≥ 0.88、平均エッジ長 ≤ 3.0 µm の成分を、スコア順に予算（全ノードの 1.2% と 120 個の小さい方）まで戻す | ✅ L1260-1381 |
 | 9 直線当てはめ平滑化 | 各ノードについて前後 2 フレーム（分岐しない範囲）で 1 次式を当てはめ、元の位置と `0.2·元 + 0.8·当てはめ` で混ぜる。グラフの形は変えない | ✅ L1384-1455 |
 
-**段 8 の救済の発動**: 救済は削除が 10% 以上の動画でだけ発動する（✅ L1318）。E59 では 4 本とも発動しなかった（最大の 44b6_0b24845f でも 2,179 / 23,857 = 9.13%）。E70 では同じ動画が 10.24% になって発動し、予算 120 に対して 119 node を戻した（📏 `run_stats.csv`）。発動した後の選別には `edge_prob` を使うため、relink ON（motion relink が付けた学習確率、無ければ 0）と OFF（ILP の .geff の確率）では選ばれる成分も変わりうる。
+**段 8 の救済の発動**: 救済は削除が 10% 以上の動画でだけ発動する（✅ L1318）。E59 では 4 本とも発動しなかった（最大の 44b6_0b24845f でも 2,179 / 23,857 = 9.13%）。E70 では同じ動画が 10.24% になって発動し、予算 120 に対して 119 node を戻した（📏 `run_stats.csv`）。発動した後の選別には `edge_prob` を使うため、relink ON（motion relink が付けた学習確率、無ければ 0）と OFF（ILP の .geff の確率）では選ばれる成分も変わりうる。また、補完や safe-division が作ったエッジは `edge_prob` が None で、0 として平均される（✅ L914、L1085、L1246 → L1338-1340）。そのため、こうしたエッジを含む短い成分は救済されにくい。
 
 ### 5.7 DeepCenter veto の共通動作
 
@@ -291,6 +291,7 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 | cell 15 の監査 | 書き終えた CSV を読み直し、列・id の連番・行種別・データセット集合・retention guard のログを検査する。さらに**グラフの形**も検査し、エッジが t→t+1 でない、入次数 >1、出次数 >2、座標が負、のどれかがあれば停止する | ✅ cell 15 L65-94 |
 | 監査レポートの注意 | cell 15 が書く `dual_seed_frame_retention_guard_report.json` の `configuration` ブロックは**ハードコードされた古い値**（`detector_threshold: 0.96875`、`ilp_disappearance_weight: 1.5`、`gap_close_um: 5.8`）で、実際の設定（0.965 / 2 / 5.0）と違う。実際の設定は cell 21 の manifest と cell 5 の guard を見る。同じ JSON の `diagnostics`（retention guard の発動数）は実測値として使える | ✅ cell 15 L136-148、cell 3 |
 | run_stats.csv | 動画ごとの全カウンタと予測時間 | ✅ L1899-1933 |
+| 出力ディレクトリの `*_single.jsonl` | `retention_guard_single.jsonl` と `detector_coordinates_*_single.jsonl` は **validator の記録**（validator の予測サブプロセスは `BIOHUB_GPU_SHARD` を設定しないため）。test の記録は `*_0_2.jsonl` / `*_1_2.jsonl`。cell 15 は validator より前に走るので、監査には影響しない | ✅ cell 17 L159-162、cell 11 L490-491 |
 
 ---
 
@@ -312,10 +313,10 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 
 | 部分 | 公式との関係 | 評価 |
 |---|---|---|
-| ノード対応 | フレームごとに µm 距離で `linear_sum_assignment`、7 µm で打ち切り | 公式（tracksdata の `DistanceMatching`）と同等と思われるが ⚠️ 未検証 |
-| edge の TP/FP/FN | 「source が対応する GT ノードに出るエッジがある、または target が対応する GT ノードに入るエッジがある」ものを FP の対象にする | 公式の `pred_valid` と同じ論理。公式の前処理（重複・非 t+1・merge・出次数 >2）は提出物では 0 件なので影響しない（📏 E72） |
+| ノード対応 | フレームごとに µm 距離で `linear_sum_assignment`、7 µm で打ち切り | 構造は公式と同じ（フレームごと・7 µm 以内・1 対 1）だが、**目的関数が違う**。公式（ローカルの tracksdata `metrics/_ctc_metrics.py` の `_match_groups`）は Σ 1/(1+d) を最大化し、validator は Σ d を最小化する。細胞が密集した所では対応が変わりうる（✅ cell 19 L23-28、⚠️ Kaggle 上の tracksdata の版は未確認） |
+| edge の TP/FP/FN | 「source が対応する GT ノードに出るエッジがある、または target が対応する GT ノードに入るエッジがある」ものを FP の対象にする | 公式の `pred_valid` と同じ論理。公式の前処理（重複・非 t+1・merge・出次数 >2）は、提出物では 0 件（📏 E72）。validator が採点する train 12 本の後処理済みグラフは計測していないが、同じ `filter_output_graph` を通る（単一親の修復、safe-division は子が 1 つの親にだけ追加、補完は末端→先頭だけ）ため、構造上 0 件になる |
 | adj と集計 | `w=TP+FP+FN` の加重平均、`T_true` は GT の `estimated_number_of_nodes` | 公式と同じ式 |
-| **division** | 弱連結成分を使った独自の判定（GT の姉妹の子孫が、GT 分裂の親と同じ予測成分に入り、その成分に fork があれば TP） | **公式と別物**。公式は窓単位の対応＋4 種類の FP 規則（`competition_spec.md` §7.2） |
+| **division** | 弱連結成分を使った独自の判定（GT の姉妹の子孫が、GT 分裂の親と同じ予測成分に入り、その成分に fork があれば TP） | **公式と別物**。公式は窓単位の対応＋4 種類の FP 規則（`competition_spec.md` §7.2）。**偏りの向き**: validator の FP は「予測 fork の親が GT ノードに対応し、その GT ノードに出エッジがあり、TP の親でない」場合だけ（✅ cell 19 L171-178）。GT に対応しない fork や、GT の葉に対応した fork は数えない。そのため **FP は公式より系統的に少なく出る** |
 
 **影響**: E71 で「実パイプラインの division 5/5/13 とローカル port の 3/10/15 の差は、tau veto の有無と整合する」と書いたが、2 つの数字は**別の採点器**で出している（ローカルは公式の `division_metrics.py`）。**差がどこから来たか（tau veto か採点器か）は切り分けられていない。** edge 側の比較（0.920452 と 0.918091）は同じ論理の採点器なので比較できる可能性が高いが、ノード対応の同等性は未検証。
 
@@ -333,6 +334,8 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 | `DEEPCENTER_TTA=0` | 無効 | E57 で試し、採用していない | ✅ cell 3 |
 | `REFINE_CENTROIDS=0` | 無効 | Discussion で公開 LB −0.002 の報告 | ✅ cell 3 |
 | `RUN_OUTPUT_DIAGNOSTICS=0` | 無効 | — | ✅ cell 3 |
+| `UNET_BATCH_SIZE` | 効かない | cell 7 L44 → `--unet-batch-size`（cell 11 L332-333）→ `predict_video(unet_batch_size=…)` まで渡るが、本体で一度も参照されない | ✅ official L304、L551 |
+| `SECONDARY_EDGE_FEATURE_TTA` | 条件つき | `SECONDARY_DETECTION_WEIGHT > 0` のときだけ効く（§4.4 冒頭） | ✅ cell 11 L221 |
 
 ---
 
@@ -345,7 +348,7 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 | rank bonus | あり | **なし** | ✅ grep |
 | 採点器 | notebook 内の再実装（§8.2） | 公式 `metrics.py` / `division_metrics.py` | ✅ |
 | eval12 の adj edge（base） | 0.920452 | 0.918091 | 📏 E71 |
-| eval12 の division（base） | 5/5/13（再実装の採点器） | 3/10/15（公式の採点器） | 📏 E71。**採点器が違うため比較できない** |
+| eval12 の division（base） | 5/5/13（再実装の採点器） | 3/10/15（公式の採点器） | 📏 E71。**採点器が違うため比較できない**。再実装は FP を少なく数える向きに偏る（§8.2） |
 | base → off の adj の Δ | +0.023468 | +0.023214 | 📏 E71 |
 
 **運用ルール**: 採否の判定には、提出 notebook の validator の **adj edge** を使う。division は、公式の採点器で採点し直すまで判定に使わない。ローカルの値は予備スクリーニングにだけ使う。
@@ -359,5 +362,5 @@ OFF にすると、段 2 が変わるだけでなく、段 4〜9 の入力も変
 | embryo をまたぐ汎化 | どの測定系でも測れない。E26 では同じ因子がローカル +0.021 → LB −0.002 |
 | 最悪の動画 | OFF は 44b6_12dfb391 で −0.002388。採用ゲート (e) を 0.0004 差で満たさない（📏 E71） |
 | validator の division | 公式と別の判定（§8.2）。公式で採点し直すには、validator の後処理済みグラフを保存する必要がある（現在は生の .geff だけが残る） |
-| 実行時間 | 可視 test 4 本でカーネル全体 40.83 分（E70）。hidden test では動画数が増えるため、単純な外挿では 12 時間に収まる保証は無い。同じ経路の E59 などが hidden test で採点まで完了していることが、現状で唯一の根拠（§2） |
-| ⚠️ 未確認 | ILP の制約の細部（tracksdata 側）、主・副・DeepCenter の学習条件、tracksdata の `DistanceMatching` と validator のノード対応が同じか |
+| 実行時間 | 可視 test 4 本でカーネル全体 40.83 分（E70）。hidden test では動画数が増えるため、単純な外挿では 12 時間に収まる保証は無い。DeepCenter の候補探索（glob）は入力ツリーの大きさ次第で延びうる無駄な処理（§2）。同じ経路の E59 などが hidden test で採点まで完了していることが、現状で唯一の根拠（§2） |
+| ⚠️ 未確認 | ILP の制約の細部（tracksdata 側）、主・副・DeepCenter の学習条件、Kaggle 上の tracksdata の版（§4.5・§8.2 の確認はローカルの版による） |
