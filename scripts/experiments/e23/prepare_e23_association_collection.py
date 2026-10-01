@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from biohub.association_capture import _json_bytes, _require, _sha
-from scripts.prepare_e23_association_parity import PAYLOAD_FILES, raw_signature
+from scripts.experiments.e23.prepare_e23_association_parity import PAYLOAD_FILES, raw_signature
 
 AUDIT = "outputs/local/e23_association_target_20260908/PARENT_ARTIFACT_AUDIT.json"
 AUDIT_SHA = "a830c98c85be60b901ca101043340b8494008588d7398891608d2f193f344dab"
@@ -46,6 +46,12 @@ def reference_counts(row):
     return ordered
 
 
+def _pre_reorg_alias(relative):
+    """Collapse the 2026-09 scripts/experiments/<id>/ move for frozen pre-move records."""
+    parts = relative.split("/")
+    return "scripts/" + parts[-1] if parts[:2] == ["scripts", "experiments"] else relative
+
+
 def build(repo):
     bindings = []
 
@@ -53,7 +59,7 @@ def build(repo):
         path = repo / relative
         digest = _sha(path)
         _require(expected is None or digest == expected, f"frozen input changed: {relative}")
-        bindings.append({"path": relative, "bytes": path.stat().st_size, "sha256": digest})
+        bindings.append({"path": _pre_reorg_alias(relative), "bytes": path.stat().st_size, "sha256": digest})
         return path
 
     audit = json.loads(read(AUDIT, AUDIT_SHA).read_text())
@@ -96,7 +102,7 @@ def build(repo):
     for relative in PAYLOAD_FILES:
         p = read(relative)
         _require(p.read_bytes() == (repo / "outputs/local/e23_association_target_20260908/"
-                                  "terminal_graphs/association_payload" / relative).read_bytes(),
+                                  "terminal_graphs/association_payload" / _pre_reorg_alias(relative)).read_bytes(),
                  "reviewed payload changed")
     return {"schema_version": "biohub.association.collection36.preparation.v1",
             "status": "REFERENCES_PREPARED_NOT_DISPATCHED", "datasets": datasets, "groups": groups,
@@ -117,4 +123,4 @@ def build(repo):
 
 
 if __name__ == "__main__":
-    print(json.dumps(build(Path(__file__).resolve().parents[1]), sort_keys=True, indent=2))
+    print(json.dumps(build(Path(__file__).resolve().parents[3]), sort_keys=True, indent=2))

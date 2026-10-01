@@ -15,7 +15,7 @@ import pytest
 
 from biohub import e26_screen as e
 from biohub.public_postproc import pipeline
-from scripts import e27_association_prior_screen as m
+from scripts.experiments.e27 import e27_association_prior_screen as m
 
 STEMS = list(m.STEMS)
 N = len(STEMS)

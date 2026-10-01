@@ -33,7 +33,7 @@ def globals_dict(tmp_path):
 
 
 def _load_entry_text():
-    p = Path("scripts/e31_dual_gpu_runtime.py")
+    p = Path("scripts/experiments/e31/e31_dual_gpu_runtime.py")
     return p.read_text(encoding="utf-8")
 
 
@@ -125,7 +125,7 @@ def test_gpu_failure_raises(count, bad, monkeypatch, globals_dict):
 def test_builder_outputs_and_receipt_hashes():
     repo = Path(".")
     spec = importlib.util.spec_from_file_location(
-        "prepare_e31_submission", repo / "scripts" / "prepare_e31_submission.py"
+        "prepare_e31_submission", repo / "scripts" / "experiments" / "e31" / "prepare_e31_submission.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -138,7 +138,7 @@ def test_builder_outputs_and_receipt_hashes():
 
     ph = receipt["payloadhashes"]
     assert "src/biohub/e31_shards.py" in ph
-    assert "scripts/e31_submission_runtime.py" in ph
+    assert "scripts/experiments/e31/e31_submission_runtime.py" in ph
     for rel, expected in ph.items():
         actual = _sha((repo / rel).read_text(encoding="utf-8"))
         assert actual == expected, f"hash mismatch for {rel}"
@@ -148,7 +148,7 @@ def test_builder_outputs_and_receipt_hashes():
     for cell in nb_src.get("cells", []):
         if cell.get("cell_type") == "code":
             last_code = "".join(cell.get("source", []))
-    runtime_text = (repo / "scripts" / "e31_dual_gpu_runtime.py").read_text(encoding="utf-8")
+    runtime_text = (repo / "scripts" / "experiments" / "e31" / "e31_dual_gpu_runtime.py").read_text(encoding="utf-8")
     assert last_code is not None and last_code.strip() == runtime_text.strip()
     assert _sha(runtime_text) == receipt.get("runtimehash")
 

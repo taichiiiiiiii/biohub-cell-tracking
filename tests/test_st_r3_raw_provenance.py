@@ -184,7 +184,7 @@ def tiny_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TinyEnv
     (root / "official").mkdir()
     (root / "official" / "tracked.txt").write_bytes(b"official\n")
     (root / "official" / "tracked-link").symlink_to("tracked.txt")
-    for relative in ("src/biohub/st_r3_raw_provenance.py", "scripts/st_r3_raw_provenance.py"):
+    for relative in ("src/biohub/st_r3_raw_provenance.py", "scripts/experiments/st_r3/st_r3_raw_provenance.py"):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f"fixture:{relative}\n".encode())
@@ -276,7 +276,7 @@ def tiny_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TinyEnv
         secondary_weight_sha256=provenance.SECONDARY_WEIGHT_SHA256,
         deepcenter_sha256=provenance.DEEPCENTER_SHA256,
         support_manifest_sha256=provenance.SUPPORT_MANIFEST_SHA256,
-        builder_sources=("src/biohub/st_r3_raw_provenance.py", "scripts/st_r3_raw_provenance.py"),
+        builder_sources=("src/biohub/st_r3_raw_provenance.py", "scripts/experiments/st_r3/st_r3_raw_provenance.py"),
     )
     git = provenance.GitState(commit="a" * 40, tree="b" * 40, official_oid=authority.official_oid)
     monkeypatch.chdir(root)

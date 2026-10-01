@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from scripts import e27_association_prior_screen as g
+from scripts.experiments.e27 import e27_association_prior_screen as g
 
 
 def read_generation_receipts(output: Path) -> dict:
@@ -223,7 +223,7 @@ def verify_plan(plan_path: Path, expected_sha: str, *, before_generation: bool =
     g._verify_source_closure(plan["generation_sources"])
 
     expected_rels = {str(p.relative_to(g.ROOT)) for p in g._source_closure_paths()} | {
-        "scripts/e27_prior_score.py", "analysis/e27_prior_scoring_design.md"}
+        "scripts/experiments/e27/e27_prior_score.py", "analysis/e27_prior_scoring_design.md"}
     official = g.ROOT / "official" / "src" / "tracking_cellmot"
     for p in sorted(official.rglob("*.py")):
         expected_rels.add(str(p.relative_to(g.ROOT)))
@@ -880,7 +880,7 @@ def supervise_score(plan_path, expected_sha, pregen_sha, output):
         if remaining <= 0:
             _reject("no wall budget left for child")
 
-        argv = [sys.executable, "-m", "scripts.e27_prior_score", "score-child",
+        argv = [sys.executable, "-m", "scripts.experiments.e27.e27_prior_score", "score-child",
                 "--plan", str(plan_path), "--plan-sha", expected_sha,
                 "--pregen-sha", pregen_sha, "--output", str(out_dir)]
         env = e.generation_environment()

@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from scripts import e23_association_stage_diagnostic as runner
+from scripts.experiments.e23 import e23_association_stage_diagnostic as runner
 
 MODULE_NAMES = (
     "biohub.association_collection_audit",

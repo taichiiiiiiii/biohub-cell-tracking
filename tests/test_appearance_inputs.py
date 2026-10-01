@@ -196,7 +196,7 @@ def test_changed_packet(fixture):
 
 
 def _receipt_case(fixture, monkeypatch):
-    from scripts import e27_association_prior_screen as g
+    from scripts.experiments.e27 import e27_association_prior_screen as g
 
     root, bindings, nodes, original_features, ids = fixture
     ref = {

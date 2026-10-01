@@ -40,7 +40,7 @@ def build(repo: Path) -> dict:
         "src/biohub/output_bounds.py",
         "src/biohub/screen_output_bounds.py",
         "src/biohub/e31_shards.py",
-        "scripts/e31_submission_runtime.py",
+        "scripts/experiments/e31/e31_submission_runtime.py",
     ] + [
         f"src/biohub/public_postproc/{n}.py"
         for n in [
@@ -83,7 +83,7 @@ def build(repo: Path) -> dict:
     )
     src_cells.append(_code_cell(setup_src))
 
-    runtime_src = (repo / "scripts/e31_dual_gpu_runtime.py").read_text()
+    runtime_src = (repo / "scripts/experiments/e31/e31_dual_gpu_runtime.py").read_text()
     src_cells.append(_code_cell(runtime_src))
     runtime_hash = hashlib.sha256(runtime_src.encode()).hexdigest()
 
@@ -119,4 +119,4 @@ def build(repo: Path) -> dict:
 
 
 if __name__ == "__main__":
-    print(json.dumps(build(Path(__file__).resolve().parents[1])))
+    print(json.dumps(build(Path(__file__).resolve().parents[3])))

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from biohub import e26_screen as e
-from scripts import e28_score as m
+from scripts.experiments.e28 import e28_score as m
 
 g = m.g
 
@@ -52,9 +52,9 @@ def _fixture(tmp_path, monkeypatch):
 
     monkeypatch.setattr(g, "_binding_for_path", patched)
 
-    sources = [root / "scripts" / "e28_score.py",
-               root / "scripts" / "e27_prior_score_v2.py",
-               root / "scripts" / "e27_score_environment_v2.py",
+    sources = [root / "scripts" / "experiments" / "e28" / "e28_score.py",
+               root / "scripts" / "experiments" / "e27" / "e27_prior_score_v2.py",
+               root / "scripts" / "experiments" / "e27" / "e27_score_environment_v2.py",
                root / "analysis" / "e28_appearance_cost_design.md",
                root / ".venv" / "lib" / "python3.12" / "site-packages" / "threadpoolctl.py",
                root / ".venv" / "lib" / "python3.12" / "site-packages" / "polars" / "__init__.py",

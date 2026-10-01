@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts.prepare_e23_association_collection_notebook import build
-from scripts.prepare_e23_association_parity import build as build_parity
+from scripts.experiments.e23.prepare_e23_association_collection_notebook import build
+from scripts.experiments.e23.prepare_e23_association_parity import build as build_parity
 
 ROOT = Path(__file__).resolve().parents[1]
 

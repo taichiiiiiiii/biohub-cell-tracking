@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from scripts.e27_postlink_observer import observe_postlink
+from scripts.experiments.e27.e27_postlink_observer import observe_postlink
 
 CFG = object()
 STATS = object()

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from biohub import e26_screen as e
-from scripts import e27_prior_score as m
+from scripts.experiments.e27 import e27_prior_score as m
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def box(tmp_path, monkeypatch):
             assert kw["env"] == e.generation_environment()
             assert kw["start_new_session"] is True
             assert Path(kw["cwd"]) == root
-            assert argv[1:4] == ["-m", "scripts.e27_prior_score", "score-child"]
+            assert argv[1:4] == ["-m", "scripts.experiments.e27.e27_prior_score", "score-child"]
             self.pid = 4242
             self.rc = None
             self.waitcalls = 0

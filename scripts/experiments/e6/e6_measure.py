@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from biohub.io import DEFAULT_SCALE, load_geff_graph  # noqa: E402

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-import scripts.e27_association_prior_screen as m
+import scripts.experiments.e27.e27_association_prior_screen as m
 from biohub import e26_screen as e
 
 
@@ -150,7 +150,7 @@ def test_happy_path_single_launch(tmp_path, sandbox):
     assert rec["submission_allowed"] is False and rec["gt_read"] is False
     assert len(sandbox.calls) == 1
     argv, kwargs = sandbox.calls[0]
-    assert argv[:3] == [os.sys.executable, "-m", "scripts.e27_association_prior_screen"]
+    assert argv[:3] == [os.sys.executable, "-m", "scripts.experiments.e27.e27_association_prior_screen"]
     assert "--supervise" not in argv
     assert kwargs["cwd"] == str(m.ROOT)
     assert kwargs["env"] == {"SAFE": "1"}

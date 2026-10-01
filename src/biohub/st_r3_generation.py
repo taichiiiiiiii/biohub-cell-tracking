@@ -179,8 +179,8 @@ UNRESOLVED_PRODUCTION_HOLDS = (
 
 SOURCE_BINDINGS = (
     "src/biohub/st_r3_generation.py",
-    "scripts/st_r3_preregister.py",
-    "scripts/st_r3_generate.py",
+    "scripts/experiments/st_r3/st_r3_preregister.py",
+    "scripts/experiments/st_r3/st_r3_generate.py",
     "tests/test_st_r3_generation.py",
     "src/biohub/evaluate.py",
     "src/biohub/st_r3_scoring.py",
@@ -189,8 +189,8 @@ SOURCE_BINDINGS = (
     "src/biohub/public_postproc/config.py",
     "src/biohub/public_postproc/divisions.py",
     "src/biohub/public_postproc/pipeline.py",
-    "scripts/st_r3_postproc_arm.py",
-    "scripts/st_r3_supervise_arm.py",
+    "scripts/experiments/st_r3/st_r3_postproc_arm.py",
+    "scripts/experiments/st_r3/st_r3_supervise_arm.py",
     "scripts/verify_eval36_images.py",
     "pyproject.toml",
     "uv.lock",
@@ -1794,7 +1794,7 @@ def preregister(spec: PreregistrationSpec, *, repo_root: Path | None = None) -> 
     _write_new_atomic(inputs_dir / "RAW_CONTENT_INVENTORY.json", canonical_json_bytes(raw_inventory))
     _write_new_atomic(inputs_dir / "IMAGE_CONTENT_INVENTORY.json", canonical_json_bytes(image_inventory))
 
-    supervisor = root / "scripts" / "st_r3_supervise_arm.py"
+    supervisor = root / "scripts" / "experiments" / "st_r3" / "st_r3_supervise_arm.py"
     executions = []
     for key, arm, relative in FROZEN_EXECUTIONS:
         argv = [
@@ -2426,7 +2426,7 @@ def _validate_production_preregistration(value: dict[str, Any], repo_root: Path,
     for item, (key, arm, relative) in zip(execution_specs, FROZEN_EXECUTIONS, strict=True):
         expected_argv = [
             str(Path(sys.executable).resolve(strict=True)),
-            str((repo_root / "scripts" / "st_r3_supervise_arm.py").resolve(strict=True)),
+            str((repo_root / "scripts" / "experiments" / "st_r3" / "st_r3_supervise_arm.py").resolve(strict=True)),
             "--arm-name",
             arm,
             "--geff-dir",

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import biohub.st_r3_prerequisites as sut
-from scripts.st_r3_prerequisite import _parser
+from scripts.experiments.st_r3.st_r3_prerequisite import _parser
 
 HEADER = "id,dataset,row_type,node_id,t,z,y,x,source_id,target_id\n"
 SUBMISSION = (

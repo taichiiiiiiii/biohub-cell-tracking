@@ -38,8 +38,8 @@ from biohub.public_postproc import production_adapter as adapter
 from biohub.public_postproc import production_supervisor as supervisor
 
 ROOT = Path(__file__).resolve().parents[1]
-CHILD_CLI = ROOT / "scripts" / "st_r3_postproc_arm.py"
-SUPERVISOR_CLI = ROOT / "scripts" / "st_r3_supervise_arm.py"
+CHILD_CLI = ROOT / "scripts" / "experiments" / "st_r3" / "st_r3_postproc_arm.py"
+SUPERVISOR_CLI = ROOT / "scripts" / "experiments" / "st_r3" / "st_r3_supervise_arm.py"
 SUPERVISOR_SOURCE = ROOT / "src" / "biohub" / "public_postproc" / "production_supervisor.py"
 
 
@@ -404,7 +404,7 @@ def _supervisor_spec(tmp_path: Path, final_dir: Path, digest: str, **changes: ob
 
 def _install_fake_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
     fake_root = tmp_path / "fake-repo"
-    script = fake_root / "scripts" / "st_r3_postproc_arm.py"
+    script = fake_root / "scripts" / "experiments" / "st_r3" / "st_r3_postproc_arm.py"
     script.parent.mkdir(parents=True)
     script.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
     fake_module = fake_root / "src" / "biohub" / "public_postproc" / "production_supervisor.py"
@@ -487,7 +487,7 @@ def test_all_arms_execute_real_tiny_child_cli_in_fresh_sanitized_process(tmp_pat
     config_sha = hashlib.sha256(adapter._canonical_effective_config(adapter._build_arm_config(spec))).hexdigest()
     code = (
         "import runpy,sys;from pathlib import Path;script=Path(sys.argv.pop(1));"
-        "sys.path.insert(0,str(script.resolve().parent.parent/'src'));"
+        "sys.path.insert(0,str(script.resolve().parent.parent.parent.parent/'src'));"
         "import biohub.public_postproc.production_adapter as p;"
         "p.load_deepcenter_veto_detector_strict=lambda *a,**k:"
         "({}, {'schema_version':p.DEEPCENTER_RECEIPT_SCHEMA});"

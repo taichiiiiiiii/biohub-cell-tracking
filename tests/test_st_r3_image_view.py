@@ -227,7 +227,7 @@ def tiny_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TinyEnv
         "ready_content_sha256": ready_content,
     }
     ready_raw = _write_json(authority_dir / "READY.json", ready)
-    builder_sources = ("src/biohub/st_r3_image_view.py", "scripts/st_r3_image_view.py")
+    builder_sources = ("src/biohub/st_r3_image_view.py", "scripts/experiments/st_r3/st_r3_image_view.py")
     for relative in builder_sources:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1159,7 +1159,7 @@ def test_real_renameatx_np_excl_preserves_both_directories_on_collision(tmp_path
 def test_cli_argument_failures_are_concise_canonical_json() -> None:
     project_root = Path(__file__).resolve().parents[1]
     process = subprocess.run(
-        (sys.executable, str(project_root / "scripts/st_r3_image_view.py"), "unknown"),
+        (sys.executable, str(project_root / "scripts/experiments/st_r3/st_r3_image_view.py"), "unknown"),
         cwd=project_root,
         stdin=subprocess.DEVNULL,
         capture_output=True,

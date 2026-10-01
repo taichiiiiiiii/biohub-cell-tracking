@@ -2067,7 +2067,7 @@ print('dependency binding PASS')
 
 
 def test_cli_has_no_model_child_fixture_or_implicit_physical_run_entry():
-    path = Path(__file__).resolve().parents[1] / "scripts/e26_screen.py"
+    path = Path(__file__).resolve().parents[1] / "scripts/experiments/e26/e26_screen.py"
     result = subprocess.run([sys.executable, str(path), "--help"], env=generation_environment(),
                             text=True, capture_output=True, timeout=15)
     assert result.returncode == 0
@@ -2299,8 +2299,9 @@ def synthetic_generation(registration_inputs, monkeypatch):
             "schema_version": "biohub.e26_screen.child_process.v1", "pid": os.getpid(), "returncode": returncode,
             "timed_out": False, "wall_seconds": finished - started, "timeout_seconds": timeout_seconds,
             "started_monotonic": started, "finished_monotonic": finished,
-            "argv": [sys.executable, str(root / "scripts/e26_screen.py"), "_arm", "--control", str(control_path),
-                     "--control-sha256", expected_sha256], "cwd": str(root), "environment": generation_environment(),
+            "argv": [sys.executable, str(root / "scripts/experiments/e26/e26_screen.py"), "_arm", "--control",
+                     str(control_path), "--control-sha256", expected_sha256],
+            "cwd": str(root), "environment": generation_environment(),
             "stdout": e26_screen._artifact_reference(stdout), "stderr": e26_screen._artifact_reference(stderr),
         }
 
@@ -2499,8 +2500,8 @@ def test_actual_subprocess_transport_streams_logs_and_reaps_timeout(tmp_path, mo
     # Real subprocess transport, but this script is only a tiny synthetic log/sleep
     # producer. No model/core fixture route exists in the production CLI.
     monkeypatch.setattr(e26_screen, "_PROJECT_ROOT", tmp_path)
-    script = tmp_path / "scripts/e26_screen.py"
-    script.parent.mkdir()
+    script = tmp_path / "scripts/experiments/e26/e26_screen.py"
+    script.parent.mkdir(parents=True)
     script.write_text("import sys\nprint('synthetic stdout', flush=True)\nprint('synthetic stderr', file=sys.stderr)\n")
     first = tmp_path / "first"
     first.mkdir()
@@ -2687,8 +2688,9 @@ def synthetic_scoring(synthetic_generation, monkeypatch):
             "schema_version": "biohub.e26_screen.child_process.v1", "pid": os.getpid(), "returncode": returncode,
             "timed_out": False, "wall_seconds": finish - start, "timeout_seconds": timeout_seconds,
             "started_monotonic": start, "finished_monotonic": finish,
-            "argv": [sys.executable, str(state["root"] / "scripts/e26_screen.py"), "_score", "--control",
-                     str(control_path), "--control-sha256", sha], "cwd": str(state["root"]),
+            "argv": [sys.executable, str(state["root"] / "scripts/experiments/e26/e26_screen.py"),
+                     "_score", "--control", str(control_path), "--control-sha256", sha],
+            "cwd": str(state["root"]),
             "environment": generation_environment(),
             **{key: e26_screen._artifact_reference(control_path.parent / f"{key}.log") for key in ("stdout", "stderr")},
         }

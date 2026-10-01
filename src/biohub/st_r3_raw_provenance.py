@@ -157,7 +157,7 @@ PRODUCTION_AUTHORITY = Authority(
     secondary_weight_sha256=SECONDARY_WEIGHT_SHA256,
     deepcenter_sha256=DEEPCENTER_SHA256,
     support_manifest_sha256=SUPPORT_MANIFEST_SHA256,
-    builder_sources=("src/biohub/st_r3_raw_provenance.py", "scripts/st_r3_raw_provenance.py"),
+    builder_sources=("src/biohub/st_r3_raw_provenance.py", "scripts/experiments/st_r3/st_r3_raw_provenance.py"),
 )
 
 PRIMARY_RECEIPT = "PRIMARY_RAW_PROVENANCE.json"

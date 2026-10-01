@@ -1,4 +1,4 @@
-"""Tests for scripts.e27_score_environment_v2.verify_import_environment.
+"""Tests for scripts.experiments.e27.e27_score_environment_v2.verify_import_environment.
 
 Includes a required fresh-subprocess regression against the canonical macOS
 Python 3.12 venv interpreter. No Kaggle, no ground truth, no scoring, no plan
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from biohub import e26_screen as e
-from scripts.e27_score_environment_v2 import verify_import_environment
+from scripts.experiments.e27.e27_score_environment_v2 import verify_import_environment
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -254,7 +254,7 @@ import threadpoolctl
 import polars
 import blosc2
 
-from scripts.e27_score_environment_v2 import verify_import_environment
+from scripts.experiments.e27.e27_score_environment_v2 import verify_import_environment
 
 libtcc_path = str(Path.cwd() / '.venv/lib/python3.12/site-packages/blosc2/lib/libtcc.dylib')
 

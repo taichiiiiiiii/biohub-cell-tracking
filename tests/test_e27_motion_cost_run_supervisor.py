@@ -10,8 +10,8 @@ import pytest
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     from biohub import e26_screen as e
-    from scripts import e27_association_prior_screen as g
-    from scripts import e27_motion_cost_run as m
+    from scripts.experiments.e27 import e27_association_prior_screen as g
+    from scripts.experiments.e27 import e27_motion_cost_run as m
 
     root = tmp_path.resolve()
     (root / 'outputs' / 'local').mkdir(parents=True)
@@ -83,7 +83,7 @@ def test_success_binds_receipt(env):
     audit = env.m.supervise(out, next(iter(env.m.MOVES)))
     assert len(env.spawns) == 1
     argv, kwargs = env.spawns[0]
-    assert argv[:5] == [sys.executable, '-m', 'scripts.e27_motion_cost_run',
+    assert argv[:5] == [sys.executable, '-m', 'scripts.experiments.e27.e27_motion_cost_run',
                         '--child', '--output']
     assert kwargs['cwd'] == str(env.root)
     assert kwargs['start_new_session'] is True

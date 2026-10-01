@@ -18,11 +18,11 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 from biohub.evaluate import graph_from_rows, read_submission  # noqa: E402
 from biohub.io import load_geff_graph  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "official" / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "official" / "src"))
 from tracking_cellmot.metrics import evaluate as official_evaluate  # noqa: E402
 
 SCALE = (1.625, 0.40625, 0.40625)

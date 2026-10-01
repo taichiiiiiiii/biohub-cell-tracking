@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from biohub import e26_screen as e
-from scripts import e27_prior_score as m
+from scripts.experiments.e27 import e27_prior_score as m
 
 
 @pytest.fixture

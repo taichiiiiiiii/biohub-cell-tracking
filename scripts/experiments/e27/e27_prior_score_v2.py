@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from scripts import e27_association_prior_screen as g
-from scripts.e27_score_environment_v2 import verify_import_environment
+from scripts.experiments.e27 import e27_association_prior_screen as g
+from scripts.experiments.e27.e27_score_environment_v2 import verify_import_environment
 
 
 def read_generation_receipts(output: Path) -> dict:
@@ -224,10 +224,10 @@ def verify_plan(plan_path: Path, expected_sha: str, *, before_generation: bool =
     g._verify_source_closure(plan["generation_sources"])
 
     expected_rels = {str(p.relative_to(g.ROOT)) for p in g._source_closure_paths()} | {
-        "scripts/e27_prior_score_v2.py",
+        "scripts/experiments/e27/e27_prior_score_v2.py",
         "analysis/e27_prior_scoring_design.md",
         "analysis/e27_prior_scoring_v2_design.md",
-        "scripts/e27_score_environment_v2.py",
+        "scripts/experiments/e27/e27_score_environment_v2.py",
         ".venv/lib/python3.12/site-packages/threadpoolctl.py",
         ".venv/lib/python3.12/site-packages/polars/__init__.py",
         ".venv/lib/python3.12/site-packages/blosc2/__init__.py",
@@ -457,7 +457,7 @@ def verify_score_core(plan_path, expected_sha, checked_plan, candidate, output,
                              else "E28_APPEARANCE_COST_V1")
     appearance = None
     if experiment == "e28":
-        from scripts import e28_score as appearance
+        from scripts.experiments.e28 import e28_score as appearance
 
     if not isinstance(core, dict):
         _fail("core must be a dict")
@@ -598,7 +598,7 @@ def _score_protocol(experiment: str) -> dict:
         return {
             "candidate_id": "E27_RECORDED_PRIOR_V1",
             "mode": "recorded_prior",
-            "module": "scripts.e27_prior_score_v2",
+            "module": "scripts.experiments.e27.e27_prior_score_v2",
             "pregen": "E27_PREGEN_PLAN_VERIFIED_V1",
             "started": "E27_SCORE_STARTED_V2",
             "result": "E27_SCORE_RESULT_V1",
@@ -610,7 +610,7 @@ def _score_protocol(experiment: str) -> dict:
         return {
             "candidate_id": "E28_APPEARANCE_COST_V1",
             "mode": "e28_appearance",
-            "module": "scripts.e28_score",
+            "module": "scripts.experiments.e28.e28_score",
             "pregen": "E28_PREGEN_PLAN_VERIFIED_V1",
             "started": "E28_SCORE_STARTED_V1",
             "result": "E28_SCORE_RESULT_V1",
@@ -634,7 +634,7 @@ def run_score_child(plan_path, expected_sha, pregen_sha, output, *, experiment="
 
     appearance = None
     if experiment == "e28":
-        from scripts import e28_score as appearance
+        from scripts.experiments.e28 import e28_score as appearance
 
     start = time.monotonic()
     e._check_score_entry_runtime()
@@ -888,7 +888,7 @@ def supervise_score(plan_path, expected_sha, pregen_sha, output, *,
     from biohub import e26_screen as e
 
     if experiment == "e28":
-        from scripts import e28_score as appearance
+        from scripts.experiments.e28 import e28_score as appearance
 
     WALL_LIMIT_SECONDS = 1800
     OUTPUT_BYTES_LIMIT = 256 * 1024 ** 2

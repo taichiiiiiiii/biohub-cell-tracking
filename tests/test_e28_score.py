@@ -1,4 +1,4 @@
-"""Synthetic orchestration tests for scripts.e28_score.verify_generation."""
+"""Synthetic orchestration tests for scripts.experiments.e28.e28_score.verify_generation."""
 
 import copy
 import hashlib
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-import scripts.e28_score as m
+import scripts.experiments.e28.e28_score as m
 from biohub import e26_screen as e
 from biohub import evaluate
 
@@ -361,7 +361,7 @@ def _e27ize(box):
 def test_verify_score_core_routes(prepare_core, monkeypatch, route, fault):
     from pathlib import Path
 
-    import scripts.e27_prior_score_v2 as shared
+    import scripts.experiments.e27.e27_prior_score_v2 as shared
     e28 = route == "e28"
     if not e28:
         checked, cand = _e27ize(prepare_core)
@@ -458,7 +458,7 @@ def test_verify_score_core_routes(prepare_core, monkeypatch, route, fault):
 
 @pytest.mark.parametrize("bad", ["bad", True, None])
 def test_verify_score_core_rejects_experiment(bad):
-    from scripts import e27_prior_score_v2 as shared
+    from scripts.experiments.e27 import e27_prior_score_v2 as shared
 
     def forbidden(*args, **kwargs):
         raise AssertionError("invalid experiment rejected before callback")
@@ -473,7 +473,7 @@ PREGEN_SHA = "b" * 64
 
 
 def _shared():
-    from scripts import e27_prior_score_v2 as shared
+    from scripts.experiments.e27 import e27_prior_score_v2 as shared
 
     return shared
 

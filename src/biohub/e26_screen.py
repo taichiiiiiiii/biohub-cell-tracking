@@ -1303,7 +1303,7 @@ def create_preregistration_directory(run_id: str) -> Path:
 # These are closed runtime/scientific input lists, not discovery patterns. The
 # generation/scoring contracts are the final single-agent implementation briefs.
 _SOURCE_PATHS = (
-    "src/biohub/__init__.py", "src/biohub/e26_screen.py", "scripts/e26_screen.py",
+    "src/biohub/__init__.py", "src/biohub/e26_screen.py", "scripts/experiments/e26/e26_screen.py",
     "src/biohub/output_bounds.py", "src/biohub/screen_output_bounds.py",
     "src/biohub/io.py", "src/biohub/validate.py", "src/biohub/evaluate.py",
     "src/biohub/public_postproc/__init__.py", "src/biohub/public_postproc/config.py",
@@ -2219,7 +2219,7 @@ def _launch_control_process(
         raise E26Error("no wall budget remains for a child")
     stdout_path = _plain_artifact_path(control_path.parent / "stdout.log")
     stderr_path = _plain_artifact_path(control_path.parent / "stderr.log")
-    argv = [sys.executable, str(_PROJECT_ROOT / "scripts/e26_screen.py"), command,
+    argv = [sys.executable, str(_PROJECT_ROOT / "scripts/experiments/e26/e26_screen.py"), command,
             "--control", str(control_path), "--control-sha256", expected_sha256]
     environment = generation_environment()
     started = time.monotonic()
@@ -2292,7 +2292,7 @@ def _verify_control_process(receipt: dict, control_reference: dict, *, command: 
             raise E26Error("child process pid/exit code must be integers")
     for key in ("wall_seconds", "timeout_seconds", "started_monotonic", "finished_monotonic"):
         _require_finite_number(receipt[key], key, json_number=True)
-    expected_argv = [sys.executable, str(_PROJECT_ROOT / "scripts/e26_screen.py"), command,
+    expected_argv = [sys.executable, str(_PROJECT_ROOT / "scripts/experiments/e26/e26_screen.py"), command,
                      "--control", control_reference["path"], "--control-sha256", control_reference["sha256"]]
     if (
         receipt["schema_version"] != "biohub.e26_screen.child_process.v1" or receipt["pid"] <= 0

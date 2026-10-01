@@ -128,7 +128,7 @@ PRODUCTION_AUTHORITY = Authority(
     ),
     import_receipt_sha256="0b224bf87b6fb0d0653cd265461a4fb75e17068de3550a73b19379eeb2294570",
     official_oid=PRODUCTION_OFFICIAL_OID,
-    builder_sources=("src/biohub/st_r3_image_view.py", "scripts/st_r3_image_view.py"),
+    builder_sources=("src/biohub/st_r3_image_view.py", "scripts/experiments/st_r3/st_r3_image_view.py"),
 )
 
 

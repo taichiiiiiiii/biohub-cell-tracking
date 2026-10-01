@@ -8,7 +8,7 @@ import pytest
 
 from biohub.public_postproc import graph_ops, pipeline
 from biohub.public_postproc.config import build_config
-from scripts.e27_motion_cost_probe import probe_motion
+from scripts.experiments.e27.e27_motion_cost_probe import probe_motion
 
 
 def test_probe_real_graph(tmp_path):

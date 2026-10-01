@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 
 REFERENCE = "outputs/local/e23_association_collection_20260908/REFERENCE_PLAN.json"
 REFERENCE_SHA = "08395ca8615b6eeaaaeec521cd937c62d2212b7a20cf18be1a27478afd4af7ac"
@@ -154,7 +154,7 @@ def prepare_inputs() -> dict:
     from biohub.association_artifact_audit import _canonical_graph, _edge_values
     from biohub.association_collection_audit import Reader
     from biohub.association_parity import semantic_graph_signature
-    from scripts.prepare_e23_association_parity import raw_signature
+    from scripts.experiments.e23.prepare_e23_association_parity import raw_signature
 
     reference = _load(REFERENCE, REFERENCE_SHA)
     audit = _load(AUDIT, AUDIT_SHA)
@@ -935,7 +935,7 @@ def execute_baseline_core(prepared, cfg, bundle, output, check_budget, *,
 
 _SOURCE_PATTERNS = ("**/*.py",)
 _EXTRA_SOURCES = (
-    Path("scripts/prepare_e23_association_parity.py"),
+    Path("scripts/experiments/e23/prepare_e23_association_parity.py"),
     Path("analysis/e27_association_prior_design.md"),
     Path("analysis/e26_scoring_contract.md"),
     Path("analysis/e28_appearance_cost_design.md"),
@@ -1031,15 +1031,25 @@ def _snapshot_source_closure() -> dict:
     return {"files": binding, "count": len(binding)}
 
 
+def _pre_reorg_alias(relative: str) -> str:
+    """Collapse the 2026-09 scripts/experiments/<id>/ move for frozen pre-move records."""
+    parts = relative.split("/")
+    if len(parts) >= 3 and parts[0] == "scripts" and parts[1] == "experiments":
+        return "scripts/" + parts[-1]
+    return relative
+
+
 def _verify_source_closure(before: dict) -> dict:
     after = _snapshot_source_closure()
-    if set(after["files"]) != set(before["files"]):
+    after_keyed = {_pre_reorg_alias(rel): meta for rel, meta in after["files"].items()}
+    before_keyed = {_pre_reorg_alias(rel): meta for rel, meta in before["files"].items()}
+    if set(after_keyed) != set(before_keyed):
         raise RuntimeError("source file-set drifted during run")
     changed = [
         rel
-        for rel, meta in after["files"].items()
-        if before["files"][rel]["sha256"] != meta["sha256"]
-        or before["files"][rel]["bytes"] != meta["bytes"]
+        for rel, meta in after_keyed.items()
+        if before_keyed[rel]["sha256"] != meta["sha256"]
+        or before_keyed[rel]["bytes"] != meta["bytes"]
     ]
     if changed:
         raise RuntimeError(f"source content drift detected: {sorted(changed)}")
@@ -1515,7 +1525,7 @@ def supervise_baseline(output: Path, *, mode="baseline_none") -> dict:
     argv = [
         sys.executable,
         "-m",
-        "scripts.e27_association_prior_screen",
+        "scripts.experiments.e27.e27_association_prior_screen",
         "--output",
         str(output),
     ]

@@ -292,7 +292,7 @@ def _prereg_fixture(tmp_path: Path) -> tuple[Path, str]:
                 "relative_output": relative,
                 "argv": [
                     "/python",
-                    str(repo / "scripts" / "st_r3_supervise_arm.py"),
+                    str(repo / "scripts" / "experiments" / "st_r3" / "st_r3_supervise_arm.py"),
                     "--arm-name",
                     arm,
                     "--geff-dir",
@@ -770,14 +770,15 @@ def test_hold_publication_failure_cannot_turn_into_pass(tmp_path: Path, monkeypa
 
 
 def test_generation_cli_has_no_gt_metric_or_runner_override() -> None:
-    source = (Path(__file__).parents[1] / "scripts" / "st_r3_generate.py").read_text(encoding="utf-8")
+    path = Path(__file__).parents[1] / "scripts" / "experiments" / "st_r3" / "st_r3_generate.py"
+    source = path.read_text(encoding="utf-8")
     assert "--gt" not in source
     assert "--metric" not in source
     assert "--runner" not in source
 
 
 def test_preregister_cli_requires_artifact_refs_not_free_gt_hash() -> None:
-    source = (Path(__file__).parents[1] / "scripts" / "st_r3_preregister.py").read_text(encoding="utf-8")
+    source = (Path(__file__).parents[1] / "scripts" / "experiments" / "st_r3" / "st_r3_preregister.py").read_text(encoding="utf-8")
     assert "--gt-inventory-sha256" not in source
     assert '"--gt-inventory"' in source
     assert '"--primary-raw-provenance-receipt"' in source

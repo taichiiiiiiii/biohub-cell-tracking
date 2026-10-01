@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from biohub import e26_screen as e
-from scripts import e27_prior_score_v2 as m
+from scripts.experiments.e27 import e27_prior_score_v2 as m
 
 
 @pytest.fixture
@@ -70,12 +70,12 @@ def box(tmp_path, monkeypatch, request):
     # m._score_protocol here would make the oracle share its answer with the
     # code under test.
     if experiment == "e28":
-        expected_module = "scripts.e28_score"
+        expected_module = "scripts.experiments.e28.e28_score"
         expected_started = "E28_SCORE_STARTED_V1"
         expected_result = "E28_SCORE_RESULT_V1"
         expected_cid = "E28_APPEARANCE_COST_V1"
     else:
-        expected_module = "scripts.e27_prior_score_v2"
+        expected_module = "scripts.experiments.e27.e27_prior_score_v2"
         expected_started = "E27_SCORE_STARTED_V2"
         expected_result = "E27_SCORE_RESULT_V1"
         expected_cid = "E27_RECORDED_PRIOR_V1"
@@ -156,10 +156,10 @@ def box(tmp_path, monkeypatch, request):
     monkeypatch.setattr(m, "verify_score_core", lambda *a, **k: copy.deepcopy(verified))
 
     if experiment == "e28":
-        # E28 routes through scripts.e28_score.appearance plus the shared
+        # E28 routes through scripts.experiments.e28.e28_score.appearance plus the shared
         # post-score core seam. m.verify_* stays forbidden so a route that
         # still uses the E27 seams fails loudly instead of silently passing.
-        from scripts import e28_score as appearance
+        from scripts.experiments.e28 import e28_score as appearance
 
         def forbidden_verify(*args, **kwargs):
             raise AssertionError("unexpected E27 route")
@@ -338,7 +338,7 @@ def test_e28_success_routes_and_lifecycle(box):
     assert result["schema"] == "E28_SCORE_SUPERVISOR_V1"
     assert result["returncode"] == 0
     assert result["submission_authorized"] is False
-    assert result["argv"][1:4] == ["-m", "scripts.e28_score", "score-child"]
+    assert result["argv"][1:4] == ["-m", "scripts.experiments.e28.e28_score", "score-child"]
     assert result["environment"] == e.generation_environment()
     assert box["routing"] == ["plan", "generation", "post"]
     assert box["calls"] == ["launch"]

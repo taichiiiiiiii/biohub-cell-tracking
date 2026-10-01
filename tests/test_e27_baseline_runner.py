@@ -1,4 +1,4 @@
-"""Synthetic orchestration tests for scripts.e27_association_prior_screen.
+"""Synthetic orchestration tests for scripts.experiments.e27.e27_association_prior_screen.
 
 Nothing here touches real materials, models, cores, runtimes, datasets or GT.
 """
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-import scripts.e27_association_prior_screen as m
+import scripts.experiments.e27.e27_association_prior_screen as m
 from biohub import e26_screen as e
 
 REFERENCE_BYTES = b"a,b,c\n1,2,3\n"

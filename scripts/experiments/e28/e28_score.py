@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from scripts import e27_association_prior_screen as g
-from scripts.e27_prior_score_v2 import read_generation_receipts
+from scripts.experiments.e27 import e27_association_prior_screen as g
+from scripts.experiments.e27.e27_prior_score_v2 import read_generation_receipts
 
 
 def verify_generation(output: Path, arm: str, expected_sources: dict,
@@ -256,9 +256,9 @@ def verify_plan(plan_path: Path, expected_sha: str, *,
     check_budget()
 
     expected_rels = {str(p.relative_to(g.ROOT)) for p in g._source_closure_paths()} | {
-        "scripts/e28_score.py",
-        "scripts/e27_prior_score_v2.py",
-        "scripts/e27_score_environment_v2.py",
+        "scripts/experiments/e28/e28_score.py",
+        "scripts/experiments/e27/e27_prior_score_v2.py",
+        "scripts/experiments/e27/e27_score_environment_v2.py",
         "analysis/e28_appearance_cost_design.md",
         ".venv/lib/python3.12/site-packages/threadpoolctl.py",
         ".venv/lib/python3.12/site-packages/polars/__init__.py",
@@ -492,7 +492,7 @@ def main(argv=None):
     import argparse
     import sys
 
-    from scripts import e27_prior_score_v2 as shared
+    from scripts.experiments.e27 import e27_prior_score_v2 as shared
 
     parser = argparse.ArgumentParser(prog="e28_score")
     sub = parser.add_subparsers(dest="command", required=True)

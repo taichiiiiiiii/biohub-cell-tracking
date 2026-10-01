@@ -5,12 +5,12 @@ from pathlib import Path
 
 from biohub.association_capture import _require, _sha
 from biohub.association_collection import REFERENCE_SHA
-from scripts.prepare_e23_association_collection import build as build_references
-from scripts.prepare_e23_association_parity import CONFIG_SHA, PAYLOAD_FILES, code_cell
-from scripts.prepare_e23_association_parity import build as build_parity
+from scripts.experiments.e23.prepare_e23_association_collection import build as build_references
+from scripts.experiments.e23.prepare_e23_association_parity import CONFIG_SHA, PAYLOAD_FILES, code_cell
+from scripts.experiments.e23.prepare_e23_association_parity import build as build_parity
 
 EXTRA_FILES = ["src/biohub/association_collection.py", "src/biohub/association_collection_supervise.py",
-               "scripts/e23_association_collect.py"]
+               "scripts/experiments/e23/e23_association_collect.py"]
 
 
 def build(repo):
@@ -129,4 +129,4 @@ assert not (WORKING_DIR / "submission.csv").exists()
 
 
 if __name__ == "__main__":
-    print(json.dumps(build(Path(__file__).resolve().parents[1]), separators=(",", ":")))
+    print(json.dumps(build(Path(__file__).resolve().parents[3]), separators=(",", ":")))

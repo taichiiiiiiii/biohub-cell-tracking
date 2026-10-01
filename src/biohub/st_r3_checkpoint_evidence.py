@@ -136,7 +136,9 @@ PRODUCTION_AUTHORITY = Authority(
         ),
     ),
     official_oid=OFFICIAL_OID,
-    builder_sources=("src/biohub/st_r3_checkpoint_evidence.py", "scripts/st_r3_checkpoint_evidence.py"),
+    builder_sources=(
+        "src/biohub/st_r3_checkpoint_evidence.py", "scripts/experiments/st_r3/st_r3_checkpoint_evidence.py",
+    ),
 )
 
 PRIMARY_MEMBERS = {"ARTIFACT_MANIFEST.json", "checkpoint_last.pth", "config.json", "edge_predictor_best.pth"}

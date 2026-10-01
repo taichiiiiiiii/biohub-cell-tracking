@@ -1,11 +1,11 @@
-"""Tests for scripts.e27_prior_score.read_generation_receipts (issue 9)."""
+"""Tests for scripts.experiments.e27.e27_prior_score.read_generation_receipts (issue 9)."""
 
 import copy
 import json
 
 import pytest
 
-from scripts import e27_prior_score as m
+from scripts.experiments.e27 import e27_prior_score as m
 
 
 @pytest.fixture
@@ -145,7 +145,7 @@ def test_plan_preflight_known12_without_semantic_gt(monkeypatch):
     monkeypatch.setattr(io, "load_geff_graph", forbidden)
     plan = json.loads(path.read_text())
     expected = plan["score_sources"]["scripts/e27_prior_score.py"]
-    current = m.g._binding_for_path(m.g.ROOT / "scripts/e27_prior_score.py", label="score")
+    current = m.g._binding_for_path(m.g.ROOT / "scripts/experiments/e27/e27_prior_score.py", label="score")
     if current != expected:
         with pytest.raises(RuntimeError, match="score source drift"):
             m.verify_plan(

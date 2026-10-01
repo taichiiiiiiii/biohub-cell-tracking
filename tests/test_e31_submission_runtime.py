@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-RUNTIME_PATH = Path(__file__).resolve().parents[1] / "scripts" / "e31_submission_runtime.py"
+RUNTIME_PATH = Path(__file__).resolve().parents[1] / "scripts" / "experiments" / "e31" / "e31_submission_runtime.py"
 RUNTIME_SOURCE = RUNTIME_PATH.read_text(encoding="utf-8")
 
 FAKE_PREDICTOR_SOURCE = """\

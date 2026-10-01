@@ -55,7 +55,7 @@ _SOURCE_PATHS = (
     "uv.lock",
     "scripts/local_eval.py",
     "scripts/postproc_geffs.py",
-    "scripts/st_r3_prerequisite.py",
+    "scripts/experiments/st_r3/st_r3_prerequisite.py",
     "src/biohub/evaluate.py",
     "src/biohub/st_r3_prerequisites.py",
     "src/biohub/public_postproc/__init__.py",

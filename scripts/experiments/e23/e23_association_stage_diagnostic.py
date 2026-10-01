@@ -7,7 +7,7 @@ submission; binds frozen known12 only.
 import json
 from pathlib import Path
 
-from scripts import e26_edge_diagnostic as d2
+from scripts.experiments.e26 import e26_edge_diagnostic as d2
 
 ROOT = d2.ROOT
 

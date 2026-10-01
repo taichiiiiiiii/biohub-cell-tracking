@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-import scripts.e27_association_prior_screen as m
+import scripts.experiments.e27.e27_association_prior_screen as m
 from biohub import e26_screen as e
 
 ROOT = Path(__file__).resolve().parents[1]

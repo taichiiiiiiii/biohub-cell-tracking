@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.prepare_e23_association_collection import AUDIT, build, plan_groups, reference_counts
+from scripts.experiments.e23.prepare_e23_association_collection import AUDIT, build, plan_groups, reference_counts
 
 ROOT = Path(__file__).resolve().parents[1]
 

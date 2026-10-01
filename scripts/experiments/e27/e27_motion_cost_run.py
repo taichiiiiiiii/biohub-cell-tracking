@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 STEM = '6bba_09961292'
 FRAME = 94
 WALL = 1800
@@ -68,7 +68,7 @@ def _fail(output: Path, exc: BaseException) -> None:
 def child(output: Path, mode: str) -> Path:
     global e, g
     from biohub import e26_screen as e
-    from scripts import e27_association_prior_screen as g
+    from scripts.experiments.e27 import e27_association_prior_screen as g
     if mode not in MOVES:
         raise ValueError('bad mode')
     started = time.monotonic()
@@ -123,7 +123,7 @@ def child(output: Path, mode: str) -> Path:
         control = g._binding_for_path(output / 'CONTROL.json', label='control')
 
         from biohub.public_postproc import graph_ops, pipeline
-        from scripts.e27_motion_cost_probe import probe_motion
+        from scripts.experiments.e27.e27_motion_cost_probe import probe_motion
         if pipeline.motion_relink_edges is not graph_ops.motion_relink_edges:
             raise RuntimeError('relink identity')
         raw_paths = [p for p in prepared['raw_paths'] if p.stem == STEM]
@@ -172,7 +172,7 @@ def child(output: Path, mode: str) -> Path:
 
 def supervise(output: Path, mode: str) -> Path:
     from biohub import e26_screen as e
-    from scripts import e27_association_prior_screen as g
+    from scripts.experiments.e27 import e27_association_prior_screen as g
     if mode not in MOVES:
         raise ValueError('bad mode')
     if not output.is_absolute() or output.parent != ROOT / 'outputs' / 'local' \
@@ -189,7 +189,7 @@ def supervise(output: Path, mode: str) -> Path:
     try:
         with open(audit / 'stdout.log', 'xb') as so, open(audit / 'stderr.log', 'xb') as se:
             proc = subprocess.Popen(
-                [sys.executable, '-m', 'scripts.e27_motion_cost_run', '--child',
+                [sys.executable, '-m', 'scripts.experiments.e27.e27_motion_cost_run', '--child',
                  '--output', str(output), '--mode', mode], cwd=str(ROOT),
                 env=e.generation_environment(), stdin=subprocess.DEVNULL,
                 stdout=so, stderr=se, start_new_session=True)

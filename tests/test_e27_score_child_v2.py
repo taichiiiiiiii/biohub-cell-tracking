@@ -14,7 +14,7 @@ import signal
 import pytest
 
 from biohub import e26_screen as e
-from scripts import e27_prior_score_v2 as m
+from scripts.experiments.e27 import e27_prior_score_v2 as m
 
 
 class FakeSignal:
@@ -327,7 +327,7 @@ class _E28EqualSpoofer:
 
 
 def test_e28_route_dispatch_and_cleanup(box, monkeypatch):
-    from scripts import e28_score as appearance
+    from scripts.experiments.e28 import e28_score as appearance
 
     sentinel_handler = lambda signum, frame: None  # noqa: E731
     box["sig"].handler = sentinel_handler
@@ -402,7 +402,7 @@ def test_strict_selector_rejection(box, bad_experiment):
 def test_e28_child_success_routes_and_seals(box, monkeypatch):
     from pathlib import Path
 
-    from scripts import e28_score as appearance
+    from scripts.experiments.e28 import e28_score as appearance
 
     planpath = box["planpath"]
     planref = box["planref"]

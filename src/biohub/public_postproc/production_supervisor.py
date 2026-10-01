@@ -2652,7 +2652,7 @@ def supervise_arm(spec: SupervisorSpec) -> SupervisorResult:
         if os.fstat(staging_fd).st_dev != parent_identity.st_dev:
             raise SupervisorError("staging and final parent are not on the same filesystem")
         repo_root = Path(__file__).resolve().parents[3]
-        child_cli = repo_root / "scripts" / "st_r3_postproc_arm.py"
+        child_cli = repo_root / "scripts" / "experiments" / "st_r3" / "st_r3_postproc_arm.py"
         python_executable = Path(sys.executable).absolute()
         if not python_executable.exists():
             raise SupervisorError("current Python executable is absent")

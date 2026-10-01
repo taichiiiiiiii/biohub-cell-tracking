@@ -59,7 +59,7 @@ GEFF_SUFFIXES = (
 ZARR_SUFFIXES = ("0/zarr.json", "zarr.json")
 BUILDER_SOURCES = (
     "src/biohub/st_r3_gt_view.py",
-    "scripts/st_r3_gt_view.py",
+    "scripts/experiments/st_r3/st_r3_gt_view.py",
     "src/biohub/st_r3_image_view.py",
 )
 

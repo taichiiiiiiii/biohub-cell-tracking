@@ -126,7 +126,7 @@ def test_opaque_inventory_normalizes_only_suffix_after_fixed_root(tmp_path: Path
 
 
 def test_cli_has_closed_fixed_argument_surface() -> None:
-    path = Path(__file__).parents[1] / "scripts/st_r3_gt_view.py"
+    path = Path(__file__).parents[1] / "scripts/experiments/st_r3/st_r3_gt_view.py"
     spec = importlib.util.spec_from_file_location("st_r3_gt_view_cli", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

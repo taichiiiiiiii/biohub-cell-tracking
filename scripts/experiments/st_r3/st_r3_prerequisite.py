@@ -17,7 +17,7 @@ from biohub.st_r3_prerequisites import (
     validate_prerequisite_receipt,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class _Parser(argparse.ArgumentParser):

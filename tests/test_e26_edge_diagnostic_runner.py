@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from scripts import e26_edge_diagnostic as runner
+from scripts.experiments.e26 import e26_edge_diagnostic as runner
 
 
 def test_binding_rejects_changed_bytes_and_size(tmp_path):

@@ -15,7 +15,7 @@ NOTEBOOK_SHA = "08507f9123d9f40e185d0db8eda3dd21cb405e50febb720827c2e655f68d5ec1
 CONFIG_SHA = "e9b4e396c58081bca08adf8275bd0bd1c2d3fd6eb091a1912a5116cb6de7b50a"
 PAYLOAD_FILES = ["src/biohub/association_capture.py", "src/biohub/association_observer.py",
                  "src/biohub/association_instrumentation.py", "src/biohub/association_parity.py",
-                 "src/biohub/association_supervise.py", "scripts/e23_association_bridge.py"]
+                 "src/biohub/association_supervise.py", "scripts/experiments/e23/e23_association_bridge.py"]
 
 
 def raw_signature(path):
@@ -151,4 +151,4 @@ assert not (WORKING_DIR / "submission.csv").exists()
 
 
 if __name__ == "__main__":
-    print(json.dumps(build(Path(__file__).resolve().parents[1]), ensure_ascii=False))
+    print(json.dumps(build(Path(__file__).resolve().parents[3]), ensure_ascii=False))

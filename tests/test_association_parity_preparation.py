@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def loader():
     spec = importlib.util.spec_from_file_location(
-        "prepare_association", ROOT / "scripts/prepare_e23_association_parity.py")
+        "prepare_association", ROOT / "scripts/experiments/e23/prepare_e23_association_parity.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

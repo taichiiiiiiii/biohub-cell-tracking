@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-import scripts.e27_motion_cost_run as m
+import scripts.experiments.e27.e27_motion_cost_run as m
 
 
 class FakeProcess:

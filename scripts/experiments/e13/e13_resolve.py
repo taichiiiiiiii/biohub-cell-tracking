@@ -21,7 +21,7 @@ import polars as pl
 import zarr
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 DUMP_DS = np.array([1.0, 4.0, 4.0])
 DUMP_COLS = ["gi", "gj", "prob", "t_src", "z_src", "y_src", "x_src",
