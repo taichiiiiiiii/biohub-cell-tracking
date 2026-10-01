@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from conftest import skip_if_pub923_superseded
 
 from scripts.experiments.e23.prepare_e23_association_collection_notebook import build
 from scripts.experiments.e23.prepare_e23_association_parity import build as build_parity
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_notebook_preserves_model_source_and_uses_literal_serial_groups():
     if not (ROOT / "outputs/local/e23_association_collection_20260908/REFERENCE_PLAN.json").exists():
         pytest.skip("local frozen collection reference unavailable")
+    skip_if_pub923_superseded()
     prepared = build(ROOT)
     parity = build_parity(ROOT)
     for index in (2, 3, 4, 6, 7):

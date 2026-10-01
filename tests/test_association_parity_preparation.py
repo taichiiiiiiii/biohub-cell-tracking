@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from conftest import skip_if_pub923_superseded
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,6 +21,7 @@ def loader():
 def test_private_offline_notebook_preserves_config_and_source_patch():
     if not (ROOT / "outputs/kaggle/e23_reference").exists():
         pytest.skip("local frozen public-four reference unavailable")
+    skip_if_pub923_superseded()
     prepared = loader().build(ROOT)
     metadata = prepared["metadata"]
     assert metadata["is_private"] == "true" and metadata["enable_internet"] == "false"

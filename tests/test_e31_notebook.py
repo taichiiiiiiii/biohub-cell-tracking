@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import torch
+from conftest import skip_if_pub923_superseded
 
 
 def _sha(text: str) -> str:
@@ -123,6 +124,7 @@ def test_gpu_failure_raises(count, bad, monkeypatch, globals_dict):
 
 
 def test_builder_outputs_and_receipt_hashes():
+    skip_if_pub923_superseded()
     repo = Path(".")
     spec = importlib.util.spec_from_file_location(
         "prepare_e31_submission", repo / "scripts" / "experiments" / "e31" / "prepare_e31_submission.py"

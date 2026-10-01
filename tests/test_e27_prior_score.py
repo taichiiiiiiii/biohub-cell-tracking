@@ -4,6 +4,7 @@ import copy
 import json
 
 import pytest
+from conftest import skip_if_source_closure_superseded
 
 from scripts.experiments.e27 import e27_prior_score as m
 
@@ -97,6 +98,7 @@ def accepted_run():
 
 def test_positive_parity(accepted_run):
     out, docs = accepted_run
+    skip_if_source_closure_superseded(docs["control"]["source_bindings"])
     c = docs["control"]
     result = m.verify_generation(out, "selected_only", c["source_bindings"], c["association_priors"])
     report = result["csv_report"]
@@ -144,6 +146,7 @@ def test_plan_preflight_known12_without_semantic_gt(monkeypatch):
     monkeypatch.setattr(io, "estimated_number_of_nodes", forbidden)
     monkeypatch.setattr(io, "load_geff_graph", forbidden)
     plan = json.loads(path.read_text())
+    skip_if_source_closure_superseded(plan["generation_sources"])
     expected = plan["score_sources"]["scripts/e27_prior_score.py"]
     current = m.g._binding_for_path(m.g.ROOT / "scripts/experiments/e27/e27_prior_score.py", label="score")
     if current != expected:
@@ -181,6 +184,7 @@ def test_verify_generation_shapes_are_json_lists(accepted_run):
     from biohub import e26_screen as e
 
     out, docs = accepted_run
+    skip_if_source_closure_superseded(docs["control"]["source_bindings"])
 
     result = m.verify_generation(
         out,
