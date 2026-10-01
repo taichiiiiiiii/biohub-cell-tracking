@@ -41,7 +41,10 @@ https://www.kaggle.com/competitions/biohub-cell-tracking-during-development/disc
 known12は反復参照済み。追加24も独立holdoutと決めつけず、学習/選択履歴を確認する。
 胚別・動画別・edge/division/node別の結果を扱い、少数動画の改善を全体の汎化と混同しない。
 
-## 現在の状態
+## 実装初期の状態（履歴、終端結果は後続節）
+
+最新確認ではE31 ID56213346はCOMPLETE/Public0.924。下記未提出・新規0件は実装初期の記録である。
+Goal全体の件数と未完了候補は`analysis/experiment_ledger.md`冒頭を正とする。
 
 Flashへのstreaming observer実装依頼を3回実施し、全て採用前レビューで棄却。
 提出用notebookは未作成、Kaggle実行・新規提出は未実施（新規0件）。
@@ -220,7 +223,29 @@ hidden処理コストが約40%以上高ければ超過し得る。hidden実測�
 ユーザーの積極提出指示の範囲でこの実行リスクを受容し、version3/submission.csvを1回のみ送信。
 E23 incumbentは維持し、結果に合わせた同一loopの条件再調整はしない。
 
-### 提出受理 1/5
+### 終端確認（2026-09-19、Issue #16）
+
+2026-09-21 08:07 UTC定期確認: 提出履歴CLIが再び認証要求で終了。再試行・利用枠照会を
+中止し、ユーザー再認証待ち。直前の成功確認値はE38 COMPLETE/Public 0.930、
+E31 COMPLETE/Public 0.924で、今回の最新履歴/枠は取得していない。
+
+後続定期確認21:51 UTCでは提出履歴CLIが認証要求で停止。再試行せず利用枠照会も中止した。
+2026-09-20 15:59 UTC、並行作業のE38受理記録を新たな根拠として既存CLI読取を再開し、認証成功。
+E31 COMPLETE/0.924は不変。E38 ID56400188 PENDINGを確認し、最新総数は台帳冒頭へ反映した。
+
+認証済Kaggle提出履歴で56213346はCOMPLETE、Public 0.924、Privateは空欄と確認。
+確認日であり、実際の採点終了時刻はAPI一覧から不明。E23も表示値0.924のため上回ったとはしない。
+known12 REJECTとE23 incumbentは維持。実行・提出経路は終端到達したが、Private汎化改善は未証明。
+現Goalは受理1/5・終端結果記録1/5。全履歴8件、当日0件、提出可能枠5件を同時確認。
+E31単独の採点待ち追跡は終了し、再送・再実行なし。後続E29/E32は設計材料であって
+承認済み凍結提出物ではないため、この定期確認では新規提出・Qwen・学習を起動しない。
+
+定期保守で既存の41件のstaged script移動と関連unstaged変更を確認した。
+現在のE31入口はscripts/experiments/e31/配下へ移動中で、下記旧パスは提出時の履歴を表す。
+未検証の並行WIPを提出済みv3と同一とは見なさず、新たなbuild前にruntime内パスと
+payload bindingの整合検証が必要。既存移動・source・testsには触れず、commit/pushなし。
+
+### 提出受理 1/5（以下は受理当時の履歴）
 
 2026-09-13 18:50:14.763 UTC（09-14 03:50 JST）、version3/submission.csvを送信。
 CLI正常終了・当日残り4件。直後の履歴APIでsubmission ID **56213346** / **PENDING**を確認。

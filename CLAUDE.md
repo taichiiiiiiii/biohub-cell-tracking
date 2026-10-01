@@ -17,7 +17,11 @@
 ## 有効なグローバル規範
 
 - 有効: `common/` + `python/`
-- 逸脱: 重い処理（学習・全量推論）は**全面 Kaggle**。ローカルは軽い分析とテストのみ（[[feedback_memory_heavy_tasks_on_kaggle]]）。
+- 2026-09-20 訂正: 従来「ローカル RAM 3.8 GB」を根拠に重い処理を全面 Kaggle 限定としていたが誤りだった。
+  実機は Apple M4 Pro・RAM 48 GB・空きディスク 179 GB、`torch 2.13.0`（MPS/GPU 対応）が利用可能。
+  ユーザーが学習へのローカル環境使用を明示許可（2026-09-20）。全量 87.6 GB の train zarr 常時保持は
+  引き続き非現実的だが、部分データでのローカル学習・検証は選択肢に入る。Kaggle T4 との使い分けは
+  都度判断する。
 
 ## 情報源の優先順位
 
@@ -31,41 +35,23 @@
 
 `develop`（既定・開発）／`main`（安定）。**必ず Issue を起票してから着手**し、`feat/issue{N}-slug` → develop へ PR → CI（ruff + pytest）緑 → squash merge。`Closes #N` は PR 本文に書く。CI 確認は `gh api repos/taichiiiiiiii/biohub-cell-tracking/actions/runs?branch=<br>`。
 
-## 少数・低オーバーヘッドのサブエージェント（2026-09-08 最新ユーザー指示）
+## サブエージェント体制（現行）
 
-> 履歴・非運用・現行起動に使用禁止。以下は当時の運用記録。
-> 現行は [AGENTS.md](AGENTS.md)：2026-09-14にMAX実装へ変更。評価入口は別の読取専用経路、親が最終採否。
+現行の調査・実装・レビュー体制は Codex プラグイン（`codex:rescue`）経由で Codex 側が担当し、
+Claude が設計・採否を最終判断する。詳細・境界・委任ルールは [AGENTS.md](AGENTS.md) の
+「Delegation and implementation」節を参照。
 
-ユーザーがサブエージェントを再有効化した。親SOL/mediumが設計・採否を担当し、実装は
-QwenCloud Individual Token Planの`qwen3.8-flash`固定・監督付き経路へ渡す（2026-09-12上書き）。
-共有queueには必ず`--cloud-only --cloud-model qwen3.8-flash`を渡す。共有既定は変更せず、
-Max・Plus・ローカルFlash・PAYG・別モデル／providerへのfallbackは禁止。
-原因分析・レビューは原則1〜2人のSOL子（既定medium、難度で調整）へ渡す。
-親・子とも単純確認low、通常medium、難しい因果/漏洩/指標問題だけ理由を明示してhigh。
-ultra常用はしない。Qwenの現行adapterはnoneを維持し、SOLのeffort尺度を流用しない。
-短周期ポーリング、全履歴fork、重複調査、儀式的な受領書の増殖を避ける。
-待機・文脈・所有範囲の詳細は `AGENTS.md` を参照。旧worktree必須launcherは再開せず、
-canonical対応経路の検証前はQwen実装HOLD。自動goal/heartbeatでQwenを起動しない。
-以下の旧役割表は履歴でありモデル選択の根拠にしない。科学条件・直列物理評価は維持する。
-
-## 旧サブエージェント定義（`.claude/agents/`・使用停止）
-
-> 履歴・非運用・現行起動に使用禁止。旧役割の実行例やモデル指定を使用しない。
-> 現行の入口は [AGENTS.md](AGENTS.md) のみ。
-
-| 役割 | 使うとき | model |
-|---|---|---|
-| researcher | 実装前調査（公開 NB は `kaggle kernels pull` で読む） | opus |
-| implementer | TDD 実装 | sonnet |
-| experimenter | A/B・掃引・ローカル CV（雑音床未記入なら拒否する） | sonnet |
-| reviewer | 成果物 1 本ごとに指摘ゼロまで反復 | opus |
-| submitter | 提出前バリデーション（提出はしない） | sonnet |
-| github-manager | Issue / PR / コメント（承認後） | sonnet |
+以下は 2026-09-08〜09-14 頃に運用していた QwenCloud（`qwen3.8-flash`／`qwen3.8-max`）経由の
+サブエージェント体制、および `.claude/agents/`（researcher/implementer/experimenter/reviewer/
+submitter/github-manager）の旧役割定義であり、**2026-09-20 の AGENTS.md 更新により使用停止・
+履歴化**した。実行例やモデル指定を現行起動に流用しない。`.claude/agents/` と `.codex/` 配下の
+旧Qwen経路ファイル（`bin/qwen-implement`／`qwen-evaluate`、`agents/biohub_*.toml`、
+`runners/*.instructions.md`）は削除せずそのまま残置しているが、参照・起動の対象ではない。
 
 ## プロジェクト構成
 
 ```
-.claude/agents/    上記サブエージェント定義
+.claude/agents/    旧サブエージェント定義（使用停止・履歴。現行は AGENTS.md 参照）
 .github/workflows/ ci.yml（PR→develop と develop/main push で ruff + pytest + 公式 division テスト）
 official/          公式ベースライン＋公式メトリクス（submodule・読み取り専用・編集禁止）
 src/biohub/        自前の torch 不要ツール: io.py（zarr/geff 読み）, evaluate.py（CSV→公式スコア）
@@ -93,12 +79,15 @@ PYTHONPATH=official/src uv run --extra dev pytest official/tests/test_metrics.py
 uv run ruff check src/ scripts/ tests/ notebooks/    # リント（CI と同一範囲。official/ は除外）
 uv run python scripts/download_data.py --train <stem...>   # 部分データ取得（manifest 必須）
 uv run python scripts/local_eval.py outputs/submission.csv  # 公式指標でローカル採点
-kaggle kernels push -p notebooks/<kernel>            # Kaggle 実行（user 承認後）
+kaggle kernels push -p notebooks/<kernel>            # Kaggle 実行（承認不要・親のみ実行）
 ```
 
 ## 実行環境の制約
 
-- **ローカル RAM 3.8 GB / 空き 16 GB**: 全量 87.6 GB は置けない。1 フレーム 8.4 MB、1 動画 840 MB raw。学習・全量推論は Kaggle（T4: `"machine_shape":"NvidiaTeslaT4"`）。
+- **ローカル実機（2026-09-20訂正）**: Apple M4 Pro・RAM 48 GB・空きディスク 179 GB、torch 2.13.0（MPS）。
+  全量 87.6 GB の train zarr 常時保持は非現実的（1 フレーム 8.4 MB、1 動画 840 MB raw）だが、部分データ
+  でのローカル学習・検証はユーザー許可済み。Kaggle 実行（T4: `"machine_shape":"NvidiaTeslaT4"`）と
+  ローカル MPS のどちらを使うかはタスクごとに判断する。
 - **Kaggle MCP**: `get_competition`・`list_competition_topics`・`list_topic_messages`（Discussion 本文）は使える。`search_competitions` と leaderboard 系は未認証エラー → CLI（`kaggle competitions leaderboard --show`）。Kaggle の Web ページ本体は Playwright MCP（X なし）でも headless でも読めない → 公開 NB は `kaggle kernels pull`、Overview の記述は Discussion の引用で補う。
 
 ## 測定プロトコル
@@ -119,10 +108,13 @@ kaggle kernels push -p notebooks/<kernel>            # Kaggle 実行（user 承�
 
 ## 承認が必要な操作
 
-- `kaggle competitions submit`（提出。**サブエージェントは絶対に実行しない**）
-- `kaggle kernels push`（Kaggle 上の実行。GPU 枠を消費する）
-- `git push` 以外のリモート破壊操作・Release・タグ
+- チーム参加・公開・merge・Release・タグ
+- `git push` 以外のリモート破壊操作
+
+`kaggle competitions submit`（提出）と `kaggle kernels push`（GPU 枠を消費する Kaggle 上の実行）は
+**2026-09-20 の AGENTS.md 更新によりユーザー承認不要**になった。ただし実行するのは常に親（Claude）
+のみで、Codex を含むサブエージェントが直接 submit / push することはない。
 
 ## 禁止事項（サブエージェント共通）
 
-- 提出・push・PR 作成・外部送信・`official/` の編集・`data/` の削除
+- 提出・push・PR 作成・外部送信・`official/` の編集・`data/` の削除・Issue の作成/コメント/クローズ
