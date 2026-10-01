@@ -39,7 +39,9 @@ def extract(vol_t, vol_t1, z, y, x):
         Z, Y, X = fr.shape
         z0, y0, x0 = int(round(z)) - RZ, int(round(y)) - RXY, int(round(x)) - RXY
         zs, ys, xs = max(0, z0), max(0, y0), max(0, x0)
-        ze = min(Z, z0 + 2 * RZ + 1); ye = min(Y, y0 + 2 * RXY + 1); xe = min(X, x0 + 2 * RXY + 1)
+        ze = min(Z, z0 + 2 * RZ + 1)
+        ye = min(Y, y0 + 2 * RXY + 1)
+        xe = min(X, x0 + 2 * RXY + 1)
         if ze <= zs or ye <= ys or xe <= xs:
             continue  # fully outside this frame
         out[i, zs - z0:ze - z0, ys - y0:ye - y0, xs - x0:xe - x0] = fr[zs:ze, ys:ye, xs:xe]
@@ -90,7 +92,9 @@ def sample_patches(f):
     sz = max(1, int(np.ceil((nodes[:, 1].max() + 1) / Zs)))
     sy = max(1, int(np.ceil((nodes[:, 2].max() + 1) / Ys)))
     sx = max(1, int(np.ceil((nodes[:, 3].max() + 1) / Xs)))
-    nodes[:, 1] /= sz; nodes[:, 2] /= sy; nodes[:, 3] /= sx
+    nodes[:, 1] /= sz
+    nodes[:, 2] /= sy
+    nodes[:, 3] /= sx
     t_col = nodes[:, 0].astype(int)
     if _diag["n"] <= 3:
         print(f"DIAG2 vols{vols.shape} t[{t_col.min()},{t_col.max()}] scale z/{sz} y/{sy} x/{sx} "
@@ -137,7 +141,9 @@ def norm_batch(b):
 
 
 def auc(yt, ys):
-    o = np.argsort(ys); r = np.empty(len(ys)); r[o] = np.arange(len(ys))
+    o = np.argsort(ys)
+    r = np.empty(len(ys))
+    r[o] = np.arange(len(ys))
     p = yt == 1
     return (r[p].sum() - p.sum() * (p.sum() - 1) / 2) / max(1, p.sum() * (~p).sum())
 
@@ -146,8 +152,10 @@ def auc(yt, ys):
 val_X, val_y = [], []
 for f in val_files:
     for p, lab in sample_patches(f):
-        val_X.append(p); val_y.append(lab)
-val_X = norm_batch(np.stack(val_X)); val_y = np.array(val_y, dtype=np.float32)
+        val_X.append(p)
+        val_y.append(lab)
+val_X = norm_batch(np.stack(val_X))
+val_y = np.array(val_y, dtype=np.float32)
 print(f"val pool: {len(val_y)} patches, pos={int(val_y.sum())}")
 
 net = Net().to(DEV)
@@ -162,7 +170,8 @@ for ep in range(EPOCHS):
     net.train()
     for f in tr_files:
         for p, lab in sample_patches(f):
-            buf_X.append(p); buf_y.append(lab)
+            buf_X.append(p)
+            buf_y.append(lab)
         while len(buf_y) >= 256:
             xb = torch.from_numpy(norm_batch(np.stack(buf_X[:256]))).to(DEV)
             yb = torch.from_numpy(np.array(buf_y[:256], dtype=np.float32)).to(DEV)
@@ -171,7 +180,9 @@ for ep in range(EPOCHS):
             loss = lossf(net(xb), yb)
             loss.backward()
             opt.step()
-            ep_loss += float(loss.item()); nb += 1; step += 1
+            ep_loss += float(loss.item())
+            nb += 1
+            step += 1
     net.eval()
     with torch.no_grad():
         vs = []

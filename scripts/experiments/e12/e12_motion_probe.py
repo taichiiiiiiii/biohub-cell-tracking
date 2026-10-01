@@ -39,14 +39,16 @@ def main() -> None:
         pos = nodes.select("z", "y", "x").to_numpy() * SCALE
         # parent map in tracksdata-id space
         parent = {}
-        for s_, t_ in zip(edges["source_id"].to_numpy(), edges["target_id"].to_numpy()):
+        for s_, t_ in zip(edges["source_id"].to_numpy(), edges["target_id"].to_numpy(), strict=True):
             parent[td_of_sub[int(t_)]] = td_of_sub[int(s_)]
         acc, dv1, dv2 = [], [], []
         for r in lab.iter_rows(named=True):
             u, v = int(r["src"]), int(r["tgt"])
             w = parent.get(u)
             if w is None:
-                acc.append(float("nan")); dv1.append(float("nan")); dv2.append(float("nan"))
+                acc.append(float("nan"))
+                dv1.append(float("nan"))
+                dv2.append(float("nan"))
                 continue
             v1 = pos[u] - pos[w]
             v2 = pos[v] - pos[u]
@@ -57,7 +59,9 @@ def main() -> None:
                                        pl.Series("speed_out", dv2)))
     df = pl.concat(frames)
     counts = [json.load(open(f)) for f in sorted(args.labels_dir.glob("counts_*.json"))]
-    TP0 = sum(c["tp"] for c in counts); FP0 = sum(c["fp"] for c in counts); FN0 = sum(c["fn"] for c in counts)
+    TP0 = sum(c["tp"] for c in counts)
+    FP0 = sum(c["fp"] for c in counts)
+    FN0 = sum(c["fn"] for c in counts)
     j0 = TP0 / (TP0 + FP0 + FN0)
     print(f"baseline: TP={TP0} FP={FP0} FN={FN0} J={j0:.4f}")
 

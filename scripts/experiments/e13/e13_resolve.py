@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -20,7 +21,6 @@ import numpy as np
 import polars as pl
 import zarr
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 DUMP_DS = np.array([1.0, 4.0, 4.0])
@@ -54,12 +54,12 @@ def solve_stem(stem: str, args) -> None:
     r = read_raw(args.raw_dir / f"{stem}.geff")
     n = len(r["ids"])
     arcs = {(int(s), int(t)): (float(p), float(d))
-            for (s, t), p, d in zip(r["e_ids"], r["prob"], r["dist"])}
+            for (s, t), p, d in zip(r["e_ids"], r["prob"], r["dist"], strict=True)}
     n_base = len(arcs)
 
     if args.add_thr < 0.5:
         coord2id = {(int(t), int(round(z)), int(round(y)), int(round(x))): int(i)
-                    for i, t, z, y, x in zip(r["ids"], r["t"], r["z"], r["y"], r["x"])}
+                    for i, t, z, y, x in zip(r["ids"], r["t"], r["z"], r["y"], r["x"], strict=True)}
         d = pl.read_csv(args.dump_dir / f"{stem}.csv", has_header=False, new_columns=DUMP_COLS)
         d = d.filter(pl.col("prob") >= args.add_thr)
         added = unmapped = 0
@@ -84,8 +84,8 @@ def solve_stem(stem: str, args) -> None:
         graph.add_node_attr_key(key, pl.Float64, -999999.0)
     node_ids = graph.bulk_add_nodes([
         {"t": int(t), "z": float(z), "y": float(y), "x": float(x)}
-        for t, z, y, x in zip(r["t"], r["z"], r["y"], r["x"])])
-    old2new = dict(zip(r["ids"].tolist(), node_ids))
+        for t, z, y, x in zip(r["t"], r["z"], r["y"], r["x"], strict=True)])
+    old2new = dict(zip(r["ids"].tolist(), node_ids, strict=True))
     new2old = {v: k for k, v in old2new.items()}
     graph.add_edge_attr_key("edge_prob", pl.Float64, 0.0)
     graph.add_edge_attr_key("edge_dist", pl.Float64, 0.0)
@@ -105,7 +105,7 @@ def solve_stem(stem: str, args) -> None:
     K = td.DEFAULT_ATTR_KEYS
     sol = ea.filter(pl.col("solution"))
     rows = [{"source_id": new2old[int(s)], "target_id": new2old[int(t)], "edge_prob": float(p)}
-            for s, t, p in zip(sol[K.EDGE_SOURCE], sol[K.EDGE_TARGET], sol["edge_prob"])]
+            for s, t, p in zip(sol[K.EDGE_SOURCE], sol[K.EDGE_TARGET], sol["edge_prob"], strict=True)]
     pl.DataFrame(rows).write_parquet(out_pq)
     print(f"{stem}: n={n} arcs={len(arcs)} solution={len(rows)} solve={time.time() - t0:.1f}s")
 
@@ -114,7 +114,10 @@ def emit(args) -> None:
     from biohub.public_postproc.config import build_config, parse_set_overrides
     from biohub.public_postproc.deepcenter import load_deepcenter_veto_detector
     from biohub.public_postproc.pipeline import (
-        SubmissionCsvWriter, _dataset_stats_row, _load_geff_as_dicts, filter_output_graph)
+        SubmissionCsvWriter,
+        _load_geff_as_dicts,
+        filter_output_graph,
+    )
     out_dir = args.out_root / args.tag
     cfg = build_config(parse_set_overrides(args.set or []))
     deep = load_deepcenter_veto_detector(cfg)

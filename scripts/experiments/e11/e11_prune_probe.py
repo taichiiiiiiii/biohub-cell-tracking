@@ -17,14 +17,14 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from e9b_analyze import build_trans_feature  # noqa: E402
+
 from biohub.evaluate import graph_from_rows, read_submission  # noqa: E402
 from biohub.io import load_geff_graph  # noqa: E402
-from e9b_analyze import build_trans_feature  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "official" / "src"))
 from tracking_cellmot.metrics import evaluate as official_evaluate  # noqa: E402
@@ -46,8 +46,8 @@ def stage1(stem: str, pred_csv: Path, dump_dir: Path) -> None:
     pn = pred.node_attrs(attr_keys=[K.NODE_ID, K.MATCHED_NODE_ID, "t", "z", "y", "x"])
     pe = pred.edge_attrs(attr_keys=[K.MATCHED_EDGE_MASK])
     gt_ids = gt.node_ids()
-    gt_out = dict(zip(gt_ids, gt.out_degree(gt_ids)))
-    gt_in = dict(zip(gt_ids, gt.in_degree(gt_ids)))
+    gt_out = dict(zip(gt_ids, gt.out_degree(gt_ids), strict=True))
+    gt_in = dict(zip(gt_ids, gt.in_degree(gt_ids), strict=True))
     pmatch = {int(r[K.NODE_ID]): int(r[K.MATCHED_NODE_ID]) for r in pn.iter_rows(named=True)}
 
     nd = pn.select(pl.col(K.NODE_ID).alias("node_id"), "t", "z", "y", "x")
@@ -55,7 +55,7 @@ def stage1(stem: str, pred_csv: Path, dump_dir: Path) -> None:
     nm, pp = maps["nodemap"], maps["pair_prob"]
     # best prob per dump target (for margin)
     best_tgt: dict[int, float] = {}
-    for (gi, gj), pr in pp.items():
+    for (_gi, gj), pr in pp.items():
         if pr > best_tgt.get(gj, 0.0):
             best_tgt[gj] = pr
 

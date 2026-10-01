@@ -16,12 +16,12 @@ Rev dump rows: gi,gj,prob_rev,coords... where gi = SOURCE (parent P), gj = TARGE
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e9b_analyze import build_trans_feature, rank_norm  # noqa: E402
 
@@ -62,7 +62,8 @@ def main() -> None:
         for (gi, gj), pr in pp.items():
             by_src.setdefault(gi, []).append((pr, gj))
         tp = np.zeros(g.height)
-        p_ids = g["parent_id"].to_numpy(); o_ids = g["orphan_id"].to_numpy()
+        p_ids = g["parent_id"].to_numpy()
+        o_ids = g["orphan_id"].to_numpy()
         for i in range(g.height):
             gp, gc = nm.get(int(p_ids[i])), nm.get(int(o_ids[i]))
             if gp is not None and gc is not None:

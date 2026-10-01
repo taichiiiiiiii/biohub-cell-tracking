@@ -62,14 +62,17 @@ def main() -> None:
           f"nonneg {nonneg}/{n}  worst {min(d_score):+.4f}  best {max(d_score):+.4f}")
     print(f"PAIRED dAdj  : mean {mean(d_adj):+.4f}  median {median(d_adj):+.4f}")
     ok = mean(d_score) >= 0.002 and median(d_score) > 0 and nonneg >= 22
-    print(f"\nREGISTERED BAR (mean>=+0.002 & median>0 & >=22/36 nonneg): {'MET -> adopt 0.30' if ok else 'NOT MET -> keep 0.20'}")
+    verdict = "MET -> adopt 0.30" if ok else "NOT MET -> keep 0.20"
+    print(f"\nREGISTERED BAR (mean>=+0.002 & median>0 & >=22/36 nonneg): {verdict}")
 
     # summary-level micro comparison (reference only, not the judgment)
     for name, paths in (("baseline(12+24)", BASELINES), ("new", [args.new_score])):
         tp = fp = fn = 0
         for p in paths:
             s = json.loads(p.read_text())["summary"]
-            tp += s["division_tp"]; fp += s["division_fp"]; fn += s["division_fn"]
+            tp += s["division_tp"]
+            fp += s["division_fp"]
+            fn += s["division_fn"]
         print(f"{name}: div TP/FP/FN = {tp}/{fp}/{fn}")
 
 

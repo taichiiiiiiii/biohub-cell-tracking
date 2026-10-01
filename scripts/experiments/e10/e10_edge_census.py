@@ -51,8 +51,8 @@ def main() -> None:
     gn = gt.node_attrs(attr_keys=[K.NODE_ID, "t", "z", "y", "x"])
     ge = gt.edge_attrs(attr_keys=[])
     gt_ids = gt.node_ids()
-    gt_out = dict(zip(gt_ids, gt.out_degree(gt_ids)))
-    gt_in = dict(zip(gt_ids, gt.in_degree(gt_ids)))
+    gt_out = dict(zip(gt_ids, gt.out_degree(gt_ids), strict=True))
+    gt_in = dict(zip(gt_ids, gt.in_degree(gt_ids), strict=True))
 
     m = {int(r[K.MATCHED_NODE_ID]): int(r[K.NODE_ID])
          for r in pn.iter_rows(named=True) if r[K.MATCHED_NODE_ID] != -1}
@@ -127,7 +127,8 @@ def main() -> None:
     cc = Counter(out["category"].to_list())
     tp_n = cc.pop("TP", 0)
     fn_n = sum(cc.values())
-    print(f"  census: TP={tp_n} FN={fn_n} (official fn={res.edge_fn}) FP_valid={sum(n_fp.values())} (official fp={res.edge_fp})")
+    print(f"  census: TP={tp_n} FN={fn_n} (official fn={res.edge_fn}) "
+          f"FP_valid={sum(n_fp.values())} (official fp={res.edge_fp})")
     for k, v in sorted(cc.items(), key=lambda kv: -kv[1]):
         nd = int(out.filter((pl.col("category") == k) & pl.col("is_div")).height)
         print(f"    FN {k}: {v} (div-edge {nd})")

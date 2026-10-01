@@ -778,7 +778,8 @@ def test_generation_cli_has_no_gt_metric_or_runner_override() -> None:
 
 
 def test_preregister_cli_requires_artifact_refs_not_free_gt_hash() -> None:
-    source = (Path(__file__).parents[1] / "scripts" / "experiments" / "st_r3" / "st_r3_preregister.py").read_text(encoding="utf-8")
+    script = Path(__file__).parents[1] / "scripts" / "experiments" / "st_r3" / "st_r3_preregister.py"
+    source = script.read_text(encoding="utf-8")
     assert "--gt-inventory-sha256" not in source
     assert '"--gt-inventory"' in source
     assert '"--primary-raw-provenance-receipt"' in source

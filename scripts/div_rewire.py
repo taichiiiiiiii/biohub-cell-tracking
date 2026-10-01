@@ -86,7 +86,7 @@ def main() -> None:
             for nid, tt in tof.items():
                 if len(children.get(nid, [])) == 1:
                     by_t.setdefault(tt, []).append(nid)
-            for tt, ids in sorted(by_t.items()):
+            for _tt, ids in sorted(by_t.items()):
                 ids = sorted(ids)
                 used = set()
                 for i, p in enumerate(ids):
