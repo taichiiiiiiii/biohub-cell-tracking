@@ -82,6 +82,13 @@ selector、best checkpoint を持たず単独昇格できない。全 fold と O
 書込みは一時 file を同一 filesystem 上で完成させてから atomic rename する。
 weights-only の `best.pt` と完全状態の `resume.pt` を混同しない。
 
+新規single-splitのオンライン実行では、明示的に
+`execution_hash_policy=predeclared_with_result_bindings_v1`を選択できる（2026-09-22、Issue #18）。
+この場合のみconfig hashから`acceptance_thresholds.per_video.sha256`を除外する。
+これは学習後に生まれる結果fileのbytes bindingであり、閾値・direction・source・pathなどの
+判定条件は全て学習前config hashへ残す。finalizationで実file SHAを確定し、最終verifierは
+従来どおり実体との完全一致を要求する。policy未指定の既存runのhash計算は変更しない。
+
 ## `history.jsonl` schema
 
 各行は最低限、次の field を持つ。epoch は 1-based、`global_step` は単調増加とする。
@@ -115,6 +122,11 @@ immutable checkpoint を実際に保存した場合だけ SHA256 string、それ
 `final_selection.{oof_selector_value,fold_selections,final_refit_ref}` とし、各
 `fold_selections` は fold ID、epoch、selector value、checkpoint SHA256、
 `final_refit_ref` は別 artifact の run ID、固定 epoch 数、checkpoint SHA256 を持つ。
+
+オンライン保存のimmutable epoch checkpointは`kind=epoch`、またはその行の
+`best_so_far=true`なら`kind=best`、falseなら`kind=last`を許可する（2026-09-22、Issue #18）。
+後続epochで最良値が更新されても、過去のcheckpointや履歴hashを変更しない。
+最終`best.pt`/`last.pt`のkind、selector、epoch、tensor、SHAの検査は従来どおり必須。
 
 分類器は `val_auc` 等の task metric を追加する。split manifest は train/validation の
 stem、動画数、example 数、lineage 数、該当時の positive/negative 数を保存する。
@@ -167,6 +179,11 @@ prefix SHA256 を照合し、optimizer/scheduler/scaler/RNG/sampler を全て復
 checkpoint を validation-only で読み戻し、保存済み値と manifest に metric 別に pin した
 tolerance 以内で一致させる。loss の既定は `rtol=1e-5, atol=1e-7`、count/ID は完全一致、
 AUC 等は既定 `atol=1e-8` とする。次の epoch/global step が連続しなければ中止する。
+
+MPSで学習またはvalidationを行うrunは、上記Python/NumPy/Torch CPU/CUDA payloadに加えて
+`torch_mps` の実RNG状態を必須とする（2026-09-22、Issue #18）。MPS非使用runの既存schemaは
+変更せず、MPS stateをCPU/CUDA stateで代用しない。snapshotのdeviceと実行環境を一致させ、
+実device/dtypeで中断再開のreadbackを検証する。CPUだけの成功をMPS再開成功とは扱わない。
 
 validation snapshot は example ID と順序、入力/split hash、preprocessing config、seed、
 許可環境変数、device、dtype、framework version を pin し、shuffle/augmentation を無効化する。
