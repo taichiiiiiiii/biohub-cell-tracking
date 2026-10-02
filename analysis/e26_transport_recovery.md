@@ -252,7 +252,7 @@ preserved. This review alone is not launch authorization.
 ## Deployment receipt and parent verification — 2026-09-06 08:43 UTC
 
 Shared owner completed conditional deployment. Evidence is retained at
-`/Users/taichi/.local/share/qwen-flash/sse-deploy-20260906-pOEEz2/`:
+`~/.local/share/qwen-flash/sse-deploy-20260906-pOEEz2/`:
 `DEPLOYMENT.md`, `maintenance.json`, `deployed-verification.json`,
 `deployed-tests.log`, `preimage/` and `ROLLBACK.md`.
 Parent read the report and verification receipt and independently checked the

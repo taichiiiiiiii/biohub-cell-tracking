@@ -81,7 +81,7 @@ calibration は前段 gate であって公式 graph metric の代用ではない
   learned rankingにはsection 10の別type/validator/mutatorが必要である。
 
 linked worktree の ignored directory は共有されないため、main project
-`/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking` も read-only 監査した。
+`~/コンペティション/Kaggle/biohub-cell-tracking` も read-only 監査した。
 そこでは `official` が上記 gitlink で初期化済みかつ clean であり、次の実 bytes を確認した。
 
 - `official/src/tracking_cellmot/models/temporal_unet.py` と

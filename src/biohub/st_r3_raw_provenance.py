@@ -33,7 +33,7 @@ from typing import Any
 SCHEMA_VERSION = "biohub.st_r3.raw_provenance_receipt.v1"
 STATUS = "LEGACY_HISTORY_UNVERIFIED"
 REMAINING_HOLD = "HOLD_RAW_PROVENANCE_UNVERIFIED"
-CANONICAL_REPO_ROOT = Path("/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking")
+CANONICAL_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 READ_SIZE = 1024 * 1024
 MAX_JSON_BYTES = 16 * 1024 * 1024

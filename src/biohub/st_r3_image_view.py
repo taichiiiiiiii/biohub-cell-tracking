@@ -30,7 +30,7 @@ from pathlib import Path, PurePosixPath
 SCHEMA_VERSION = "biohub.st_r3.image_view_receipt.v1"
 READY_SCHEMA = "biohub.eval36_images_ready.v1"
 INVENTORY_SCHEMA = "biohub.eval36_image_content_inventory.v1"
-CANONICAL_REPO_ROOT = Path("/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking")
+CANONICAL_REPO_ROOT = Path(__file__).resolve().parents[2]
 READ_SIZE = 1024 * 1024
 MAX_JSON_BYTES = 16 * 1024 * 1024
 PRODUCTION_OFFICIAL_OID = "075fc5f5a52d11077f9dc2b074644618f26939e2"

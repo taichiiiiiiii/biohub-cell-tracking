@@ -1,3 +1,7 @@
+# Derived from the public Kaggle notebook "Clean Approach + Lightweight Local CV | No Hack"
+# by Yusuke Togashi (https://www.kaggle.com/code/yusuketogashi/clean-approach-lightweight-local-cv-no-hack),
+# licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
+# Modified: ported from notebook cells into a torch-free package; see THIRD_PARTY_NOTICES.md.
 """Orchestrates the post-processing stack, ported verbatim from the notebook's
 ``filter_output_graph`` function and the CSV-writing loop that calls it once
 per prediction ``.geff``.

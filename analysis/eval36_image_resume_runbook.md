@@ -200,7 +200,7 @@ fresh preflightを実行し、新しい429なら即時停止して新たなcoold
 `kaggle config view`, shell trace (`set -x`) は使わない。
 
 ```zsh
-cd '/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking'
+cd '~/コンペティション/Kaggle/biohub-cell-tracking'
 
 test "$(shasum -a 256 data/manifest.csv | awk '{print $1}')" = \
   6c1c59644daf7fe59458dc860f2e1783d1217be389a791ea54e1f611f5f848f4

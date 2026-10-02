@@ -28,7 +28,7 @@ ADDITIONS = {
 
 LAUNCH = {
     "PATH": "/usr/bin:/bin",
-    "HOME": "/Users/taichi",
+    "HOME": "/home/user",
     "VIRTUAL_ENV": ".venv",
     "CUDA_VISIBLE_DEVICES": "",
 }

@@ -4627,7 +4627,7 @@ run IDのdry-runを継続し、候補・入力・thread設定・数値gateを変
 - 別の設定タスク `01a0581d-815d-7de1-a3cc-a5fbb5dd9d17` から、ユーザー指定として
   今後の実装を**ローカルFlash**へ統一する通知を受領した。最新launcherと指示書を読み、
   model `qwen38-flash-next`、provider `qwen_flash_local`、effort `none`、
-  `.codex/bin/qwen-implement`経由・共有`/Users/taichi/.local/bin/qwen-flash-queue`
+  `.codex/bin/qwen-implement`経由・共有`~/.local/bin/qwen-flash-queue`
   で物理実装一件、旧Qwen/cloud/SOL実装への自動fallbackなし、を今後の担当条件とする。
   設計/採否は親、SOLによる原因分析と独立レビュー（棚卸しmedium、診断/review high）は不変。
   この追記が過去の「SOLで実装/Qwenは使用しない」運用記述に対する最新overrideであり、
@@ -7318,7 +7318,7 @@ validation=44b6_706092f0/6bba_07e24132を固定する。新たなholdout GTは�
 期待結果は有限Loss/gradient、3行の診断履歴、各epoch snapshotとreceiptの整合性。
 Loss低下は観測値として記録するが、この3stepを候補モデルの採用基準にしない。
 診断成果物は提出禁止、resume_supported=False。初期化を含む完全決定性はまだ保証しない。
-実行前、ローカル `.venv/bin/python` の稼働PID37816は別project `/Users/taichi/work/paper` の
+実行前、ローカル `.venv/bin/python` の稼働PID37816は別project `~/work/paper` の
 CPU0%プロセスと確認。本repoの既存実験を停止・再起動しない。
 
 ### 実データ診断v1の結果（2026-09-22 JST、Issue #18）

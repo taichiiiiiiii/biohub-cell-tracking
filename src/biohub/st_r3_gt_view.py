@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 
 from biohub import st_r3_image_view as _sealed
 
-CANONICAL_REPO_ROOT = Path("/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking")
+CANONICAL_REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_RELATIVE = "data/train"
 STANDALONE_PARENT_RELATIVE = "outputs/local/st_r3_gt_views"
 RUN_PARENT_RELATIVE = "outputs/local/steal_twin"
