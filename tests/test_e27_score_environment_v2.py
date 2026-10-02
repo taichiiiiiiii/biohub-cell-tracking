@@ -277,6 +277,7 @@ print('FRESH_IMPORT_ENV_OK')
 """
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="blosc2 libtcc.dylib path is macOS-specific")
 def test_fresh_subprocess_import_environment_regression():
     env = e.generation_environment()
     completed = subprocess.run(

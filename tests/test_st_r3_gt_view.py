@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -153,6 +154,7 @@ def test_cli_has_closed_fixed_argument_surface() -> None:
     }
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="APFS clones require macOS")
 def test_real_apfs_clone_isolated_inode_and_bidirectional_cow(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     destination_dir = tmp_path / "out"
@@ -196,6 +198,7 @@ def test_open_regular_refuses_links_and_fifo_without_blocking(tmp_path: Path, ki
         os.close(root_fd)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="APFS clones require macOS")
 def test_build_verify_import_end_to_end_on_synthetic_apfs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     probe_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     try:

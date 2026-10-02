@@ -5,6 +5,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -410,6 +411,7 @@ def test_final_bytes_tamper_is_detected_and_durably_removed(tmp_path: Path, monk
         os.close(root_fd)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="relies on macOS inode-replacement behaviour")
 def test_final_receipt_inode_replacement_is_dedicated_ambiguity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
