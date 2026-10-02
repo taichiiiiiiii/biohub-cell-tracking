@@ -41,3 +41,35 @@ def skip_if_source_closure_superseded(recorded: dict) -> None:
 
     if keyed(g._snapshot_source_closure()) != keyed(recorded):
         pytest.skip("src/biohub source closure changed after the frozen E27 run (baseline superseded)")
+
+
+# --- torch-dependent modules ------------------------------------------------
+# CI installs the torch-free extra only (see .github/workflows/ci.yml). These modules import
+# torch directly or through src/biohub at import time, or launch children that require it at
+# run time, so they are not collected there.
+try:
+    import torch  # noqa: F401
+except ImportError:
+    collect_ignore = [
+        "test_association_acceptance.py",
+        "test_association_artifacts.py",
+        "test_association_collection.py",
+        "test_association_augmentation.py",
+        "test_association_data.py",
+        "test_association_manifest.py",
+        "test_association_observer.py",
+        "test_association_parity.py",
+        "test_association_probe.py",
+        "test_association_resume.py",
+        "test_association_step_sampler.py",
+        "test_association_training.py",
+        "test_e26_screen.py",
+        "test_e31_notebook.py",
+        "test_export_association_candidate.py",
+        "test_kaggle_screen.py",
+        "test_local_train_device.py",
+        "test_local_training.py",
+        "test_prepare_eval36_bundle_kernel.py",
+        "test_st_r3_prerequisites.py",
+        "test_train_frozen_association.py",
+    ]

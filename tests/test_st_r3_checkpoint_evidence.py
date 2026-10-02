@@ -12,6 +12,11 @@ import pytest
 
 from biohub import st_r3_checkpoint_evidence as evidence
 
+needs_local_evidence = pytest.mark.skipif(
+    not (evidence.CANONICAL_REPO_ROOT / "outputs/kaggle/st_r3_checkpoint_recovery").is_dir(),
+    reason="local ST-R3 checkpoint evidence (outputs/kaggle/st_r3_checkpoint_recovery) is not in the repository",
+)
+
 
 def _production_collect(monkeypatch: pytest.MonkeyPatch) -> evidence.Collected:
     root = evidence.CANONICAL_REPO_ROOT
@@ -24,6 +29,7 @@ def _production_collect(monkeypatch: pytest.MonkeyPatch) -> evidence.Collected:
         guard.close()
 
 
+@needs_local_evidence
 def test_canonical_ignored_evidence_has_exact_history_and_split_facts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -52,6 +58,7 @@ def test_canonical_ignored_evidence_has_exact_history_and_split_facts(
     }
 
 
+@needs_local_evidence
 def test_primary_last_is_not_a_pin_and_is_never_read(monkeypatch: pytest.MonkeyPatch) -> None:
     assert all(
         pin.relative != "outputs/kaggle/st_r3_checkpoint_recovery/primary/checkpoint_last.pth"
@@ -74,6 +81,7 @@ def test_primary_last_is_not_a_pin_and_is_never_read(monkeypatch: pytest.MonkeyP
     assert not any(path.endswith("primary/checkpoint_last.pth") for path in seen)
 
 
+@needs_local_evidence
 def test_claims_are_exact_and_do_not_promote_resume_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -94,6 +102,7 @@ def test_claims_are_exact_and_do_not_promote_resume_snapshot(
     assert receipt["remaining_holds"] == list(evidence.REMAINING_HOLDS)
 
 
+@needs_local_evidence
 def test_history_rejects_gap_nonfinite_and_wrong_running_best() -> None:
     path = evidence.CANONICAL_REPO_ROOT / "outputs/kaggle/st_r3_checkpoint_recovery/secondary/history.csv"
     raw = path.read_bytes()
@@ -106,6 +115,7 @@ def test_history_rejects_gap_nonfinite_and_wrong_running_best() -> None:
         evidence._parse_history(raw.replace(b"0.9003592413566567,1", b"0.9003592413566568,1", 1))
 
 
+@needs_local_evidence
 def test_snapshot_manifest_requires_exact_six_file_set() -> None:
     authority = evidence.PRODUCTION_AUTHORITY
     path = evidence.CANONICAL_REPO_ROOT / authority.secondary_snapshot_manifest.relative
@@ -174,6 +184,7 @@ def test_read_fault_closes_descriptor(tmp_path: Path, monkeypatch: pytest.Monkey
     os.close(parent_fd)
 
 
+@needs_local_evidence
 def test_receipt_is_canonical_and_mutation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     collected = _production_collect(monkeypatch)
     raw = evidence.canonical_json_bytes(
@@ -186,6 +197,7 @@ def test_receipt_is_canonical_and_mutation_is_rejected(monkeypatch: pytest.Monke
         evidence._validate_receipt(evidence.canonical_json_bytes(value), collected, evidence.PRODUCTION_AUTHORITY)
 
 
+@needs_local_evidence
 def test_wrong_pin_size_fails_before_semantic_parsing() -> None:
     authority = evidence.PRODUCTION_AUTHORITY
     wrong = dataclasses.replace(authority.primary_best, bytes=authority.primary_best.bytes + 1)
