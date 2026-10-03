@@ -52,7 +52,9 @@ folds = np.array_split(np.array(uv), 4)
 
 
 def auc(yt, ys):
-    o = np.argsort(ys); r = np.empty(len(ys)); r[o] = np.arange(len(ys))
+    o = np.argsort(ys)
+    r = np.empty(len(ys))
+    r[o] = np.arange(len(ys))
     p = yt == 1
     return (r[p].sum() - p.sum() * (p.sum() - 1) / 2) / max(1, p.sum() * (~p).sum())
 
@@ -69,7 +71,7 @@ for k, vf in enumerate(folds):
 print(f"grouped CV AUC: {np.mean(aucs):.4f} +- {np.std(aucs):.4f}")
 
 bst = lgb.train(PARAMS, lgb.Dataset(Xtr, label=ytr), num_boost_round=300)
-imp = sorted(zip(FEATS + ["is_steal"], bst.feature_importance("gain")), key=lambda t: -t[1])
+imp = sorted(zip(FEATS + ["is_steal"], bst.feature_importance("gain"), strict=True), key=lambda t: -t[1])
 print("feature gain:", [(f, round(float(g), 1)) for f, g in imp])
 
 ev_scores = bst.predict(Xev)

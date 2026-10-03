@@ -1,8 +1,8 @@
 # Frozen-encoder explicit two-child head 設計契約
 
-Updated: 2026-09-02 (Asia/Tokyo)
+Updated: 2026-09-05 (Asia/Tokyo)
 
-Status: **DESIGN_ONLY / HOLD_ARTIFACTS_AND_REMAINING_TRAIN**
+Status: **DESIGN_ONLY / HOLD_SUPPORT_RUNTIME_REMAINING_TRAIN_AND_PROMOTION_PROVENANCE**
 
 ## 1. 結論と仮説
 
@@ -60,10 +60,13 @@ calibration は前段 gate であって公式 graph metric の代用ではない
   と宣言されている。
 - frozen primary checkpoint の既知 SHA-256 は
   `12f6881ee3620a831697ca098ff8f48e687a24225f4e048b538deec3562fe771`
-  (legacy epoch 400)、secondary は
+  (`edge_predictor_best.pth`, 8,363,159 bytes, best epoch 不明)、secondary は
   `9bac2fa0dadc4a6fc1899e0caf187f4b553e0a7cd90ba1261a68b35ffe9e305f`
-  (legacy epoch 400) である。legacy診断は前者一個、promotionは同じprimary architectureの
+  (`edge_predictor_best.pth`, 8,363,159 bytes, exact history の best epoch 381) である。
+  legacy診断は前者一個、promotionは同じprimary architectureの
   outer-excluded checkpointをfoldごとに一個使い、secondary featureは混ぜない。
+  回収 bytes と E22 runtime path/hash の identity だけが SHIP で、strict load、
+  re-run output parity、checkpoint-to-raw causal proof は未検証のため HOLD である。
 - 既存 tiny patch CNN は raw `(t,t+1)` patch を二 channel 入力にし、
   4-fold video-grouped CV を行うが、parent-centered binary classification であり、
   二娘 relation を陽に入力しない。既存 division-window fine-tune は全モデルを
@@ -78,7 +81,7 @@ calibration は前段 gate であって公式 graph metric の代用ではない
   learned rankingにはsection 10の別type/validator/mutatorが必要である。
 
 linked worktree の ignored directory は共有されないため、main project
-`/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking` も read-only 監査した。
+`~/コンペティション/Kaggle/biohub-cell-tracking` も read-only 監査した。
 そこでは `official` が上記 gitlink で初期化済みかつ clean であり、次の実 bytes を確認した。
 
 - `official/src/tracking_cellmot/models/temporal_unet.py` と
@@ -111,9 +114,10 @@ top-level inventory（GEFF/Zarr の内部 array を開かない）では次の�
 - `outputs` にある raw GEFF は合計40 roots（public-four 4 + sealed evaluation 36）で、
   remaining-train raw prediction bundle はない。これはpath/root inventoryだけの確認で、sealed
   GEFF/GTやpublic/sealed submission/stats/score CSVは本設計の入力として読んでいない。
-- 上記 DeepCenter checkpoint/manifest はある（checkpoint 37,876,911 bytes、manifest SHA
-  `1eedc1af72b10c464c6995013075310510b6f6e634450ff2bc170c67b89ce911`）が、primary
-  `12f...`、secondary `9bac...` の checkpoint bytes は見つからない。
+- 上記 DeepCenter checkpoint/manifest に加え、2026-09-05 の recovery で primary
+  `12f...`、secondary `9bac...` の exact checkpoint bytes も得た。ただし
+  support-pack 全 source/wheels と strict-load runtime receipt は未回収である。
+  primary `checkpoint_last.pth` (`8294...`) は `UNPINNED_LOCAL_OBSERVATION` である。
 - materialized support-pack tree / wheels はなく、main `official` の model sourceだけが二file hashで
   一致する。manifest-declared support-pack pathはKaggle runtimeの `/kaggle/input/...` で、local
   実体ではない。
@@ -127,7 +131,7 @@ top-level inventory（GEFF/Zarr の内部 array を開かない）では次の�
 
 - support-pack の全実 Python bytes/wheelsと、primary checkpoint configにおける feature channel、
   dtype、strict load（main official sourceのdefault/APIだけは確認済み）;
-- primary / secondary checkpoint bytes と strict load;
+- primary / secondary checkpoint の support runtime での strict load;
 - remaining-train image Zarr、GT GEFF、baseline raw GEFF、pair-context feature cache;
 - raw GEFF node ID と feature tap 時点の candidate ID の exact 対応;
 - head の実 runtime、RSS/VRAM、feature-cache disk 使用量。
@@ -137,13 +141,15 @@ top-level inventory（GEFF/Zarr の内部 array を開かない）では次の�
 (`git submodule status` の先頭が `-`) であり、公式 scorer の実 bytes/test は今回
 再検証できない。`official/` は引き続き read-only とする。
 
-従って frozen feature tap は **SOURCE_API_VERIFIED / RUNTIME_BYTES_UNVERIFIED**、学習開始は
-**HOLD_ARTIFACTS_AND_REMAINING_TRAIN** である。コードを推測して実装したり、別 checkpoint
-や sealed evaluation data で穴埋めしない。
+従って frozen feature tap は **SOURCE_API_VERIFIED / CHECKPOINT_BYTES_RECOVERED /
+SUPPORT_RUNTIME_UNVERIFIED**、学習開始は
+**HOLD_SUPPORT_RUNTIME_REMAINING_TRAIN_AND_PROMOTION_PROVENANCE** である。
+コードを推測して実装したり、別 checkpoint や sealed evaluation data で
+穴埋めしない。
 
 ### 2.3 Upstream provenance blocker と promotion grade
 
-既知primary epoch-400 checkpointと既存raw predictionsには、学習stem manifest、split、各stemを
+既知primary `edge_predictor_best` checkpoint（best epoch 不明）と既存raw predictionsには、学習stem manifest、split、各stemを
 除外したOOF checkpoint/featureの実artifactがない。primary encoder/detector/association stackが
 全199 train videosを見た可能性を排除できない。このcheckpointからremaining videoのraw graphや
 featureを作り、headだけをvideo-grouped CVしても、validation videoはupstream stackに対して
@@ -1264,8 +1270,9 @@ radius/K/cap変更、broader orphan/steal mutationはv1 ablationに入れない�
 学習実装へ進む前に次が必要である。
 
 1. hash-pinned support-pack source treeとoffline wheels;
-2. legacy診断にはexact primary checkpoint bytes/config、promotionには5 outer-excluded upstream
-   checkpoint/raw/feature bundlesとfinal remaining-only upstream checkpoint/raw/feature context;
+2. legacy診断には回収済み exact primary checkpoint/config の support runtime
+   strict-load receipt、promotionには5 outer-excluded upstream checkpoint/raw/feature bundlesと
+   final remaining-only upstream checkpoint/raw/feature context;
 3. remaining trainのcomplete Zarr + GT GEFF inventoryとsealed exclusion manifest;
 4. 各outer contextのpinned baseline raw GEFFを再生成できるinference command/config/provenance;
 5. initializedかつcleanなofficial submodule（read-only）;

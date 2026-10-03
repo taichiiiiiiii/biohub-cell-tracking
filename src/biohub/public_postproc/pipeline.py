@@ -1,3 +1,7 @@
+# Derived from the public Kaggle notebook "Clean Approach + Lightweight Local CV | No Hack"
+# by Yusuke Togashi (https://www.kaggle.com/code/yusuketogashi/clean-approach-lightweight-local-cv-no-hack),
+# licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
+# Modified: ported from notebook cells into a torch-free package; see THIRD_PARTY_NOTICES.md.
 """Orchestrates the post-processing stack, ported verbatim from the notebook's
 ``filter_output_graph`` function and the CSV-writing loop that calls it once
 per prediction ``.geff``.
@@ -27,7 +31,7 @@ import pandas as pd
 
 from biohub.io import load_geff_graph
 from biohub.public_postproc.config import PostprocConfig
-from biohub.public_postproc.csv_out import SubmissionCsvWriter, write_run_stats
+from biohub.public_postproc.csv_out import NodeSerializer, SubmissionCsvWriter, write_run_stats
 from biohub.public_postproc.deepcenter import load_deepcenter_veto_detector
 from biohub.public_postproc.divisions import (
     _TWIN_COUNTER_KEYS,
@@ -57,6 +61,7 @@ from biohub.public_postproc.graph_ops import (
     filter_short_track_components,
     linefit_smooth_output_graph,
     motion_relink_edges,
+    prepare_consensus_reservations,
     recover_strict_gap2,
 )
 
@@ -967,6 +972,77 @@ def _reject_twin_debug_aliases(
             _raise_twin_debug_alias(debug_path, artifact)
 
 
+def _unselected_association_priors(
+    priors: dict[tuple[int, int], float] | None,
+    raw_edges: list[dict[str, object]],
+    nodes_by_id: dict[int, dict[str, object]],
+) -> dict[tuple[int, int], float]:
+    """Validate learned association priors and keep only ILP-unselected pairs.
+
+    Returns a new dict of float probabilities for pairs that are *not* present
+    in the ORIGINAL ``raw_edges`` (selected pairs keep whatever probability the
+    edge itself carries; they are never overwritten).  Pairs whose endpoints no
+    longer exist in ``nodes_by_id`` are excluded -- pre-linefit has already
+    dropped ILP-unselected nodes.  Every other pair must reference two existing
+    nodes whose builtin ``int`` times satisfy ``t == source_t + 1``; missing or
+    invalid times raise ``ValueError``, including for selected pairs.
+
+    No input is mutated.
+    """
+    if priors is None:
+        return {}
+    if type(priors) is not dict:
+        raise ValueError("association_priors must be a dict or None")
+
+    selected_pairs = {
+        (int(edge["source_id"]), int(edge["target_id"])) for edge in raw_edges
+    }
+
+    def _time(node_id: int) -> int:
+        t = nodes_by_id.get(node_id, {}).get("t")
+        if type(t) is not int:
+            raise ValueError(
+                f"association_priors endpoint {node_id!r} needs a builtin int t: {t!r}"
+            )
+        return t
+
+    result: dict[tuple[int, int], float] = {}
+    for key, value in priors.items():
+        if type(key) is not tuple or len(key) != 2:
+            raise ValueError(
+                f"association_priors keys must be 2-tuples of builtin ints: {key!r}"
+            )
+        sid, tid = key
+        if type(sid) is not int or type(tid) is not int:
+            raise ValueError(
+                f"association_priors keys must be 2-tuples of builtin ints: {key!r}"
+            )
+        if type(value) is bool or type(value) not in (int, float):
+            raise ValueError(
+                f"association_priors values must be builtin int or float: {value!r}"
+            )
+        if value < 0 or value > 1:
+            raise ValueError(
+                f"association_priors values must be within [0, 1]: {value!r}"
+            )
+        prob = float(value)
+        if not math.isfinite(prob):
+            raise ValueError(
+                f"association_priors values must be finite: {value!r}"
+            )
+        if sid not in nodes_by_id or tid not in nodes_by_id:
+            continue
+        if _time(tid) != _time(sid) + 1:
+            raise ValueError(
+                "association_priors endpoints must be adjacent frames: "
+                f"({sid}, {tid}) -> t={_time(sid)}, t={_time(tid)}"
+            )
+        if (sid, tid) in selected_pairs:
+            continue
+        result[(sid, tid)] = prob
+    return result
+
+
 def filter_output_graph_pre_linefit(
     cfg: PostprocConfig,
     nodes_by_id: dict[int, dict[str, object]],
@@ -976,6 +1052,12 @@ def filter_output_graph_pre_linefit(
     *,
     twin_debug_collector: _TwinDebugCollector | None = None,
     twin_plan_hook: TwinPlanHook | None = None,
+    association_priors: dict[tuple[int, int], float] | None = None,
+    appearance_frames: dict[int, dict] | None = None,
+    consensus_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
+    consensus_soft_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
+    short_track_consensus_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
+    bidirectional_motion_consistency: bool = False,
 ) -> tuple[dict[int, dict[str, object]], list[dict[str, object]], dict[str, int]]:
     """Everything ``filter_output_graph`` does *except* the final linefit-smoothing call.
 
@@ -983,12 +1065,31 @@ def filter_output_graph_pre_linefit(
     (``filter_short_track_components`` already ran); only coordinates can
     still move.
     """
+    if appearance_frames is not None:
+        # Opt-in appearance features: exact non-empty frame map, motion relink
+        # enabled, and never combined with E27 association priors.
+        if type(appearance_frames) is not dict or not appearance_frames:
+            raise ValueError("appearance_frames must be a non-empty exact dict")
+        if not cfg.OUTPUT_MOTION_RELINK:
+            raise ValueError("appearance_frames requires OUTPUT_MOTION_RELINK")
+        if association_priors is not None:
+            raise ValueError("appearance_frames cannot be combined with association_priors")
+    if appearance_frames is not None and (
+        consensus_pairs_by_t is not None or consensus_soft_pairs_by_t is not None
+    ):
+        raise ValueError("consensus pairs cannot be combined with appearance_frames")
+    if consensus_pairs_by_t is not None and consensus_soft_pairs_by_t is not None:
+        raise ValueError("hard and soft consensus pairs cannot be combined")
+    unselected_priors = _unselected_association_priors(
+        association_priors, raw_edges, nodes_by_id
+    )
     _require_steal_twin_r1_dry_run(cfg)
     if cfg.OUTPUT_STEAL_TWIN_REWIRE and cfg.STEAL_TWIN_DEBUG_JSONL and twin_debug_collector is None:
         raise RuntimeError("twin debug path requires a run-level collector")
 
     stats = new_stats()
     stats["raw_edges"] = len(raw_edges)
+    raw_edges_for_consensus = [dict(edge) for edge in raw_edges]
 
     # One shared frame cache for the whole pre-linefit stack: E23 all-node
     # centroid refinement reads each timepoint once, and gap-close /
@@ -1029,7 +1130,39 @@ def filter_output_graph_pre_linefit(
             if np.isfinite(prob):
                 key = (int(edge["source_id"]), int(edge["target_id"]))
                 learned_edge_probs[key] = max(learned_edge_probs.get(key, float("-inf")), prob)
-        motion_edges = motion_relink_edges(cfg, nodes_by_id, stats, learned_edge_probs)
+        learned_edge_probs.update(unselected_priors)
+        hard_consensus = (
+            None
+            if consensus_pairs_by_t is None
+            else prepare_consensus_reservations(
+                consensus_pairs_by_t,
+                nodes_by_id,
+                raw_edges_for_consensus,
+                edges,
+                cfg.MOTION_RELINK_TIGHT_UM,
+            )
+        )
+        soft_consensus = (
+            None
+            if consensus_soft_pairs_by_t is None
+            else prepare_consensus_reservations(
+                consensus_soft_pairs_by_t,
+                nodes_by_id,
+                raw_edges_for_consensus,
+                edges,
+                cfg.MOTION_RELINK_TIGHT_UM,
+            )
+        )
+        motion_edges = motion_relink_edges(
+            cfg,
+            nodes_by_id,
+            stats,
+            learned_edge_probs,
+            appearance_frames=appearance_frames,
+            consensus_pairs_by_t=hard_consensus,
+            consensus_soft_pairs_by_t=soft_consensus,
+            bidirectional_motion_consistency=bidirectional_motion_consistency,
+        )
         if motion_edges:
             stats["motion_relink_replaced_raw_edges"] = len(edges)
             edges = motion_edges
@@ -1206,7 +1339,13 @@ def filter_output_graph_pre_linefit(
 
     short_nodes_before = len(nodes_by_id)
     short_edges_before = len(edges)
-    nodes_by_id, edges = filter_short_track_components(cfg, nodes_by_id, edges, stats)
+    if short_track_consensus_pairs_by_t is None:
+        nodes_by_id, edges = filter_short_track_components(cfg, nodes_by_id, edges, stats)
+    else:
+        nodes_by_id, edges = filter_short_track_components(
+            cfg, nodes_by_id, edges, stats,
+            consensus_proof_pairs_by_t=short_track_consensus_pairs_by_t,
+        )
     if twin_candidate_active:
         stats["steal_twin_short_nodes_removed_observed"] = _twin_observed_removal(
             short_nodes_before, len(nodes_by_id), "short-track filter"
@@ -1217,6 +1356,21 @@ def filter_output_graph_pre_linefit(
         stats["steal_twin_final_nodes"] = len(nodes_by_id)
         stats["steal_twin_final_edges"] = len(edges)
         stats["steal_twin_final_fork_sources"] = _twin_fork_sources(edges)
+
+    if bidirectional_motion_consistency and edges:
+        # E34 safety gate: a malformed downstream merge must never publish an
+        # invalid graph. Keep the strongest edge per target and per source.
+        best_target: dict[int, dict[str, object]] = {}
+        for edge in edges:
+            tid = int(edge["target_id"])
+            if tid not in best_target or edge_sort_key(edge) > edge_sort_key(best_target[tid]):
+                best_target[tid] = edge
+        best_source: dict[int, dict[str, object]] = {}
+        for edge in best_target.values():
+            sid = int(edge["source_id"])
+            if sid not in best_source or edge_sort_key(edge) > edge_sort_key(best_source[sid]):
+                best_source[sid] = edge
+        edges = list(best_source.values())
 
     return nodes_by_id, edges, stats
 
@@ -1230,6 +1384,12 @@ def filter_output_graph(
     *,
     twin_debug_collector: _TwinDebugCollector | None = None,
     twin_plan_hook: TwinPlanHook | None = None,
+    association_priors: dict[tuple[int, int], float] | None = None,
+    appearance_frames: dict[int, dict] | None = None,
+    consensus_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
+    consensus_soft_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
+    short_track_consensus_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
+    bidirectional_motion_consistency: bool = False,
 ) -> tuple[dict[int, dict[str, object]], list[dict[str, object]], dict[str, int]]:
     nodes_by_id, edges, stats = filter_output_graph_pre_linefit(
         cfg,
@@ -1239,6 +1399,12 @@ def filter_output_graph(
         deepcenter_bundle=deepcenter_bundle,
         twin_debug_collector=twin_debug_collector,
         twin_plan_hook=twin_plan_hook,
+        association_priors=association_priors,
+        consensus_pairs_by_t=consensus_pairs_by_t,
+        consensus_soft_pairs_by_t=consensus_soft_pairs_by_t,
+        short_track_consensus_pairs_by_t=short_track_consensus_pairs_by_t,
+        bidirectional_motion_consistency=bidirectional_motion_consistency,
+        **({} if appearance_frames is None else {"appearance_frames": appearance_frames}),
     )
     twin_candidate_active = (
         stats["steal_twin_pure_nodes"] > 0 or stats["steal_twin_pure_edges"] > 0
@@ -1336,18 +1502,93 @@ def run_postproc_core(
     raw_stats_hook: RawStatsHook | None = None,
     write_run_stats_output: bool = True,
     exclusive_output: bool = False,
+    node_serializer: NodeSerializer | None = None,
+    association_priors_by_dataset: dict[str, dict[tuple[int, int], float]] | None = None,
+    appearance_loader: Callable[[str, dict[int, dict[str, object]]], dict[int, dict]]
+    | None = None,
+    consensus_loader: Callable[[str, dict[int, dict[str, object]]], dict[int, list[tuple[int, int]]]]
+    | None = None,
+    consensus_soft_loader: Callable[[str, dict[int, dict[str, object]]], dict[int, list[tuple[int, int]]]]
+    | None = None,
+    short_track_consensus_loader: Callable[[str, dict[int, dict[str, object]]], dict[int, list[tuple[int, int]]]]
+    | None = None,
+    bidirectional_motion_consistency: bool = False,
 ) -> dict[str, object]:
     """Run the full stack over an explicit GEFF sequence without reordering it.
 
     This is the sole full-run dataset loop.  The legacy entry point supplies a
     sorted discovery result; the ST-R3 adapter supplies its frozen literal
-    order and production hooks.
+    order and production hooks. An optional serializer changes only the node
+    CSV boundary; the default retains the legacy byte representation.
+
+    ``association_priors_by_dataset`` is opt-in.  ``None`` (default) keeps the
+    legacy behaviour exactly.  When supplied it must be an outer ``dict`` whose
+    keys are exactly the unique GEFF stems; every inner mapping is validated up
+    front with ``_unselected_association_priors`` and snapshotted so that later
+    hook activity cannot alter what a downstream dataset consumes.
     """
     geffs = tuple(geff_paths)
     if not geffs:
         raise RuntimeError("no GEFF paths supplied")
     if any(type(path) is not type(Path()) for path in geffs):
         raise TypeError("GEFF paths must be exact pathlib.Path instances")
+
+    if appearance_loader is not None:
+        # Opt-in per-dataset appearance features; validated up front so no
+        # video is ever half-featured.  No global default config is implied.
+        if not callable(appearance_loader):
+            raise ValueError("appearance_loader must be callable")
+        if not cfg.OUTPUT_MOTION_RELINK:
+            raise ValueError("appearance_loader requires OUTPUT_MOTION_RELINK")
+        if association_priors_by_dataset is not None:
+            raise ValueError("appearance_loader cannot be combined with association_priors_by_dataset")
+        stems = tuple(path.stem for path in geffs)
+        if len(set(stems)) != len(stems):
+            raise ValueError("GEFF dataset stems must be unique when an appearance loader is supplied")
+    for loader_name, consensus_callback in (
+        ("consensus_loader", consensus_loader),
+        ("consensus_soft_loader", consensus_soft_loader),
+    ):
+        if consensus_callback is None:
+            continue
+        if not callable(consensus_callback):
+            raise ValueError(f"{loader_name} must be callable")
+        if appearance_loader is not None or association_priors_by_dataset is not None:
+            raise ValueError(f"{loader_name} cannot be combined with appearance/prior loaders")
+        stems = tuple(path.stem for path in geffs)
+        if len(set(stems)) != len(stems):
+            raise ValueError("GEFF dataset stems must be unique when a consensus loader is supplied")
+    if consensus_loader is not None and consensus_soft_loader is not None:
+        raise ValueError("hard and soft consensus loaders cannot be combined")
+    if short_track_consensus_loader is not None:
+        if not callable(short_track_consensus_loader):
+            raise ValueError("short_track_consensus_loader must be callable")
+        if appearance_loader is not None or consensus_loader is not None or consensus_soft_loader is not None:
+            raise ValueError("short-track consensus loader cannot be combined with other feature loaders")
+
+    prior_map: dict[str, dict[tuple[int, int], float]] | None = None
+    if association_priors_by_dataset is not None:
+        if type(association_priors_by_dataset) is not dict:
+            raise ValueError("association_priors_by_dataset must be an exact dict")
+        for key in association_priors_by_dataset:
+            if type(key) is not str:
+                raise ValueError("association_priors_by_dataset keys must be exact str")
+        stems = tuple(path.stem for path in geffs)
+        if len(set(stems)) != len(stems):
+            raise ValueError("GEFF dataset stems must be unique when priors are supplied")
+        if set(association_priors_by_dataset) != set(stems):
+            raise ValueError(
+                "association_priors_by_dataset keys must exactly match the GEFF dataset stems"
+            )
+        prior_map = {}
+        for stem in stems:
+            inner = association_priors_by_dataset[stem]
+            if inner is None or type(inner) is not dict:
+                raise ValueError(
+                    f"association priors for {stem!r} must be an exact dict"
+                )
+            _unselected_association_priors(inner, [], {})
+            prior_map[stem] = inner.copy()
 
     _require_steal_twin_r1_dry_run(cfg)
     effective_run_stats_path = run_stats_path or out_csv.parent / "run_stats.csv"
@@ -1372,7 +1613,7 @@ def run_postproc_core(
     total_edges = 0
 
     with out_csv.open("x" if exclusive_output else "w", newline="") as handle:
-        writer = SubmissionCsvWriter(handle)
+        writer = SubmissionCsvWriter(handle, node_serializer=node_serializer)
 
         for sequence, geff_path in enumerate(geffs):
             dataset = geff_path.stem
@@ -1381,6 +1622,43 @@ def run_postproc_core(
             nodes_by_id, raw_edges = _load_geff_as_dicts(geff_path)
 
             raw_node_count = len(nodes_by_id)
+            appearance_kwargs: dict[str, object] = {}
+            if appearance_loader is not None:
+                frames = appearance_loader(
+                    dataset, {node_id: dict(node) for node_id, node in nodes_by_id.items()}
+                )
+                if type(frames) is not dict or not frames:
+                    raise ValueError(f"appearance_loader returned no features for {dataset!r}")
+                appearance_kwargs["appearance_frames"] = frames
+                del frames
+            if consensus_loader is not None:
+                consensus = consensus_loader(
+                    dataset, {node_id: dict(node) for node_id, node in nodes_by_id.items()}
+                )
+                if type(consensus) is not dict:
+                    raise ValueError(f"consensus_loader returned non-dict for {dataset!r}")
+                appearance_kwargs["consensus_pairs_by_t"] = consensus
+                del consensus
+            if consensus_soft_loader is not None:
+                consensus = consensus_soft_loader(
+                    dataset, {node_id: dict(node) for node_id, node in nodes_by_id.items()}
+                )
+                if type(consensus) is not dict:
+                    raise ValueError(
+                        f"consensus_soft_loader returned non-dict for {dataset!r}"
+                    )
+                appearance_kwargs["consensus_soft_pairs_by_t"] = consensus
+                del consensus
+            if short_track_consensus_loader is not None:
+                consensus = short_track_consensus_loader(
+                    dataset, {node_id: dict(node) for node_id, node in nodes_by_id.items()}
+                )
+                if type(consensus) is not dict:
+                    raise ValueError(
+                        f"short_track_consensus_loader returned non-dict for {dataset!r}"
+                    )
+                appearance_kwargs["short_track_consensus_pairs_by_t"] = consensus
+                del consensus
             nodes_by_id, edges, filter_stats = filter_output_graph(
                 cfg,
                 nodes_by_id,
@@ -1389,7 +1667,11 @@ def run_postproc_core(
                 deepcenter_bundle=deepcenter_detector,
                 twin_debug_collector=twin_debug_collector,
                 twin_plan_hook=twin_plan_hook,
+                association_priors=None if prior_map is None else prior_map[dataset],
+                **appearance_kwargs,
+                bidirectional_motion_consistency=bidirectional_motion_consistency,
             )
+            del appearance_kwargs
             if not nodes_by_id:
                 raise AssertionError(f"{dataset}: post-processing removed every node")
 

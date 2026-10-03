@@ -35,10 +35,10 @@ filesystem anchor with no-follow semantics.
 
 ```text
 PYTHONDONTWRITEBYTECODE=1 \
-PYTHONPATH=/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking/src \
-/Users/taichi/コンペティション/Kaggle/biohub-cell-tracking/.venv/bin/python \
+PYTHONPATH=~/コンペティション/Kaggle/biohub-cell-tracking/src \
+~/コンペティション/Kaggle/biohub-cell-tracking/.venv/bin/python \
 scripts/tuple_census.py \
-  --repo-root /Users/taichi/コンペティション/Kaggle/biohub-cell-tracking
+  --repo-root ~/コンペティション/Kaggle/biohub-cell-tracking
 ```
 
 Script SHA-256:

@@ -1,3 +1,7 @@
+# Derived from the public Kaggle notebook "Clean Approach + Lightweight Local CV | No Hack"
+# by Yusuke Togashi (https://www.kaggle.com/code/yusuketogashi/clean-approach-lightweight-local-cv-no-hack),
+# licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
+# Modified: ported from notebook cells into a torch-free package; see THIRD_PARTY_NOTICES.md.
 """DeepCenter add-only repair gate, ported verbatim from the notebook cell.
 
 Disabled by the ``biohub_132_clean_short_track_rescue_lightcv_nohack`` preset
@@ -297,6 +301,29 @@ def load_deepcenter_veto_detector_strict(
         manifest_path,
         expected_checkpoint_sha256=STRICT_DEEPCENTER_CHECKPOINT_SHA256,
         expected_manifest_sha256=STRICT_DEEPCENTER_MANIFEST_SHA256,
+        expected_epoch=STRICT_DEEPCENTER_EPOCH,
+        expected_manifest_model_config=STRICT_DEEPCENTER_MANIFEST_MODEL_CONFIG,
+        expected_checkpoint_model_config=STRICT_DEEPCENTER_CHECKPOINT_MODEL_CONFIG,
+    )
+
+
+def load_deepcenter_veto_detector_e31_target(
+    cfg: PostprocConfig,
+    checkpoint_path: Path,
+    manifest_path: Path,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Load E31 target ep500 DeepCenter artifact (package unchanged bestepoch2).
+
+    Uses the updated manifest hash for the 500-epoch metadata while keeping
+    all other expected constants identical to the strict loader. Never falls
+    back to alternate artifacts or relaxed verification.
+    """
+    return _load_deepcenter_veto_detector_strict_verified(
+        cfg,
+        checkpoint_path,
+        manifest_path,
+        expected_checkpoint_sha256=STRICT_DEEPCENTER_CHECKPOINT_SHA256,
+        expected_manifest_sha256="3bfe97304e9bbc3b3481a095392a1e83937315325bac8b987eb527d2951b96f3",
         expected_epoch=STRICT_DEEPCENTER_EPOCH,
         expected_manifest_model_config=STRICT_DEEPCENTER_MANIFEST_MODEL_CONFIG,
         expected_checkpoint_model_config=STRICT_DEEPCENTER_CHECKPOINT_MODEL_CONFIG,

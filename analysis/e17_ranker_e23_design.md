@@ -1,8 +1,20 @@
 # E17 frozen association ranker on E23: constrained tie-break v1 design
 
-Updated: 2026-08-30 (Asia/Tokyo)
+Updated: 2026-09-05 (Asia/Tokyo; status reconciliation only, frozen candidate unchanged)
 
-Status: **HOLD — no implementation; E23 Phase 3/4 parity and the local ranker artifact are missing**
+Status: **HOLD — no candidate implementation/readout; current-commit prerequisites,
+verified consumer artifact, feature/support-source contract, and pre-ILP inputs remain incomplete**
+
+2026-09-05 reconciliation: E23 public-four Phase 3/4 parity completed on
+2026-08-30 at `022222b79a10df4908ee46b7ccba6ea088aa255c`, as recorded in the
+[ledger](experiment_ledger.md). A hash-matching ranker cache is quarantined,
+not absent; it is not an approved consumer root. Follow the
+[acquisition runbook](e17_ranker_artifact_acquisition_runbook.md) for the
+remaining version/license/source/feature gates. The current facts below
+supersede the original 2026-08-30 missing-artifact/parity status.
+Exact-implementation-commit parity is still required.
+The current execution order is in
+[the evidence-based strategy](experiment_strategy_20260905.md).
 
 This document specifies one candidate only: `e23_e17_ranker_tiebreak_v1`.
 It is subordinate to the [gold-loop protocol](gold_loop_protocol.md) and the
@@ -20,9 +32,9 @@ original two E23 score slots are merely assigned to the two candidates in the
 ranker's local order; the per-target candidate membership and score multiset
 remain unchanged. The unchanged ILP remains the only graph selector.
 
-The experiment cannot start yet. The active E23 Phase 3/4 parity contract is
-not complete, and the ranker dataset is not materialized anywhere under the
-current `outputs/` tree. In addition, the existing eval-36 GEFFs contain only
+The experiment cannot start yet. The implementation-commit prerequisite
+receipts and approved ranker consumer bundle are not complete. In addition,
+the existing eval-36 GEFFs contain only
 the solved graph and not the full pre-ILP candidate table or the 22 features.
 These are fail-closed prerequisites, not reasons to silently approximate the
 ranker downstream.
@@ -48,12 +60,14 @@ ranker downstream.
   | `model/local_association_ranker.pt` | `b49a9ab4228daba63d31056ae5beef9fd3e8bcd3ba26d9f57a45ef828d4fb4b8` |
   | `model/model_info.json` | `ba8d338f4eb0b8cfa9bcffc71f3619353ed3dc297b091eebaff23e5d266a96a7` |
 
-- At this audit, no `ASSOCIATION_RANKER_MANIFEST.json` or
-  `local_association_ranker.pt` exists under `outputs/` or elsewhere in this
-  checkout. Therefore the manifest's 22 ordered feature names, transforms,
-  normalization constants, model architecture, and output semantics have not
-  been locally verified. A remembered or reverse-engineered substitute is not
-  acceptable.
+- Hash-matching bytes for the three consumer files exist in
+  `outputs/local/e17_quarantine/cache_20260830T185150JST/payload/`, alongside
+  two provenance-only dataset files. The quarantine is not a consumer root.
+  Version binding, license acceptance, support-source/extractor semantics,
+  feature units/transforms/missing-value rules, complete model architecture,
+  and output calibration remain unverified. Serialized feature names and
+  tensor shapes do not establish those contracts. A remembered or
+  reverse-engineered substitute is not acceptable.
 - The landscape records the artifact as a constrained local tie-breaker and
   the old public ranker lineage as only `0.915`. It is evidence for an
   orthogonal component to falsify, not a claim that it beats E23.
@@ -68,9 +82,11 @@ ranker downstream.
   `solution` value was true. No ranker features or rejected candidates are
   present. Thus the pinned GEFF bundle is suitable for E23 post-processing
   parity, but not for this upstream ranker A/B.
-- E23 parity is explicitly blocked on Phase 3/4 in the
-  [parity runbook](e23_parity_runbook.md). Candidate scores read before that
-  parity closes are invalid.
+- Historical E23 Phase 3/4 public-four parity is complete at
+  `022222b79a10df4908ee46b7ccba6ea088aa255c`. Before this ranker candidate's
+  scores, require new strict E23/base1 prerequisite receipts bound to the
+  exact ranker implementation commit; the historical result alone does not
+  certify later code. See the [parity runbook](e23_parity_runbook.md).
 
 ### Frozen hypotheses, not verified facts
 
@@ -85,6 +101,32 @@ ranker downstream.
 - The frozen model may have been trained on all competition training videos.
   The local paired A/B can still falsify the pipeline change, but it cannot
   establish hidden-video generalization.
+
+### Source-semantics eligibility clarification (2026-09-05; no v1 knob change)
+
+The pretrained model's original grouping direction is not established by its
+generic "constrained local association tie-breaker" intent. Before implementing
+this incoming/pre-ILP consumer, the exact training/extractor/consumer source
+must establish group key (source versus target), labels, extraction stage,
+feature units/transforms, output domain/calibration, and compatibility with
+the E23 candidate rows. The quarantined stats report 126,705 groups but 126,828
+positive rows. This is a warning against assuming at most one true incoming
+parent per group, not proof of outgoing or posthoc semantics: the aggregation
+unit is unverified. If incoming/pre-ILP use cannot be justified, retain HOLD;
+do not transpose groups, approximate post-ILP features, or redefine frozen v1.
+
+2026-09-06 read-only audit: the quarantined manifest/info still do not define
+the grouping key, labels, extractor, or output calibration. The exact support
+predictor (`c44e771ba5980b820f93091e03a303c25dfe8f3232e501f54dc9565731c234b9`)
+first thresholds/sorts association candidates (lines 454–468), then applies
+configured per-source child/per-target parent caps while constructing edges
+(lines 470–488), and only later builds/solves the graph (lines 554–564).
+Thus "before ILP" alone does not identify the full candidate population: source
+eligibility must also bind extraction/insertion relative to these optional
+caps and the actual executed runtime patches. This is a source-contract
+clarification, not evidence that the ranker uses either stage or is incompatible.
+No ranker-specific extractor/trainer/consumer was found in the 13 pinned support
+Python files; the v21 source remains uncollected. HOLD and frozen v1 are unchanged.
 
 ## Exact candidate: `e23_e17_ranker_tiebreak_v1`
 
@@ -340,7 +382,8 @@ must be reported rather than only the combined number.
 
 ### Frozen gates
 
-1. **Prerequisites:** artifact/feature contract, E23 parity, off identity,
+1. **Prerequisites:** artifact/feature contract and source-semantics eligibility,
+   E23 parity, off identity,
    dry-run identity, conservation, tests, and eval36 dry-run feasibility all
    pass. Otherwise HOLD/REJECT without metric readout.
 2. **eval12:** paired mean combined-score delta `>= +0.005`, median `> 0`,
@@ -388,9 +431,11 @@ runtime is post-readout retuning and is forbidden for v1.
 
 ## Bounded future phases and stop conditions
 
-1. **R23-0 — prerequisite audit:** wait for active E23 Phase 3/4 land/review and
-   exact parity; materialize the pinned artifact separately and complete the
-   feature/schema audit. No ranker implementation before both pass.
+1. **R23-0 — prerequisite audit:** verify exact implementation-commit E23/base1
+   parity; publish the pinned consumer artifact through the acquisition
+   runbook and complete the feature/schema/source-semantics audit. No ranker
+   implementation before these pass. Historical Phase 3/4 parity alone does
+   not certify a later implementation commit.
 2. **R23-1 — pure loader/extractor/reranker:** implement strict artifact
    validation, manifest-driven features, local resolution, conservation,
    telemetry, and adversarial unit/property tests; connect dry-run only.
@@ -402,13 +447,15 @@ runtime is post-readout retuning and is forbidden for v1.
    eval12; only if it passes, eval24 and the eval36 roll-up. Append all commands,
    hashes, results, failures, and verdicts to the experiment ledger.
 
-Stop immediately on artifact or schema mismatch, inability to reproduce exact
+Stop immediately on artifact, schema, or source-semantics incompatibility,
+unresolved source-semantics eligibility, inability to reproduce exact
 E23 off, off/dry-run identity failure, candidate/objective conservation
 failure, nondeterminism, a staged metric miss, or a feasibility miss. Do not
 move the ranker downstream to work around missing features and do not reinterpret
 it as a global edge veto.
 
-The present decision is **HOLD pending E23 Phase 3/4 parity and local artifact
-materialization/feature-contract verification**. This HOLD does not claim the
+The present decision is **HOLD pending current-commit parity prerequisites,
+approved artifact publication, feature/support-source contract verification,
+and pre-ILP candidate inputs**. This HOLD does not claim the
 ranker hypothesis is false; it means no valid implementation or score readout
 can yet be made.

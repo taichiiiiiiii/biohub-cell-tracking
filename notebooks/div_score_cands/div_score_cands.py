@@ -113,7 +113,7 @@ def score_file(cands_csv):
             ])
             with torch.no_grad():
                 sc = torch.sigmoid(net(torch.from_numpy(norm(batch)).to(DEV))).cpu().numpy()
-            for g, v in zip(group, sc):
+            for g, v in zip(group, sc, strict=True):
                 out_rows.append({"stem": stem, "cand_id": g["cand_id"], "score": float(v)})
         print(f"  {stem}: scored={len(rr)}", flush=True)
     out_name = "cand_scores.csv" if cands_csv.name == "candidates.csv" else f"scores_{cands_csv.stem}.csv"

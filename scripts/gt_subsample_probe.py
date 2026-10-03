@@ -50,7 +50,7 @@ def subsample_gt(geff: Path, frac: float, seed: int):
             a = parent[a]
         return a
 
-    for s, t in zip(src, tgt):
+    for s, t in zip(src, tgt, strict=True):
         ra, rb = find(int(s)), find(int(t))
         if ra != rb:
             parent[ra] = rb

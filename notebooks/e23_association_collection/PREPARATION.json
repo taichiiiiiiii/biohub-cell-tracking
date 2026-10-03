@@ -1,0 +1,72 @@
+{
+  "status": "COLLECTION_NOTEBOOK_PREPARED_NOT_DISPATCHED",
+  "reference_sha256": "08395ca8615b6eeaaaeec521cd937c62d2212b7a20cf18be1a27478afd4af7ac",
+  "source_files": [
+    {
+      "path": "src/biohub/association_capture.py",
+      "sha256": "9015430194aad491bbc0df722fa966d9a21c469b29b833b090a6d445ccf4da36"
+    },
+    {
+      "path": "src/biohub/association_observer.py",
+      "sha256": "4615cce9840cc260530e965b4ccf6ecb47ed096335260a2148c67fa1eed45425"
+    },
+    {
+      "path": "src/biohub/association_instrumentation.py",
+      "sha256": "9fa79df7176d1f09ba840247dca8a71da204f62a2dbf877a2b8aa5617333b795"
+    },
+    {
+      "path": "src/biohub/association_parity.py",
+      "sha256": "3d0188c69c0b1d29c4cd0b057098df1adc8e24e3d35468b7df9f36a78557ecf7"
+    },
+    {
+      "path": "src/biohub/association_supervise.py",
+      "sha256": "457b8e3505b29bbf123c2effea4e56054a900f06777f71bc4b18b586d59692c6"
+    },
+    {
+      "path": "scripts/e23_association_bridge.py",
+      "sha256": "88b4df5da2493f719145ac20a3cefc0ad18407acddbe8cac5acdbebc11fa4bcf"
+    },
+    {
+      "path": "src/biohub/association_collection.py",
+      "sha256": "3e3bb41550a107a4f85d2d1465fab8cbcb372aa8538363878818a70326d3a5cb"
+    },
+    {
+      "path": "src/biohub/association_collection_supervise.py",
+      "sha256": "cc8a38c1e96da685d964133d02faca3931cdd924dccb41901243d1b25bdb2759"
+    },
+    {
+      "path": "scripts/e23_association_collect.py",
+      "sha256": "3e7416b41a69ce91ce49de106c57f54a996231b0079e21d10d2da5ef1bebefd6"
+    }
+  ],
+  "runtime_source_pins": {
+    "/kaggle/working/collection_payload/scripts/e23_association_bridge.py": "88b4df5da2493f719145ac20a3cefc0ad18407acddbe8cac5acdbebc11fa4bcf",
+    "/kaggle/working/collection_payload/src/biohub/__init__.py": "5cac316fbfce0ba07ad83c869a9b7edb239df6f59c7d409c3697fe2fbd4ac24d",
+    "/kaggle/working/collection_payload/src/biohub/association_capture.py": "9015430194aad491bbc0df722fa966d9a21c469b29b833b090a6d445ccf4da36",
+    "/kaggle/working/collection_payload/src/biohub/association_instrumentation.py": "9fa79df7176d1f09ba840247dca8a71da204f62a2dbf877a2b8aa5617333b795",
+    "/kaggle/working/collection_payload/src/biohub/association_observer.py": "4615cce9840cc260530e965b4ccf6ecb47ed096335260a2148c67fa1eed45425",
+    "/kaggle/working/collection_payload/src/biohub/association_parity.py": "3d0188c69c0b1d29c4cd0b057098df1adc8e24e3d35468b7df9f36a78557ecf7",
+    "/kaggle/working/collection_payload/src/biohub/association_supervise.py": "457b8e3505b29bbf123c2effea4e56054a900f06777f71bc4b18b586d59692c6",
+    "/kaggle/working/tracking_repo/scripts/augmentations.py": "13db09817bf492f8d0f710a0a4d09776320b262060167055090a303fc6057f4e",
+    "/kaggle/working/tracking_repo/scripts/dataspec.py": "e69bf952fb985477ac50ff8598a35020c95d20a035a09b81ab4056e655dd311f",
+    "/kaggle/working/tracking_repo/scripts/e23_observer_off.py": "8e7ac19e8b436d6777576b7ea2269464c4ed8842990b45448d40bf178f8f62de",
+    "/kaggle/working/tracking_repo/scripts/e23_observer_on.py": "e2fda47e41d970a2c650bbbbb5fe068b6e1b9667fdd91cb59cc2a3ac8ba95a9c",
+    "/kaggle/working/tracking_repo/scripts/evaluate.py": "614813cc51c3581c6ccda4bb20725a19da8ecac4a27620654bfca58319cffa3c",
+    "/kaggle/working/tracking_repo/scripts/predict_unet_transformer.py": "8e7ac19e8b436d6777576b7ea2269464c4ed8842990b45448d40bf178f8f62de",
+    "/kaggle/working/tracking_repo/scripts/train_unet_transformer.py": "c4f6317736bb3bb1ec8f3f6e9a6d935a463e3f0f1f685481b2d13218d35dc9ea",
+    "/kaggle/working/tracking_repo/src/biohub_tracking/__init__.py": "26a18d8da84e40da73281a48ebc3017d847a2e57431ab63e8629d2109e6e8571",
+    "/kaggle/working/tracking_repo/src/biohub_tracking/division_metrics.py": "d1cf1e0a43009d02174f1699ce2aa28458a2220ac4b521731d3bcf31cf8c76be",
+    "/kaggle/working/tracking_repo/src/biohub_tracking/img_proc.py": "00e8ef0adc8b39f1aaaa547ea6197b906bf9e8c009e339d3e95f8f8dbf31be3f",
+    "/kaggle/working/tracking_repo/src/biohub_tracking/io.py": "efae135b088cecaab463d889f16c885ef6da3ad27b0747327d8ddc28d866b7bd",
+    "/kaggle/working/tracking_repo/src/biohub_tracking/metrics.py": "31baf45b54c78f68bab4f65dd8f4b38bca702abb644171c6df7c46cdeef55d83",
+    "/kaggle/working/tracking_repo/src/biohub_tracking/models/__init__.py": "ab7587ef79856bae50d24b62e5805092d0459ee1c586522b763f9ef70c093e1d",
+    "/kaggle/working/tracking_repo/src/biohub_tracking/models/simple_node_transformer.py": "b97209edeb03840e80d903e3e2a8c81c520641c8ef343f6ca2904d0f80db064e",
+    "/kaggle/working/tracking_repo/src/biohub_tracking/models/temporal_unet.py": "d809c35d42f504161074ddeaaa7aee5b407e5bca7f9b4e1d5f9b2ff345666cac",
+    "/kaggle/working/collection_payload/src/biohub/association_collection.py": "3e3bb41550a107a4f85d2d1465fab8cbcb372aa8538363878818a70326d3a5cb",
+    "/kaggle/working/collection_payload/src/biohub/association_collection_supervise.py": "cc8a38c1e96da685d964133d02faca3931cdd924dccb41901243d1b25bdb2759",
+    "/kaggle/working/collection_payload/scripts/e23_association_collect.py": "3e7416b41a69ce91ce49de106c57f54a996231b0079e21d10d2da5ef1bebefd6"
+  },
+  "source_executed_locally": false,
+  "submission_authorized": false,
+  "parent_only": true
+}

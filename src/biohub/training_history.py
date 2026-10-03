@@ -894,8 +894,15 @@ def validate_resume_metadata(
             errors.append("resume model state payload does not match loaded checkpoint tensors")
         rng = state.get("rng")
         rng_fields = {"python", "numpy", "torch_cpu", "torch_cuda"}
+        # MPS runs must preserve their real accelerator stream as well. Keep
+        # the existing exact CPU/CUDA schema for non-MPS artifacts.
+        devices = [section.get("device") for section in (
+            manifest.get("hardware"), manifest.get("validation_snapshot"),
+        ) if isinstance(section, Mapping)]
+        if any(isinstance(device, str) and device.split(":", 1)[0] == "mps" for device in devices):
+            rng_fields.add("torch_mps")
         if not isinstance(rng, Mapping) or set(rng) != rng_fields:
-            errors.append("resume RNG state must contain exact Python/NumPy/Torch CPU/CUDA payloads")
+            errors.append(f"resume RNG state must contain exact payloads: {sorted(rng_fields)}")
         else:
             for name in sorted(rng_fields):
                 _validate_rng_payload(rng[name], f"resume RNG {name}", errors)
@@ -1051,6 +1058,7 @@ def _verify_training_run(
     *,
     checkpoint_metadata_loader: CheckpointMetadataLoader | None = None,
     parent_cv_context: Mapping[str, Any] | None = None,
+    unpublished_artifacts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a canonical report. Any uncertainty becomes a ``FAIL`` error."""
     root = Path(run_dir)
@@ -1061,9 +1069,20 @@ def _verify_training_run(
         if root.is_symlink() or not root.is_dir() or root.resolve(strict=True) != root.absolute():
             raise TrainingHistoryError("run directory must be a real directory, not a symlink")
         manifest_path = _contained_regular_file(root, "run_manifest.json")
-        artifacts_path = _contained_regular_file(root, "ARTIFACT_MANIFEST.json")
         manifest = _object(strict_json_load(manifest_path), "run_manifest.json")
-        artifacts = _object(strict_json_load(artifacts_path), "ARTIFACT_MANIFEST.json")
+        if unpublished_artifacts is None:
+            artifacts_path = _contained_regular_file(root, "ARTIFACT_MANIFEST.json")
+            artifacts = _object(strict_json_load(artifacts_path), "ARTIFACT_MANIFEST.json")
+        else:
+            # Writer-only prepublication check: no provisional PASS file and no
+            # bypass of the public verifier's required saved-manifest contract.
+            target = root / "ARTIFACT_MANIFEST.json"
+            if target.exists() or target.is_symlink():
+                raise TrainingHistoryError("unpublished inventory cannot override an existing manifest")
+            if manifest.get("purpose") != "candidate" or manifest.get("run_kind") != "single_split":
+                raise TrainingHistoryError("unpublished inventory supports only single-split candidates")
+            artifacts = _object(strict_json_loads(canonical_json_bytes(unpublished_artifacts).decode()),
+                                "unpublished artifact inventory")
         _validate_manifest(manifest, errors)
         _validate_artifacts(root, artifacts, errors, is_cv=manifest.get("run_kind") == "cv")
         if artifacts.get("run_id") != manifest.get("run_id"):
@@ -1188,6 +1207,18 @@ def execution_config_sha256(manifest: Mapping[str, Any]) -> str:
     )
     payload = {field: manifest.get(field) for field in fields}
     payload["validation_runtime"] = validation_runtime
+    if "execution_hash_policy" in manifest:
+        payload["execution_hash_policy"] = manifest["execution_hash_policy"]
+        if manifest["execution_hash_policy"] == "predeclared_with_result_bindings_v1":
+            # An output checksum cannot exist before training. Keep every
+            # acceptance threshold/path pinned, excluding only the final result
+            # byte binding; _validate_hash_sources still checks that exact file.
+            thresholds = payload.get("acceptance_thresholds")
+            if isinstance(thresholds, Mapping) and isinstance(thresholds.get("per_video"), Mapping):
+                payload["acceptance_thresholds"] = {
+                    **thresholds,
+                    "per_video": {key: value for key, value in thresholds["per_video"].items() if key != "sha256"},
+                }
     return canonical_sha256(payload)
 
 
@@ -1279,6 +1310,7 @@ def _validate_manifest(manifest: Mapping[str, Any], errors: list[str]) -> None:
     if missing:
         errors.append(f"manifest missing fields: {missing}")
     optional = {
+        "execution_hash_policy",
         "task_type",
         "validation_tolerances",
         "warm_start",
@@ -1291,6 +1323,9 @@ def _validate_manifest(manifest: Mapping[str, Any], errors: list[str]) -> None:
     extra = sorted(set(manifest) - required - optional)
     if extra:
         errors.append(f"manifest contains unknown fields: {extra}")
+    if ("execution_hash_policy" in manifest
+            and manifest["execution_hash_policy"] != "predeclared_with_result_bindings_v1"):
+        errors.append("unsupported execution_hash_policy")
     if not _is_schema_version(manifest.get("schema_version")):
         errors.append("unsupported manifest schema_version")
     if manifest.get("purpose") not in {"candidate", "diagnostic"}:
@@ -2174,7 +2209,7 @@ def _validate_progression(
                 errors.append(f"lineage {lineage_id} acceptance field mismatch")
             else:
                 _validate_history_threshold_spec(rows, spec, f"lineage {lineage_id}", errors)
-    _validate_per_video_acceptance(root, manifest, threshold.get("per_video"), errors)
+    _validate_per_video_acceptance(root, manifest, threshold.get("per_video"), errors, rows=rows)
 
 
 def _validate_final_refit(
@@ -2364,7 +2399,9 @@ def _check_threshold(
         errors.append(f"{label} failed recomputed threshold")
 
 
-def _validate_per_video_acceptance(root: Path, manifest: Mapping[str, Any], spec: Any, errors: list[str]) -> None:
+def _validate_per_video_acceptance(
+    root: Path, manifest: Mapping[str, Any], spec: Any, errors: list[str], *, rows=None
+) -> None:
     required = {
         "path",
         "sha256",
@@ -2384,6 +2421,16 @@ def _validate_per_video_acceptance(root: Path, manifest: Mapping[str, Any], spec
         if spec.get("sha256") != sha256_file(path):
             raise TrainingHistoryError("per-video numeric artifact hash mismatch")
         payload = _object(strict_json_load(path), "per-video artifact")
+        thresholds = manifest.get("acceptance_thresholds", {})
+        if (manifest.get("execution_hash_policy") == "predeclared_with_result_bindings_v1"
+                and "improved_videos" in thresholds.get("noninferiority", {})):
+            from biohub.association_acceptance import paired_readout_from_history
+
+            if not rows:
+                raise TrainingHistoryError("Per-video derivation requires selected history")
+            winner = min(rows, key=lambda row: _nested_value(row, "val.losses.total_loss.value"))
+            if canonical_sha256(payload) != canonical_sha256(paired_readout_from_history(winner, thresholds)):
+                raise TrainingHistoryError("Per-video readout differs from selected history")
         if set(payload) != {"values", "uncertainty"}:
             raise TrainingHistoryError("per-video artifact schema invalid")
         values = payload.get("values")
@@ -2574,6 +2621,14 @@ def _validate_checkpoints(
                 _validate_model_tensor_state(metadata, expected_state_by_name, relative, row_errors)
                 is_required = relative in required
                 expected_kind = Path(relative).stem if is_required else "epoch"
+                if not is_required:
+                    # Immutable online snapshots cannot be relabeled after a
+                    # later epoch supersedes them without changing history SHA.
+                    # Bind best/last-at-publication to the verified history flag;
+                    # final deployment aliases still have their exact kind checks.
+                    online_kind = "best" if row.get("best_so_far") is True else "last"
+                    if metadata.get("kind") == online_kind:
+                        expected_kind = online_kind
                 if relative.endswith("fixed_epoch.pt"):
                     expected_kind = "fixed_epoch"
                 elif relative.endswith("min_val_loss.pt"):

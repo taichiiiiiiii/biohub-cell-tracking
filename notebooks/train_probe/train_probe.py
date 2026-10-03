@@ -7,6 +7,8 @@ train split, bounded by --max-iters, plus a warm-start continuity check
 Outputs /kaggle/working/probe_report.json.
 """
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -36,7 +38,6 @@ if wheels.exists():
 print("deps installed")
 
 # --- copy repo ---
-import shutil
 repo = WORK / "tracking_repo"
 if not repo.exists():
     shutil.copytree(pack / "repo", repo)
@@ -76,7 +77,6 @@ print("warm-start patch applied")
 
 # --- probe run: 1 epoch capped at N iters ---
 N_ITERS = 150
-import os
 env = {**os.environ, "PYTHONPATH": "src",
        "BIOHUB_WARM_START": str(repo / "weights" / "unet_transformer" / "split_0" / "edge_predictor_best.pth")}
 t0 = time.time()
@@ -94,7 +94,8 @@ r.check_returncode()
 report = {
     "n_iters": N_ITERS,
     "wall_seconds_total": wall,
-    "note": "wall includes data-pipeline warmup + epoch-end eval on 2 videos; see stdout for per-iter pace and initial loss (warm-start continuity)",
+    "note": ("wall includes data-pipeline warmup + epoch-end eval on 2 videos; "
+             "see stdout for per-iter pace and initial loss (warm-start continuity)"),
 }
 json.dump(report, open(WORK / "probe_report.json", "w"), indent=1)
 print("probe done:", report)

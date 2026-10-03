@@ -11,3 +11,19 @@ __pycache__/
 .ruff_cache/
 notebooks/*/submission.csv
 /submission.csv
+
+# Internal agent tooling and task sheets (kept locally, not published)
+AGENTS.md
+CLAUDE.md
+.claude/
+.codex/
+ops/
+scripts/run_periodic_maintenance.sh
+tests/test_qwen_*_launcher.py
+analysis/periodic_maintenance_prompt.md
+analysis/*_evaluation.json
+analysis/*qwen*
+analysis/*flash*
+analysis/*_task.md
+!analysis/e26_unit02_task.md
+!analysis/e26_unit02b_task.md

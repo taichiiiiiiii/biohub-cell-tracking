@@ -1,3 +1,7 @@
+# Derived from the public Kaggle notebook "Clean Approach + Lightweight Local CV | No Hack"
+# by Yusuke Togashi (https://www.kaggle.com/code/yusuketogashi/clean-approach-lightweight-local-cv-no-hack),
+# licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
+# Modified: ported from notebook cells into a torch-free package; see THIRD_PARTY_NOTICES.md.
 """Graph repair/relink/filter passes, ported verbatim from the notebook's
 post-processing cell (``filter_output_graph`` and its helpers).
 
@@ -14,6 +18,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial import cKDTree
 
+from biohub.appearance_cost import frame_appearance_penalty
 from biohub.public_postproc.config import PostprocConfig
 from biohub.public_postproc.deepcenter import deepcenter_accept_repair_point
 from biohub.public_postproc.frames import refine_synthetic_midpoint
@@ -34,12 +39,117 @@ def _single_predecessor_map(edges: list[dict[str, object]]) -> dict[int, int]:
     return {target: sources[0] for target, sources in by_target.items() if len(sources) == 1}
 
 
+def prepare_consensus_reservations(
+    consensus_pairs_by_t,
+    nodes_by_id,
+    raw_edges,
+    filtered_edges,
+    tight_gate_um,
+):
+    """Select unambiguous reciprocal-consensus pairs for motion reservation."""
+    if type(consensus_pairs_by_t) is not dict:
+        raise ValueError("consensus_pairs_by_t must be an exact dict")
+    if type(nodes_by_id) is not dict:
+        raise ValueError("nodes_by_id must be an exact dict")
+    if type(raw_edges) is not list or type(filtered_edges) is not list:
+        raise ValueError("edge collections must be exact lists")
+    if type(tight_gate_um) is bool or type(tight_gate_um) not in (int, float):
+        raise ValueError("tight_gate_um must be int/float")
+    if not np.isfinite(tight_gate_um) or tight_gate_um <= 0:
+        raise ValueError("tight_gate_um must be finite and > 0")
+    for t, pairs in consensus_pairs_by_t.items():
+        if type(t) is not int or t < 0 or t > 98 or type(pairs) is not list:
+            raise ValueError("bad consensus key or value type")
+        if any(type(p) is not tuple or len(p) != 2 or
+               any(type(x) is not int or x < 0 for x in p) for p in pairs):
+            raise ValueError("bad consensus pair element")
+        if pairs != sorted(pairs) or len(set(pairs)) != len(pairs):
+            raise ValueError("consensus pairs must be sorted and unique")
+        if len({p[0] for p in pairs}) != len(pairs) or len({p[1] for p in pairs}) != len(pairs):
+            raise ValueError("consensus pairs must be one-to-one")
+    for key, node in nodes_by_id.items():
+        if type(key) is not int or type(node) is not dict or node.get("node_id") != key:
+            raise ValueError("node entry mismatch")
+        if type(node.get("t")) is not int:
+            raise ValueError("node time must be builtin int")
+        for field in ("z", "y", "x"):
+            value = node.get(field)
+            if type(value) is bool or type(value) not in (int, float) or not np.isfinite(value):
+                raise ValueError("node field not finite numeric: " + field)
+
+    def edge_set(edges, name):
+        found = set()
+        for edge in edges:
+            if type(edge) is not dict:
+                raise ValueError("edge must be a dict: " + name)
+            source, target = edge.get("source_id"), edge.get("target_id")
+            if type(source) is not int or type(target) is not int or source < 0 or target < 0:
+                raise ValueError("bad edge ids in " + name)
+            if (source, target) in found:
+                raise ValueError("duplicate pair in " + name)
+            found.add((source, target))
+        return found
+
+    raw_set = edge_set(raw_edges, "raw_edges")
+    filtered_set = edge_set(filtered_edges, "filtered_edges")
+
+    def degrees(edges):
+        out, incoming = {}, {}
+        for edge in edges:
+            source, target = edge["source_id"], edge["target_id"]
+            out[source] = out.get(source, 0) + 1
+            incoming[target] = incoming.get(target, 0) + 1
+        return out, incoming
+
+    raw_out, raw_in = degrees(raw_edges)
+    filtered_out, filtered_in = degrees(filtered_edges)
+    result = {}
+    for t in sorted(consensus_pairs_by_t):
+        kept = []
+        for source_id, target_id in consensus_pairs_by_t[t]:
+            source, target = nodes_by_id.get(source_id), nodes_by_id.get(target_id)
+            if source is None or target is None or source["t"] != t or target["t"] != t + 1:
+                continue
+            if (source_id, target_id) not in raw_set or (source_id, target_id) not in filtered_set:
+                continue
+            if (raw_out.get(source_id, 0) != 1 or raw_in.get(target_id, 0) != 1 or
+                    filtered_out.get(source_id, 0) != 1 or filtered_in.get(target_id, 0) != 1):
+                continue
+            if np.linalg.norm(position_um(source) - position_um(target)) > tight_gate_um:
+                continue
+            kept.append((source_id, target_id))
+        if kept:
+            result[t] = kept
+    return result
+
+
 def motion_relink_edges(
     cfg: PostprocConfig,
     nodes_by_id: dict[int, dict[str, object]],
     stats: dict[str, int],
     learned_edge_probs: dict[tuple[int, int], float] | None = None,
+    *,
+    appearance_frames: dict[int, dict] | None = None,
+    consensus_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
+    consensus_soft_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
+    bidirectional_motion_consistency: bool = False,
 ) -> list[dict[str, object]]:
+    if bidirectional_motion_consistency:
+        stats.setdefault("motion_relink_bidirectional_kept", 0)
+        stats.setdefault("motion_relink_bidirectional_rejected", 0)
+    if appearance_frames is not None and (consensus_pairs_by_t is not None or consensus_soft_pairs_by_t is not None):
+        raise ValueError("appearance_frames cannot be combined with consensus pairs")
+    if consensus_pairs_by_t is not None and consensus_soft_pairs_by_t is not None:
+        raise ValueError("hard and soft consensus pairs cannot be combined")
+    if appearance_frames is not None:
+        if type(appearance_frames) is not dict:
+            raise ValueError("appearance_frames must be a dict keyed by int time")
+        for key in appearance_frames:
+            if type(key) is not int or not 0 <= key <= 98:
+                raise ValueError("appearance_frames keys must be builtin ints in 0..98")
+        if not cfg.OUTPUT_MOTION_RELINK or (not nodes_by_id and appearance_frames):
+            raise ValueError("appearance_frames supplied but motion relink is disabled or has no nodes")
+
     if not cfg.OUTPUT_MOTION_RELINK or not nodes_by_id:
         return []
 
@@ -65,14 +175,54 @@ def motion_relink_edges(
     for ids in ids_by_t.values():
         ids.sort()
 
+    if appearance_frames is not None:
+        active_pairs = {t for t, ids in ids_by_t.items() if ids and ids_by_t.get(t + 1)}
+        if set(active_pairs) != set(appearance_frames):
+            raise ValueError("appearance_frames keys must match every active transition frame")
+
+    for consensus_name, consensus_pairs in (
+        ("consensus_pairs_by_t", consensus_pairs_by_t),
+        ("consensus_soft_pairs_by_t", consensus_soft_pairs_by_t),
+    ):
+        if consensus_pairs is None:
+            continue
+        if type(consensus_pairs) is not dict or not nodes_by_id:
+            raise ValueError(f"{consensus_name} requires enabled motion and nonempty nodes")
+        active_pairs = {t for t, ids in ids_by_t.items() if ids and ids_by_t.get(t + 1)}
+        if not set(consensus_pairs).issubset(active_pairs):
+            raise ValueError(f"{consensus_name} keys must be active transition frames")
+        for t, pairs in consensus_pairs.items():
+            if type(t) is not int or type(pairs) is not list or pairs != sorted(pairs):
+                raise ValueError("invalid consensus pair mapping")
+            if len(set(pairs)) != len(pairs) or len({p[0] for p in pairs}) != len(pairs) or len({p[1] for p in pairs}) != len(pairs):
+                raise ValueError("consensus pairs must be one-to-one")
+            for pair in pairs:
+                if type(pair) is not tuple or len(pair) != 2 or any(type(x) is not int for x in pair):
+                    raise ValueError("consensus pairs must contain integer tuples")
+                source_id, target_id = pair
+                if source_id not in nodes_by_id or target_id not in nodes_by_id:
+                    raise ValueError("consensus pair references unknown node")
+                if nodes_by_id[source_id]["t"] != t or nodes_by_id[target_id]["t"] != t + 1:
+                    raise ValueError("consensus pair has invalid node times")
+
     frame_sizes = [len(ids) for ids in ids_by_t.values()]
     if frame_sizes and max(frame_sizes) > cfg.MOTION_RELINK_MAX_FRAME_NODES:
+        if appearance_frames is not None:
+            raise ValueError("appearance_frames cannot be used when a large frame is skipped")
         stats["motion_relink_skipped_large_frame"] = 1
         return []
 
     position_lookup = {node_id: position_um(node) for node_id, node in nodes_by_id.items()}
+    frame_penalty: np.ndarray | None = None
+    full_source_index: dict[int, int] = {}
+    full_target_index: dict[int, int] = {}
     predecessor_position_um: dict[int, np.ndarray] = {}
     selected_edges: list[dict[str, object]] = []
+    consensus_soft_pairs = (
+        {pair for pairs in consensus_soft_pairs_by_t.values() for pair in pairs}
+        if consensus_soft_pairs_by_t is not None
+        else set()
+    )
 
     def assign_pass(
         source_ids: list[int],
@@ -100,10 +250,17 @@ def motion_relink_edges(
                     continue
                 motion = float(np.linalg.norm(target_pos - predicted))
                 prob = learned_prob(source_id, target_id)
+                cost_prob = 1.0 if (source_id, target_id) in consensus_soft_pairs else prob
                 raw_dist[i, j] = raw
                 motion_dist[i, j] = motion
                 prob_matrix[i, j] = prob
-                cost[i, j] = motion + 0.05 * raw - cfg.MOTION_RELINK_LEARNED_BONUS * prob
+                cost[i, j] = (
+                    motion
+                    + 0.05 * raw
+                    - cfg.MOTION_RELINK_LEARNED_BONUS * cost_prob
+                )
+                if frame_penalty is not None:
+                    cost[i, j] += frame_penalty[full_source_index[source_id], full_target_index[target_id]]
         row_ind, col_ind = linear_sum_assignment(cost)
         matches: list[tuple[int, int, float, float, float]] = []
         for r, c in zip(row_ind, col_ind, strict=True):
@@ -124,9 +281,34 @@ def motion_relink_edges(
         target_ids = ids_by_t.get(t + 1, [])
         if not source_ids or not target_ids:
             continue
+        if appearance_frames is None:
+            frame_penalty = None
+            full_source_index = {}
+            full_target_index = {}
+        else:
+            frame_penalty = frame_appearance_penalty(appearance_frames[t], t, source_ids, target_ids)
+            full_source_index = {node_id: index for index, node_id in enumerate(source_ids)}
+            full_target_index = {node_id: index for index, node_id in enumerate(target_ids)}
         unmatched_sources = set(source_ids)
         unmatched_targets = set(target_ids)
         frame_matches: list[tuple[int, int, float, float, str, float]] = []
+        if consensus_pairs_by_t is not None:
+            for source_id, target_id in consensus_pairs_by_t.get(t, []):
+                source_pos = position_lookup[source_id]
+                target_pos = position_lookup[target_id]
+                prev_pos = predecessor_position_um.get(source_id)
+                predicted = source_pos if prev_pos is None else source_pos + cfg.MOTION_RELINK_VELOCITY_WEIGHT * (source_pos - prev_pos)
+                raw = float(np.linalg.norm(target_pos - source_pos))
+                if raw > cfg.MOTION_RELINK_TIGHT_UM:
+                    raise ValueError("consensus reservation exceeds tight gate")
+                motion = float(np.linalg.norm(target_pos - predicted))
+                prob = learned_prob(source_id, target_id)
+                if source_id not in unmatched_sources or target_id not in unmatched_targets:
+                    raise ValueError("consensus reservation endpoint conflict")
+                unmatched_sources.remove(source_id)
+                unmatched_targets.remove(target_id)
+                frame_matches.append((source_id, target_id, raw, motion, "consensus_reserved", prob))
+                stats["motion_relink_consensus_reserved_edges"] = stats.get("motion_relink_consensus_reserved_edges", 0) + 1
         for pass_name, gate_um in (("tight", cfg.MOTION_RELINK_TIGHT_UM), ("relaxed", cfg.MOTION_RELINK_RELAXED_UM)):
             pass_sources = [node_id for node_id in source_ids if node_id in unmatched_sources]
             pass_targets = [node_id for node_id in target_ids if node_id in unmatched_targets]
@@ -154,6 +336,29 @@ def motion_relink_edges(
             predecessor_position_um[target_id] = position_lookup[source_id]
         stats["motion_relink_frames"] += 1
 
+    if bidirectional_motion_consistency and selected_edges:
+        # E34: retain only forward-selected edges that are also the closest
+        # admissible predecessor when the same transition is viewed backward.
+        # This is deliberately fail-closed and never adds an edge.
+        checked: list[dict[str, object]] = []
+        for edge in selected_edges:
+            sid, tid = int(edge["source_id"]), int(edge["target_id"])
+            t = int(nodes_by_id[sid]["t"])
+            candidates = []
+            for cand_sid in ids_by_t.get(t, []):
+                raw = float(np.linalg.norm(position_lookup[tid] - position_lookup[cand_sid]))
+                if np.isfinite(raw) and raw <= cfg.MOTION_RELINK_RELAXED_UM:
+                    candidates.append((raw, cand_sid))
+            if candidates and sid == min(candidates, key=lambda item: (item[0], item[1]))[1]:
+                checked.append(edge)
+        stats["motion_relink_bidirectional_kept"] = len(checked)
+        stats["motion_relink_bidirectional_rejected"] = len(selected_edges) - len(checked)
+        selected_edges = checked
+        stats["motion_relink_tight_edges"] = sum(e.get("motion_pass") == "tight" for e in selected_edges)
+        stats["motion_relink_relaxed_edges"] = sum(e.get("motion_pass") == "relaxed" for e in selected_edges)
+        stats["motion_relink_consensus_reserved_edges"] = sum(
+            e.get("motion_pass") == "consensus_reserved" for e in selected_edges
+        )
     stats["motion_relink_edges"] = len(selected_edges)
     return selected_edges
 
@@ -547,6 +752,7 @@ def filter_short_track_components(
     nodes_by_id: dict[int, dict[str, object]],
     edges: list[dict[str, object]],
     stats: dict[str, int],
+    consensus_proof_pairs_by_t: dict[int, list[tuple[int, int]]] | None = None,
 ) -> tuple[dict[int, dict[str, object]], list[dict[str, object]]]:
     if not cfg.OUTPUT_FILTER_SHORT_TRACKS or cfg.OUTPUT_MIN_TRACK_LEN <= 1 or not edges:
         return nodes_by_id, edges
@@ -585,11 +791,32 @@ def filter_short_track_components(
         if source_id in parent and target_id in parent:
             component_edges.setdefault(find(source_id), []).append(edge)
 
+    proof_pairs = (set(pair for pairs in consensus_proof_pairs_by_t.values() for pair in pairs)
+                   if consensus_proof_pairs_by_t is not None else set())
+
     keep: set[int] = set()
     for _root, members in components.items():
         has_division = any(out_count.get(node_id, 0) >= 2 for node_id in members)
         if len(members) >= cfg.OUTPUT_MIN_TRACK_LEN or (cfg.OUTPUT_KEEP_DIVISION_COMPONENTS and has_division):
             keep.update(members)
+
+    if consensus_proof_pairs_by_t is not None:
+        for root, members in components.items():
+            if len(members) != 5 or set(members) & keep:
+                continue
+            member_set = set(members)
+            c_edges = component_edges.get(root, [])
+            if len(c_edges) != 4 or any(int(e["source_id"]) == int(e["target_id"]) for e in c_edges):
+                continue
+            ordered = sorted(members, key=lambda node_id: (int(nodes_by_id[node_id]["t"]), node_id))
+            if [int(nodes_by_id[node_id]["t"]) for node_id in ordered] != list(range(int(nodes_by_id[ordered[0]]["t"]), int(nodes_by_id[ordered[0]]["t"]) + 5)):
+                continue
+            expected = {(ordered[i], ordered[i + 1]) for i in range(4)}
+            actual = {(int(e["source_id"]), int(e["target_id"])) for e in c_edges}
+            if actual == expected and actual <= proof_pairs:
+                keep.update(member_set)
+                stats["short_track_rescue_components"] = stats.get("short_track_rescue_components", 0) + 1
+                stats["short_track_rescue_nodes"] = stats.get("short_track_rescue_nodes", 0) + 5
 
     if not keep:
         stats["short_track_filter_skipped_all"] += 1

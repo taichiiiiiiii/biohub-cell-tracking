@@ -154,7 +154,8 @@ best_eps = []
 for k in range(N_FOLDS):
     va_mask = fold_arr == k
     net, best = train_fold(np.where(~va_mask)[0], np.where(va_mask)[0], MAX_EPOCHS, f"fold{k}", history)
-    torch.save(best.get("state", net.state_dict()), f"/kaggle/working/fold{k}.pt")  # best-epoch weights (late-epoch overfit appears with hardnegs)
+    # best-epoch weights (late-epoch overfit appears with hardnegs)
+    torch.save(best.get("state", net.state_dict()), f"/kaggle/working/fold{k}.pt")
     oof[va_mask] = best["scores"]          # scores from the best epoch, not the last
     final_s = predict(net, np.where(va_mask)[0])
     last_ep_auc.append(float(auc(y[va_mask], final_s)))
@@ -167,7 +168,7 @@ for k in range(N_FOLDS):
     m = fold_arr == k
     rank[m] = np.argsort(np.argsort(oof[m])) / max(1, m.sum() - 1)
 fold_aucs = [float(auc(y[fold_arr == k], oof[fold_arr == k])) for k in range(N_FOLDS)]
-print(f"\nper-fold AUC={['%.4f' % a for a in fold_aucs]}  "
+print(f"\nper-fold AUC={[f'{a:.4f}' for a in fold_aucs]}  "
       f"pooled(rank-norm) AUC={auc(y, rank):.4f}  best_eps={best_eps}")
 print("NOTE: raw pooled OOF AUC mixes per-fold calibrations -- use rank-normalized")
 thr_table = []

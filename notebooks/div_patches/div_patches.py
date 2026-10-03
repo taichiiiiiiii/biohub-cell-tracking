@@ -48,7 +48,9 @@ def extract(vol, t, z, y, x):
         frame = np.asarray(vol[tt])  # (Z, Y, X)
         z0, y0, x0 = int(round(z)) - RZ, int(round(y)) - RXY, int(round(x)) - RXY
         zs, ys, xs = max(0, z0), max(0, y0), max(0, x0)
-        ze, ye, xe = min(frame.shape[0], z0 + 2 * RZ + 1), min(frame.shape[1], y0 + 2 * RXY + 1), min(frame.shape[2], x0 + 2 * RXY + 1)
+        ze = min(frame.shape[0], z0 + 2 * RZ + 1)
+        ye = min(frame.shape[1], y0 + 2 * RXY + 1)
+        xe = min(frame.shape[2], x0 + 2 * RXY + 1)
         out[i, zs - z0:ze - z0, ys - y0:ye - y0, xs - x0:xe - x0] = frame[zs:ze, ys:ye, xs:xe]
     return out
 
@@ -68,7 +70,7 @@ for gi, geff in enumerate(videos):
         in_deg[int(tgt)] = in_deg.get(int(tgt), 0) + 1
     vol = zarr.open(str(zarr_path), mode="r")["0"]
 
-    def node_pos(nid):
+    def node_pos(nid, id2idx=id2idx, nd=nd):
         i = id2idx[nid]
         return int(nd["t"][i]), float(nd["z"][i]), float(nd["y"][i]), float(nd["x"][i])
 
@@ -76,28 +78,30 @@ for gi, geff in enumerate(videos):
     pos_ids = [int(n) for n, d in out_deg.items() if d == 2]
     for nid in pos_ids:
         t, z, yy, xx = node_pos(nid)
-        X.append(extract(vol, t, z, yy, xx)); y.append(1)
+        X.append(extract(vol, t, z, yy, xx))
+        y.append(1)
         meta.append((stem, nid, t, "div_parent"))
     # negatives (a): random tracked non-dividing nodes with a child (mid-track)
     cand_a = [int(n) for n, d in out_deg.items() if d == 1]
     for nid in RNG.choice(cand_a, size=min(NEG_PER_VIDEO, len(cand_a)), replace=False):
         t, z, yy, xx = node_pos(int(nid))
-        X.append(extract(vol, t, z, yy, xx)); y.append(0)
+        X.append(extract(vol, t, z, yy, xx))
+        y.append(0)
         meta.append((stem, int(nid), t, "midtrack"))
     # negatives (b): track starts at t>=1 (appearances, adoption confusers)
     cand_b = [int(n) for n in ids if int(n) not in in_deg and node_pos(int(n))[0] >= 1 and int(n) in out_deg]
     for nid in RNG.choice(cand_b, size=min(6, len(cand_b)), replace=False) if cand_b else []:
         t, z, yy, xx = node_pos(int(nid))
-        X.append(extract(vol, max(0, t - 1), z, yy, xx)); y.append(0)  # centered a frame BEFORE appearance
+        X.append(extract(vol, max(0, t - 1), z, yy, xx))
+        y.append(0)  # centered a frame BEFORE appearance
         meta.append((stem, int(nid), t, "trackstart"))
     if gi % 20 == 0:
         print(f"[{gi}/{len(videos)}] {stem}: total={len(y)} pos={sum(y)}")
 
 # v5: optional deployment-hard negatives mined from pred graphs (hardnegs.csv: stem,t,z,y,x)
-import csv as _csv
 _hn = sorted(Path("/kaggle/input").rglob("hardnegs.csv"))
 if _hn:
-    hn_rows = list(_csv.DictReader(open(_hn[0])))
+    hn_rows = list(csv.DictReader(open(_hn[0])))
     print(f"hard negatives: {len(hn_rows)} from {_hn[0]}")
     from collections import defaultdict
     hn_by_stem = defaultdict(list)
@@ -111,10 +115,13 @@ if _hn:
             meta.append((stem, -1, int(r["t"]), "hardneg"))
     print(f"after hardnegs: n={len(y)} pos={sum(y)}")
 
-X = np.stack(X); y = np.array(y, dtype=np.int8)
+X = np.stack(X)
+y = np.array(y, dtype=np.int8)
 print(f"dataset: X={X.shape} pos={int(y.sum())} neg={int((1-y).sum())}")
 np.savez_compressed("/kaggle/working/div_patches.npz", X=X, y=y)
 with open("/kaggle/working/meta.csv", "w", newline="") as f:
-    w = csv.writer(f); w.writerow(["stem", "node_id", "t", "kind"]); w.writerows(meta)
+    w = csv.writer(f)
+    w.writerow(["stem", "node_id", "t", "kind"])
+    w.writerows(meta)
 json.dump({"RZ": RZ, "RXY": RXY, "n": len(y), "pos": int(y.sum())}, open("/kaggle/working/build_info.json", "w"))
 print("done")

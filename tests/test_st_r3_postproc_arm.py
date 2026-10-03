@@ -74,7 +74,7 @@ EVAL24 = (
 EVAL36 = EVAL12 + EVAL24
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "scripts" / "st_r3_postproc_arm.py"
+CLI = ROOT / "scripts" / "experiments" / "st_r3" / "st_r3_postproc_arm.py"
 ADAPTER = ROOT / "src" / "biohub" / "public_postproc" / "production_adapter.py"
 
 
@@ -679,7 +679,7 @@ def _run_real_cli_fixture(
         (
             "import runpy,sys;from pathlib import Path;"
             "script=sys.argv[1];"
-            "sys.path.insert(0,str(Path(script).resolve().parent.parent/'src'));"
+            "sys.path.insert(0,str(Path(script).resolve().parent.parent.parent.parent/'src'));"
             "import biohub.public_postproc.production_adapter as p;"
             "p.load_deepcenter_veto_detector_strict=lambda *a,**k:"
             "({}, {'schema_version':p.DEEPCENTER_RECEIPT_SCHEMA,'fixture_boundary':'torch'});"

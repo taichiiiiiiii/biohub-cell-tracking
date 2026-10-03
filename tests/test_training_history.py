@@ -746,6 +746,36 @@ def test_resume_history_snapshot_metric_tolerance_and_sampler(tmp_path: Path) ->
     assert "history prefix" in text and "sampler" in text and "actual metrics" in text
 
 
+@pytest.mark.parametrize("device_source", ["hardware", "validation_snapshot"])
+def test_mps_resume_requires_its_own_hashed_rng_payload(tmp_path, device_source):
+    manifest, rows = _valid_run(tmp_path)
+    resume = strict_json_load(tmp_path / "checkpoints/resume.pt")
+    receipt = strict_json_load(tmp_path / "provenance/resume-validation.json")
+    manifest[device_source]["device"] = "mps"
+    manifest["config_sha256"] = execution_config_sha256(manifest)
+    resume["config_sha256"] = manifest["config_sha256"]
+    snapshot_hash = canonical_sha256(manifest["validation_snapshot"])
+    resume["validation_snapshot_sha256"] = snapshot_hash
+    receipt["validation_snapshot_sha256"] = snapshot_hash
+    with pytest.raises(GateValidationError, match="torch_mps"):
+        validate_resume_metadata(manifest, rows, resume, validation_receipt=receipt)
+    resume["state"]["rng"]["torch_mps"] = _rng_payload(b"mps-state")
+    validate_resume_metadata(manifest, rows, resume, validation_receipt=receipt)
+    resume["state"]["rng"]["torch_mps"]["sha256"] = "0" * 64
+    with pytest.raises(GateValidationError, match="torch_mps.*hash"):
+        validate_resume_metadata(manifest, rows, resume, validation_receipt=receipt)
+
+
+def test_non_mps_resume_keeps_exact_previous_rng_schema(tmp_path):
+    manifest, rows = _valid_run(tmp_path)
+    resume = strict_json_load(tmp_path / "checkpoints/resume.pt")
+    receipt = strict_json_load(tmp_path / "provenance/resume-validation.json")
+    validate_resume_metadata(manifest, rows, resume, validation_receipt=receipt)
+    resume["state"]["rng"]["torch_mps"] = _rng_payload(b"unused-state")
+    with pytest.raises(GateValidationError, match="exact payloads"):
+        validate_resume_metadata(manifest, rows, resume, validation_receipt=receipt)
+
+
 def _warm_manifest() -> tuple[dict, dict]:
     keys = ["encoder.bias", "encoder.weight"]
     specs = {key: {"shape": [2], "dtype": "float32"} for key in keys}
@@ -1735,6 +1765,39 @@ def test_opaque_checkpoint_requires_exact_trusted_loader_success_evidence(tmp_pa
     assert "success evidence invalid" in errors
 
 
+@pytest.mark.parametrize("kind,valid", [("best", True), ("epoch", True), ("last", False), ("resume", False)])
+def test_superseded_online_best_snapshot_is_bound_to_history_flag(tmp_path: Path, kind: str, valid: bool) -> None:
+    manifest, rows = _valid_run(tmp_path, values=[0.8, 0.6, 0.7])
+    # Epoch 1 was genuinely best when appended, but is not the final winner.
+    path = tmp_path / "checkpoints/epoch-0001.pt"
+    atomic_write_json(path, _checkpoint(kind, manifest["run_id"], 1, 2))
+    rows[0]["checkpoint_sha256"] = sha256_file(path)
+    _write_rows(tmp_path / "history.jsonl", rows)
+    resume_path = tmp_path / "checkpoints/resume.pt"
+    resume = strict_json_load(resume_path)
+    resume["history_prefix_sha256"] = sha256_file(tmp_path / "history.jsonl")
+    _replace_json(resume_path, resume)
+    manifest["checkpoint_refs"]["checkpoints/resume.pt"] = sha256_file(resume_path)
+    _replace_json(tmp_path / "run_manifest.json", manifest)
+    _refresh_artifacts(tmp_path)
+    report = verify_training_run(tmp_path)
+    assert (report["verdict"] == "PASS") == valid, report
+
+
+def test_unpublished_inventory_runs_full_gate_but_cannot_override_saved_manifest(tmp_path: Path) -> None:
+    _valid_run(tmp_path)
+    path = tmp_path / "ARTIFACT_MANIFEST.json"
+    inventory = strict_json_load(path)
+    assert training_history._verify_training_run(tmp_path, unpublished_artifacts=inventory)["verdict"] == "FAIL"
+    path.unlink()  # Test fixture only: simulate the writer before initial publication.
+    assert verify_training_run(tmp_path)["verdict"] == "FAIL"
+    report = training_history._verify_training_run(tmp_path, unpublished_artifacts=inventory)
+    assert report["verdict"] == "PASS", report
+    (tmp_path / "provenance/input.json").write_text('{}\n')
+    assert training_history._verify_training_run(tmp_path, unpublished_artifacts=inventory)["verdict"] == "FAIL"
+    assert not path.exists()
+
+
 def test_real_pytorch_checkpoints_and_explicit_cli_loader_are_operational(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     manifest, rows = _valid_run(tmp_path, values=[0.8, 0.7, 0.6])
@@ -1885,6 +1948,25 @@ def test_execution_digest_covers_all_training_and_gate_semantics(tmp_path: Path,
     manifest, _ = _valid_run(tmp_path)
     before = execution_config_sha256(manifest)
     mutation(manifest)
+    assert execution_config_sha256(manifest) != before
+
+
+def test_opt_in_output_binding_policy_preserves_legacy_hash_and_all_numeric_gates(tmp_path: Path) -> None:
+    manifest, rows = _valid_run(tmp_path)
+    original = execution_config_sha256(manifest)
+    other = copy.deepcopy(manifest)
+    other["acceptance_thresholds"]["per_video"]["sha256"] = "f" * 64
+    assert execution_config_sha256(other) != original  # Legacy policy unchanged.
+    manifest["execution_hash_policy"] = "predeclared_with_result_bindings_v1"
+    _rewrite(tmp_path, manifest, rows)
+    before = execution_config_sha256(manifest)
+    assert verify_training_run(tmp_path)["verdict"] == "PASS"
+    manifest["acceptance_thresholds"]["per_video"]["sha256"] = "f" * 64
+    assert execution_config_sha256(manifest) == before
+    _replace_json(tmp_path / "run_manifest.json", manifest)
+    _refresh_artifacts(tmp_path)
+    assert verify_training_run(tmp_path)["verdict"] == "FAIL"  # File binding is still required.
+    manifest["acceptance_thresholds"]["per_video"]["limit"] += 0.001
     assert execution_config_sha256(manifest) != before
 
 

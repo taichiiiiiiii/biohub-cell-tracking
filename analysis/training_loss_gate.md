@@ -1,6 +1,6 @@
 # 新規学習 run の train / validation loss gate
 
-Updated: 2026-08-30 (Asia/Tokyo)
+Updated: 2026-09-05 (Asia/Tokyo)
 
 本書は、今後このリポジトリで作る全ての新規学習 run に対する binding な
 fail-closed 契約である。推論、後処理、既存 checkpoint の単純な再利用には適用しない。
@@ -11,10 +11,31 @@ fail-closed 契約である。推論、後処理、既存 checkpoint の単純�
 
 ## 遡及適用しない範囲と既知事実
 
-- E23 primary (`12f6881e...`, epoch 400) と secondary (`9bac2fa0...`,
-  epoch 400) は、現 checkout に完全な学習履歴がない。推論時の checkpoint hash と
-  epoch は確認済みだが、本 gate を遡及的に PASS した扱いにも、過学習した扱いにも
-  しない。状態は `LEGACY_HISTORY_UNVERIFIED` とする。
+- 回収した E22 inference-input bytes は primary `edge_predictor_best.pth`
+  (8,363,159 bytes, `12f6881e...`)、secondary `edge_predictor_best.pth`
+  (8,363,159 bytes, `9bac2fa0...`) であり、E22 runtime receipt の path/hash に一致する。
+  これは strict load、re-run output parity、checkpoint-to-raw causal proof を示さない。
+  両者を epoch 400 checkpoint と
+  同一視しない。secondary だけは回収した exact 400-row history から
+  best epoch 381、best validation score `0.9779747766406395` と確認できる。
+  `checkpoint_last.pth` は別物で epoch 400 / 25,070,547 bytes /
+  `ee6c1237...`、deployment 対象外である。secondary history では
+  edge/detection/validation loss は first→last でそれぞれ 96.1% / 87.3% /
+  70.3% 低下したが単調ではなく、final score は best より
+  `0.0025860820161440756` 低い。さらに validation `test` 40 本は
+  train 199 本の部分集で、`44b6` のみである。よって記録は
+  `LEGACY_IN_SAMPLE_MONITORING_ONLY`、generalization/training gate は PASS 不可とする。
+- Primary は complete history がなく、`12f6881e...` の best epoch は不明。
+  別物の `checkpoint_last.pth` (25,069,651 bytes, `8294faaf...`) は
+  `UNPINNED_LOCAL_OBSERVATION` である。その
+  payload 上 epoch 402 だが、artifact 名は `400ep`、runtime の source slug/method
+  呼称は `50ep` で矛盾する。loss trend、best epoch、training gate PASS を
+  主張せず、`LEGACY_HISTORY_UNVERIFIED` のままとする。
+- E20 eval-12 は fine-tune gradient train からは除外されたが、legacy upstream
+  exposure を除外できず、先頭2本は epoch-end best-checkpoint selection に
+  使われた。従って `LEGACY_UPSTREAM_EXPOSURE_UNKNOWN /
+  MODEL_SELECTION_CONTAMINATED_LOCAL_MONITORING` であり、held-out/generalization
+  または training gate PASS と呼ばない。
 - DeepCenter (`8040999a...`) は別モデル・別学習 run である。保存済み履歴から
   epoch 2 の train/val loss が `0.01233046198 / 0.04500306242` で最良、epoch 100 が
   `0.00795250949 / 0.24764877340` と確認できる。これは「train loss が下がっても
@@ -61,6 +82,13 @@ selector、best checkpoint を持たず単独昇格できない。全 fold と O
 書込みは一時 file を同一 filesystem 上で完成させてから atomic rename する。
 weights-only の `best.pt` と完全状態の `resume.pt` を混同しない。
 
+新規single-splitのオンライン実行では、明示的に
+`execution_hash_policy=predeclared_with_result_bindings_v1`を選択できる（2026-09-22、Issue #18）。
+この場合のみconfig hashから`acceptance_thresholds.per_video.sha256`を除外する。
+これは学習後に生まれる結果fileのbytes bindingであり、閾値・direction・source・pathなどの
+判定条件は全て学習前config hashへ残す。finalizationで実file SHAを確定し、最終verifierは
+従来どおり実体との完全一致を要求する。policy未指定の既存runのhash計算は変更しない。
+
 ## `history.jsonl` schema
 
 各行は最低限、次の field を持つ。epoch は 1-based、`global_step` は単調増加とする。
@@ -94,6 +122,11 @@ immutable checkpoint を実際に保存した場合だけ SHA256 string、それ
 `final_selection.{oof_selector_value,fold_selections,final_refit_ref}` とし、各
 `fold_selections` は fold ID、epoch、selector value、checkpoint SHA256、
 `final_refit_ref` は別 artifact の run ID、固定 epoch 数、checkpoint SHA256 を持つ。
+
+オンライン保存のimmutable epoch checkpointは`kind=epoch`、またはその行の
+`best_so_far=true`なら`kind=best`、falseなら`kind=last`を許可する（2026-09-22、Issue #18）。
+後続epochで最良値が更新されても、過去のcheckpointや履歴hashを変更しない。
+最終`best.pt`/`last.pt`のkind、selector、epoch、tensor、SHAの検査は従来どおり必須。
 
 分類器は `val_auc` 等の task metric を追加する。split manifest は train/validation の
 stem、動画数、example 数、lineage 数、該当時の positive/negative 数を保存する。
@@ -146,6 +179,11 @@ prefix SHA256 を照合し、optimizer/scheduler/scaler/RNG/sampler を全て復
 checkpoint を validation-only で読み戻し、保存済み値と manifest に metric 別に pin した
 tolerance 以内で一致させる。loss の既定は `rtol=1e-5, atol=1e-7`、count/ID は完全一致、
 AUC 等は既定 `atol=1e-8` とする。次の epoch/global step が連続しなければ中止する。
+
+MPSで学習またはvalidationを行うrunは、上記Python/NumPy/Torch CPU/CUDA payloadに加えて
+`torch_mps` の実RNG状態を必須とする（2026-09-22、Issue #18）。MPS非使用runの既存schemaは
+変更せず、MPS stateをCPU/CUDA stateで代用しない。snapshotのdeviceと実行環境を一致させ、
+実device/dtypeで中断再開のreadbackを検証する。CPUだけの成功をMPS再開成功とは扱わない。
 
 validation snapshot は example ID と順序、入力/split hash、preprocessing config、seed、
 許可環境変数、device、dtype、framework version を pin し、shuffle/augmentation を無効化する。

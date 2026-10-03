@@ -1,3 +1,7 @@
+# Derived from the public Kaggle notebook "Clean Approach + Lightweight Local CV | No Hack"
+# by Yusuke Togashi (https://www.kaggle.com/code/yusuketogashi/clean-approach-lightweight-local-cv-no-hack),
+# licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
+# Modified: ported from notebook cells into a torch-free package; see THIRD_PARTY_NOTICES.md.
 """Test-frame access for the image-intensity refinement steps.
 
 The notebook cell re-implemented its own blosc2 chunk reader with a

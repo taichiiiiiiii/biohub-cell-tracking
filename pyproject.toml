@@ -33,7 +33,7 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "official/src"]
+pythonpath = ["src", "official/src", "."]
 
 [tool.ruff]
 target-version = "py312"
@@ -48,3 +48,8 @@ select = ["E", "W", "F", "I", "UP", "B"]
 # kept close to the original line breaks on purpose, so long lines are allowed
 # here instead of reflowing the ported logic.
 "src/biohub/public_postproc/*.py" = ["E501"]
+# Notebook-cell fragments executed inside the E31 kernel, where WORKING_DIR, REPO_DIR, TEST_DIR,
+# _ps and the other names are notebook globals. Their sha256 is pinned by E31 provenance
+# (src/biohub/e31_shards.py, tests/test_e31_workers.py), so they are kept byte-for-byte as run.
+"scripts/experiments/e31/e31_submission_runtime.py" = ["F821", "E402"]
+"scripts/experiments/e31/e31_dual_gpu_runtime.py" = ["F821", "I001"]
