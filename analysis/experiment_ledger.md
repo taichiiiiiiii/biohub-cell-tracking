@@ -3725,7 +3725,7 @@ goalはactive、科学条件とE23 incumbent0.924は維持。金メダル到達�
    | NB | score | edge_J | div_J | node_recall | N_pred | 判定 |
    |---|---|---|---|---|---|---|
    | inversion/cell-tracking-getting-started-w-nearest-neighbor | nan | nan | nan | nan | 0 | clean |
-   | kaiwalyaatulraut/biohub-cell-tracking-solution | 0.9178 | 0.9227 | 0.0 | 0.998 | 135,824 | **HACK**（hub+偽fork セル） |
+   | kaiwalyaatulraut/biohub-cell-tracking-solution | 0.9178 | 0.9227 | 0.0 | 0.998 | 135,824 | **metric-exploit**（hub+偽fork セル） |
    | anhadmahajan06/biohub-track-your-cells-development | 0.8955 | 0.8946 | 0.0 | 0.998 | 122,910 | clean |
    | yusuketogashi/lb897-baseline | 0.8918 | 0.8913 | 0.0 | 0.983 | 126,469 | clean |
    | raykkretzschmar/biohub-harmonic-bidirectional-association-v1 | 0.8907 | 0.8893 | 0.0 | 0.984 | 122,083 | clean |
@@ -3743,7 +3743,7 @@ goalはactive、科学条件とE23 incumbent0.924は維持。金メダル到達�
 
    smoke（E0）は 0.0446。出典 `outputs/public_nb/*.json`。
 6. **判定**: 対象外。
-7. **学び**: ①**全 NB で division TP=0**（0.1 の項が空席）。②学習系（pack50 UNet+Transformer+ILP）は 0.87〜0.89、ルールベースは 0.74〜0.78、公式 UNet は 0.81（N_pred 過多 55k vs N_true 33k で −7%）。③最高値 0.918 の `kaiwalyaatulraut` は hub+偽 fork の HACK 系で除外。④adj 係数は N_pred<N_true で 1 を超える（`44b6_0b24845f` で 1.038）＝ノード数を減らす方向の「見かけの改善」が混入するので、A/B ではノード数を固定して比較する。⑤in-sample なので hidden の推定には使わない（LB 自称 0.908 に対し 0.889）。
+7. **学び**: ①**全 NB で division TP=0**（0.1 の項が空席）。②学習系（pack50 UNet+Transformer+ILP）は 0.87〜0.89、ルールベースは 0.74〜0.78、公式 UNet は 0.81（N_pred 過多 55k vs N_true 33k で −7%）。③最高値 0.918 の `kaiwalyaatulraut` は hub+偽 fork の metric-exploit 系で除外。④adj 係数は N_pred<N_true で 1 を超える（`44b6_0b24845f` で 1.038）＝ノード数を減らす方向の「見かけの改善」が混入するので、A/B ではノード数を固定して比較する。⑤in-sample なので hidden の推定には使わない（LB 自称 0.908 に対し 0.889）。
 
 ### E2 base1（clean UNet+Transformer+ILP 再現）を Kaggle で実行・提出（2026-08-24・Issue #5）
 1. **仮説**: `yusuketogashi/clean-approach…` の自称 clean LB 0.908 が、CV フェーズを外した再現カーネルで再現する。
