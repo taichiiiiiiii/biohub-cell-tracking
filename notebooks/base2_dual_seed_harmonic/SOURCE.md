@@ -5,4 +5,5 @@ released on Kaggle under the Apache License 2.0 (copy in [`LICENSES/Apache-2.0.t
 
 **Changes:** Cells 1-7 reproduced; experiment values reverted to the author's reported LB-0.915 values.
 
-The notebook's model inputs are public Kaggle datasets referenced by slug in `kernel-metadata.json`; no weights are stored here.
+The notebook's model inputs are Kaggle datasets referenced by slug in `kernel-metadata.json`; no weights are stored here.
+`taichiiiii/biohub-divft-weights-v1` is a private artifact of this project, so the notebook cannot be re-run as is.
