@@ -1,0 +1,20 @@
+{
+  "id": "taichiiiii/biohub-e26-motion-off-exploratory",
+  "title": "Biohub E26 Motion OFF Exploratory",
+  "code_file": "e26_target_motion_off.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "enable_internet": "false",
+  "competition_sources": [
+    "biohub-cell-tracking-during-development"
+  ],
+  "dataset_sources": [
+    "pilkwang/biohub-deepcenter-unet3d-center-prior-v1",
+    "pilkwang/biohub-temporal-unet3d-seed314159-v1",
+    "pilkwang/biohub-tracking-support-pack-50ep-v1"
+  ],
+  "kernel_sources": []
+}

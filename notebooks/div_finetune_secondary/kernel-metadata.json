@@ -1,0 +1,19 @@
+{
+  "id": "taichiiiii/biohub-div-finetune-sec",
+  "title": "biohub-div-finetune-sec",
+  "code_file": "div_finetune.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "enable_internet": "false",
+  "competition_sources": [
+    "biohub-cell-tracking-during-development"
+  ],
+  "dataset_sources": [
+    "pilkwang/biohub-tracking-support-pack-50ep-v1",
+    "pilkwang/biohub-temporal-unet3d-seed314159-v1"
+  ],
+  "kernel_sources": []
+}

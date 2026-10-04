@@ -1,8 +1,8 @@
 """Group every submission by the kernel that produced it, and flag the unscored ones.
 
-Assumes a LOWER-IS-BETTER metric (RMSE, logloss, MAE): "best" means the smallest score.
-For accuracy, AUC or similar, invert the min()/sorted() calls marked with
-"# lower is better" before trusting the output.
+Assumes a HIGHER-IS-BETTER metric (adjusted edge Jaccard + 0.1 * division Jaccard):
+"best" means the LARGEST score. For RMSE, logloss or similar, invert the max()/sorted()
+calls marked with "# higher is better" before trusting the output.
 
 Every guard below exists because the plain approach silently produced a wrong answer
 in a real competition:
@@ -25,6 +25,9 @@ in a real competition:
   * Kaggle auto-selects if you do not, and the rules do not state the criterion.
     Observed behaviour is best-public-score, which may not match your plan, so
     `--final-check` states any divergence explicitly.
+  * A tie exactly at the top-2 boundary means API order alone cannot identify the
+    exact pair Kaggle would auto-select. In that case `--final-check` warns and
+    leaves the authoritative verdict to the selected-submission readback.
 
 Usage:
     uv run python scripts/submission_status.py [--all]
@@ -65,7 +68,10 @@ def version_of(sub) -> str:
 
 
 def score_of(sub) -> str:
-    return str(getattr(sub, "public_score", "") or "").strip()
+    # Higher-is-better competition: a numeric 0.0 is a real score, so only None or
+    # empty text counts as "not scored". `... or ""` would silently drop the 0.0.
+    raw = getattr(sub, "public_score", None)
+    return "" if raw is None else str(raw).strip()
 
 
 def fetch(group=None) -> list:
@@ -173,29 +179,32 @@ def final_check(subs: list) -> int:
             ok = False
 
         peers = by_kernel.get(kern, [])
-        vals = sorted(float(p.public_score) for p in peers)  # lower is better
+        vals = sorted(float(p.public_score) for p in peers)  # higher is better
         if vals and sc:
-            best = vals[0]
+            best = vals[-1]
             tied = sorted(
                 (p for p in peers if float(p.public_score) == best), key=lambda p: p.date
             )
             print(f"  kernel draws      : n={len(vals)} best={best:.3f} mean={st.mean(vals):.4f}")
-            if float(sc) > best:  # lower is better
-                # Only meaningful when every draw under this slug is the same code.
-                # Once the slug spans versions, a better score elsewhere may belong to
-                # different code entirely, so this is advisory -- same reason the
+            if float(sc) < best:  # higher is better
+                # Only draws of the SAME code are comparable. A strictly better draw
+                # under this slot's own KNOWN scriptVersionId is a better replicate of
+                # the identical kernel and must fail the slot. A better draw that only
+                # exists under a DIFFERENT or UNKNOWN scriptVersionId may be different
+                # code entirely, so it stays advisory (WARN) -- same reason the
                 # version-count check below is a WARN.
-                # Only draws of the SAME code are comparable. If the better draw
-                # shares this submission's version, it really is a better draw of the
-                # identical kernel and must stay a hard failure.
-                multi = any(version_of(p) != ver for p in tied)
-                label = "WARN" if multi else "FAIL"
-                print(f"  {label}: not this kernel's best draw -- {best:.3f} is "
-                      f"(ref {tied[0].ref})"
-                      + ("; the slug spans several versions, so that draw may be "
-                         "different code" if multi else ""))
-                if not multi:
+                better = [p for p in peers if float(p.public_score) > float(sc)]
+                same_ver = [p for p in better if ver != "<unknown>" and version_of(p) == ver]
+                if same_ver:
+                    top = sorted(same_ver, key=lambda p: (-float(p.public_score), p.date))[0]
+                    print(f"  FAIL: not this kernel's best draw -- {float(top.public_score):.3f} is "
+                          f"(ref {top.ref}, same scriptVersionId {ver})")
                     ok = False
+                else:
+                    top = sorted(better, key=lambda p: (-float(p.public_score), p.date))[0]
+                    print(f"  WARN: better draw exists -- {float(top.public_score):.3f} is "
+                          f"(ref {top.ref}), but only under another or unknown "
+                          f"scriptVersionId, so it may be different code")
             elif len(tied) > 1:
                 print(f"  WARN: tie at {best:.3f} across refs {[str(t.ref) for t in tied]}; "
                       f"earliest is {tied[0].ref}")
@@ -216,8 +225,9 @@ def final_check(subs: list) -> int:
     for s in sorted(pending, key=lambda s: s.date):
         print(f"  {s.date:%m-%d %H:%M} UTC  {s.ref}  {kernel_of(s)}")
 
-    # lower is better
-    scored = sorted((s for s in subs if score_of(s)), key=lambda s: float(s.public_score))
+    # higher is better: observed auto-selection takes the best (largest) public scores
+    scored = sorted((s for s in subs if score_of(s)),
+                    key=lambda s: float(s.public_score), reverse=True)
     auto = scored[:2]
     chosen = {r for r, _, _ in plan.values()}
     print("\n=== Kaggle auto-selection vs the plan ===")
@@ -227,7 +237,21 @@ def final_check(subs: list) -> int:
     print("  public score. Top 2 public are:")
     for i, s in enumerate(auto, 1):
         print(f"    #{i} {s.public_score}  ref={s.ref}  {kernel_of(s)}")
-    if {str(s.ref) for s in auto} != chosen:
+    boundary_tie = (
+        len(scored) > 2
+        and float(scored[1].public_score) == float(scored[2].public_score)
+    )
+    if boundary_tie:
+        boundary_score = float(scored[1].public_score)
+        tied_refs = [
+            str(s.ref) for s in scored if float(s.public_score) == boundary_score
+        ]
+        print("  => WARN: auto-selection ambiguous; manual selection/readback required.")
+        print(
+            f"     Tie at {boundary_score:.3f} across refs {tied_refs} on the "
+            "top-2 boundary; API order alone cannot determine the exact auto pair."
+        )
+    elif {str(s.ref) for s in auto} != chosen:
         print("  => AUTO-SELECTION DOES NOT MATCH THE PLAN.")
         print("     Manual selection in the Kaggle UI is MANDATORY, not optional.")
     else:
@@ -269,8 +293,8 @@ USAGE = """usage: submission_status.py [--all] [--final-check [REF REF]]
 
 Set KAGGLE_COMPETITION to the competition slug first.
 
-Note: this tool assumes a lower-is-better metric (RMSE, logloss). For accuracy or AUC,
-invert every comparison marked "# lower is better" before relying on it.
+Note: this tool assumes a higher-is-better metric (adjusted edge Jaccard). For RMSE or
+logloss, invert every comparison marked "# higher is better" before relying on it.
 """
 
 
@@ -299,7 +323,7 @@ def main(argv: list[str]) -> int:
     rows = []
     for k, ss in by_kernel.items():
         vs = sorted(float(s.public_score) for s in ss)
-        best = min(vs)  # lower is better
+        best = max(vs)  # higher is better
         # Ties resolve to the EARLIEST submission, so a fresh replicate at the same
         # score cannot silently move the recommended ref.
         tied = sorted((s for s in ss if float(s.public_score) == best), key=lambda s: s.date)
@@ -313,7 +337,10 @@ def main(argv: list[str]) -> int:
                      st.mean(vs), st.stdev(vs) if len(vs) > 1 else float("nan"), note))
 
     print(f"\n{'best':>7}  {'n':>2}  {'mean':>7}  {'sd':>6}  {'ref':>9}  kernel")
-    for best, k, n, ref, mean, sd, note in sorted(rows):  # lower is better
+    # Higher is better; ties are deterministic by kernel slug.
+    for best, k, n, ref, mean, sd, note in sorted(
+        rows, key=lambda r: (-r[0], r[1])
+    ):
         sd_s = f"{sd:6.4f}" if sd == sd else "     -"
         print(f"{best:7.3f}  {n:2d}  {mean:7.4f}  {sd_s}  {ref:>9}  {k}{note}")
 
@@ -325,9 +352,11 @@ def main(argv: list[str]) -> int:
 
     if "--all" in argv:
         print("\nall scored, best first:")
-        for s in sorted(  # lower is better
-            (x for x in subs if str(getattr(x, "public_score", "") or "").strip()),
+        # higher is better; score_of() so a numeric 0.0 stays in the list
+        for s in sorted(
+            (x for x in subs if score_of(x)),
             key=lambda x: float(x.public_score),
+            reverse=True,
         ):
             print(f"  {float(s.public_score):7.3f}  {s.ref}  {kernel_of(s)}")
     return 0

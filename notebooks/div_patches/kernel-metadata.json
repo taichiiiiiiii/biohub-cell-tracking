@@ -1,0 +1,17 @@
+{
+  "id": "taichiiiii/biohub-div-patches",
+  "title": "biohub-div-patches",
+  "code_file": "div_patches.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_internet": "true",
+  "competition_sources": [
+    "biohub-cell-tracking-during-development"
+  ],
+  "dataset_sources": [
+    "taichiiiii/biohub-div-hardnegs"
+  ],
+  "kernel_sources": []
+}

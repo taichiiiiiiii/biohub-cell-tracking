@@ -1,0 +1,14 @@
+{
+  "id": "taichiiiii/biohub-div-pretrain",
+  "title": "biohub-div-pretrain",
+  "code_file": "div_pretrain.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "enable_internet": "false",
+  "competition_sources": [],
+  "dataset_sources": [],
+  "kernel_sources": ["josefreitasalvesneto/biohub-synthetic-dataset"]
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": "biohub.e26_screen.budget.v1",
+  "arm_wall_seconds": {
+    "public4_parity": 1200,
+    "baseline": 5400,
+    "candidate": 5400
+  },
+  "generation_wall_seconds": 14400,
+  "score_process_wall_seconds": 7200,
+  "score_stage_wall_seconds": {
+    "eval12": 1800,
+    "eval24": 3600,
+    "eval36": 300
+  },
+  "ram": {
+    "scope": "self_process",
+    "units": "bytes",
+    "measurement": "getrusage(RUSAGE_SELF).ru_maxrss",
+    "enforcement": "dataset_boundaries_and_receipts_not_os_hard_limit",
+    "limit_bytes": 8589934592
+  }
+}

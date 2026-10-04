@@ -1,0 +1,31 @@
+name: CI
+
+# Static quality gate + unit tests on synthetic data. The competition data
+# (87.6 GB of zarr volumes + GT geffs) is NOT in the repo, so anything that
+# needs real videos runs locally (scripts/local_eval.py) or on Kaggle.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true   # official/ (metric implementation) is needed by tests
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+      - name: Ruff lint
+        run: uv run ruff check src/ scripts/ tests/ notebooks/
+      - name: Unit tests
+        run: uv run --extra dev pytest -q
+      - name: Official metric tests (no torch path)
+        run: PYTHONPATH=official/src uv run --extra dev pytest official/tests/test_division_metrics.py official/tests/test_division_sandbox_examples.py -q

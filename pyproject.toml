@@ -2,7 +2,7 @@
 name = "biohub-cell-tracking"
 version = "0.1.0"
 description = "Kaggle: Biohub - Cell Tracking During Development (working repository)"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.0",
@@ -12,10 +12,10 @@ dependencies = [
     "zarr>=3.0.10,<4",
     "blosc2",
     "geff>=1.1.3",
-    # Same source as the official baseline (royerlab). metrics.py / division_metrics.py
-    # only need polars + tracksdata, so torch is NOT required locally.
+    # Same source as the official baseline (royerlab). The metric-only path
+    # needs polars + tracksdata; E23 DeepCenter parity uses the optional extra.
     "tracksdata @ git+https://github.com/royerlab/tracksdata@main",
-    "kaggle>=1.6",
+    "kaggle==2.2.4",
     "tqdm",
 ]
 
@@ -24,18 +24,32 @@ dev = [
     "pytest>=8.4",
     "ruff>=0.6",
 ]
+deepcenter = [
+    "torch==2.13.0",
+]
 
 [tool.uv]
 package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "official/src"]
+pythonpath = ["src", "official/src", "."]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
-extend-exclude = ["official", "notebooks"]
+extend-exclude = ["official", "*.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Port of a public Kaggle notebook cell (see src/biohub/public_postproc docstrings):
+# kept close to the original line breaks on purpose, so long lines are allowed
+# here instead of reflowing the ported logic.
+"src/biohub/public_postproc/*.py" = ["E501"]
+# Notebook-cell fragments executed inside the E31 kernel, where WORKING_DIR, REPO_DIR, TEST_DIR,
+# _ps and the other names are notebook globals. Their sha256 is pinned by E31 provenance
+# (src/biohub/e31_shards.py, tests/test_e31_workers.py), so they are kept byte-for-byte as run.
+"scripts/experiments/e31/e31_submission_runtime.py" = ["F821", "E402"]
+"scripts/experiments/e31/e31_dual_gpu_runtime.py" = ["F821", "I001"]

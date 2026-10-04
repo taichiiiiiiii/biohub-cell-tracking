@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "issue": 18,
+  "purpose": "fixed_data_acquisition_only",
+  "training_authorized_by_this_record": false,
+  "competition": "biohub-cell-tracking-during-development",
+  "selection_rule": "Exclude EVAL12+EVAL24; sort each lineage by SHA256(biohub-frozen-association-20260922: + stem); first 4 train, next 2 selection",
+  "train": [
+    "44b6_e35b117d", "44b6_66f9292d", "44b6_1d530831", "44b6_e57ff5c6",
+    "6bba_15403b9a", "6bba_61ecbe65", "6bba_f20478e9", "6bba_6479435d"
+  ],
+  "selection": [
+    "44b6_81c256f0", "44b6_144b256d", "6bba_d6ecebbb", "6bba_43fea39d"
+  ],
+  "expected_files": 1476,
+  "expected_bytes": 5103093406,
+  "path_size_inventory_sha256": "7e0f453c1d457e6c20e40121c91551f42ad5593114aa0a9b6918859fe08259d9",
+  "inventory_encoding": "JSON path-to-byte-size mapping, sorted keys, compact separators, UTF-8",
+  "no_replacement_videos": true,
+  "upstream_public_weight_exposure_remains": true,
+  "ground_truth_semantic_inspection": false,
+  "download_jobs": 1,
+  "download_attempts": 1,
+  "fail_fast": true
+}

@@ -1,0 +1,109 @@
+# External 0.933 account replay — offline staging runbook
+
+Status: **SOURCE VERIFIED / OFFLINE STAGING ONLY / PUSH-RUN-SUBMIT HOLD**
+
+This path prepares an account-local portability replay of the immutable public
+run documented in `external_933_provenance.md`. It does not claim a new method,
+does not expose the hidden scored CSV, and does not authorize a Kaggle request.
+The source run/session/submission join is `345883663 -> 55877457 -> 0.933`.
+
+The tracked preparer performs no network operation. It verifies the complete
+ignored provenance bundle, pinned manifest SHA-256, exact official-pull
+notebook bytes, ten-cell executable AST SHA-256, immutable view-model binding,
+and ordered Kaggle source IDs. Staging copies the exact notebook bytes and
+creates a private T4/no-internet kernel metadata file under a fresh ignored
+directory. The receipt remains `STAGED_NOT_AUTHORIZED_TO_PUSH` and the ready
+marker permits only offline review.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  scripts/prepare_external_933_replay.py --verify-only
+
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  scripts/prepare_external_933_replay.py \
+  --output-dir outputs/local/external_933_replay/<fresh-run-id>
+```
+
+The first offline staging run completed at
+`outputs/local/external_933_replay/20260902T140207JST_source_v1` without a
+Kaggle request. Its hashes are:
+
+| artifact | SHA-256 |
+|---|---|
+| `REPLAY_RECEIPT.json` | `1c03ee63d2e326c02c30d3a2dfd8ee3d3106ea7a269dec8d53d4ee58af031257` |
+| `READY.json` | `dea907bea4ea4a25646308fb3fa9b62a1c14975251364756cf127947c56886b3` |
+| exact notebook | `c7cdda0acf9dc704865165feae06d933fc85748dd4d8e9454734b91a65f0eb10` |
+| kernel metadata | `7ede307ce9bb4ccc7a205fa3706d2de83462a3fe5d47163c3243c3c19f0fdae2` |
+
+After making the unresolved dataset-version condition explicit, a second
+fresh offline staging run superseded v1 for any future review. The v1
+directory remains immutable evidence and was not reused or deleted. The v2
+directory is
+`outputs/local/external_933_replay/20260902T141535JST_source_v2`, and its
+hashes are:
+
+| artifact | SHA-256 |
+|---|---|
+| `REPLAY_RECEIPT.json` | `1912090568c297ce804ea959af4c05b0175eae4d9786494101dfa53c367a2590` |
+| `READY.json` | `391f3899b215c1312c1a9de37af602dd692bfcde64f5468156ef5ea3614c43fa` |
+| exact notebook | `c7cdda0acf9dc704865165feae06d933fc85748dd4d8e9454734b91a65f0eb10` |
+| kernel metadata | `7ede307ce9bb4ccc7a205fa3706d2de83462a3fe5d47163c3243c3c19f0fdae2` |
+
+The v2 receipt records
+`kernel_metadata_dataset_versions_resolved=false`; therefore neither the
+v1 nor v2 ready marker is push authorization.
+
+An offline field-level audit of the pinned
+`rishabh_v2_public_view_model.json` and `rishabh_kernel_version_list.json`
+found the public author identity (`rishabhr0y`, Rishabh Roy), source notebook
+identity, and the three `pilkwang` dataset slugs/source IDs, but no license,
+licence, copyright, or attribution field. This is evidence of provenance, not
+permission to reuse. The preparer therefore records
+`source_reuse_license_reviewed=false` and `attribution_recorded=false` until
+fresh authoritative evidence is reviewed and separately recorded.
+
+A third fresh offline staging run records all three unresolved conditions and
+supersedes v2 for future review. The earlier directories remain immutable
+evidence. The v3 directory is
+`outputs/local/external_933_replay/20260902T143216JST_source_v3`, with hashes:
+
+| artifact | SHA-256 |
+|---|---|
+| `REPLAY_RECEIPT.json` | `ee227f4f7e4297477cf7014df8d7847a05c5acb77ca72142d8a91f8b0cb99633` |
+| `READY.json` | `92dd0d718435c8e43a7f33647e0bf02929b0ed9fc606670072b09ac54e7e808d` |
+| exact notebook | `c7cdda0acf9dc704865165feae06d933fc85748dd4d8e9454734b91a65f0eb10` |
+| kernel metadata | `7ede307ce9bb4ccc7a205fa3706d2de83462a3fe5d47163c3243c3c19f0fdae2` |
+
+The v3 ready marker still permits only `OFFLINE_REVIEW_ONLY`; it is not push
+authorization.
+
+The executable AST was independently recomputed with CPython `3.14.7`
+(interpreter SHA-256
+`87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634`)
+and matched the pinned scored-source AST
+`0d1809e9e71ec410664ade0204b1a17896dc95954a721ea0bc46773f6fbb221d`.
+The ready marker still authorizes only `OFFLINE_REVIEW_ONLY`.
+
+Before any future `kaggle kernels push`, all of the following remain mandatory:
+
+1. the `2026-09-02 22:40 JST` no-request boundary in
+   `eval36_image_resume_runbook.md` has elapsed and a single fresh preflight
+   passes without HTTP 429;
+2. each of the three dataset slugs is freshly resolved to the exact pinned
+   source version ID (`17751825`, `17804310`, `18187037`). Kernel metadata uses
+   slugs and does not itself prove that their current latest versions still
+   equal the source run; any mismatch is HOLD, not an automatic upgrade;
+3. source reuse/license and attribution are reviewed and recorded—the staged
+   bytes are a public-source replay, not original account code;
+4. `READY.json`, `REPLAY_RECEIPT.json`, notebook, and metadata hashes are
+   reverified, and the package contains no credential or unpinned input;
+5. the operator records that this is a portability/runtime replay of an
+   already verified 0.933 anchor, not evidence of a new 0.933 claim;
+6. run completion, output schema, full hidden coverage, runtime, and the exact
+   account submission join are inspected before any score is adopted.
+
+Do not use the public-four CSV as the hidden output. Do not alter the source
+notebook in place. Any source, dataset, environment, or metadata change creates
+a separately named candidate and invalidates exact-replay language. A future
+account score below 0.933 is retained as portability evidence; it is not
+silently retried or tuned from the same leaderboard observation.
