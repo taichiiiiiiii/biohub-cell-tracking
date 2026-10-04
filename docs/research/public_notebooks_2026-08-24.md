@@ -32,14 +32,14 @@ for i in range(FORKS):                     # divider→child + divider→continu
 
 | NB | votes | FORKS / MAX_COMPONENTS | 判定 |
 |---|---|---|---|
-| `kaiwalyaatulraut/biohub-cell-tracking-solution` | **210** | 20 / 3000 | **HACK**（無条件実行） |
-| `kirneo/metric-hack-last-call-update` | 126 | 32 / 3400 | HACK |
-| `boristown/dark-agi-biohub-cell-tracking-solution` | 97 | — / 1200（V8→V9 で LB 探りながら調整） | HACK |
-| `outwrest/metric-hack-minimal-baseline-tta-2gpu` | 83 | 4 / — | HACK |
-| `amanatar/improved-metric-hack-last-call` | 74 | 5 / — | HACK |
-| `kaiwalyaatulraut/biohub-competition-solution` | 67 | 5 / 1400 | HACK |
-| `yoikoarmor/biohub-modular-last-call-turned` | 65 | 4 / — | HACK |
-| `xiaoleilian/biohub-ct-mix-divaug` | **237** | 5 / 1400 | **本体は CLEAN、最終セルだけ HACK**（`FORKS=5`、著者自ら "METRIC EXPLOIT" と明記、`VAL 0.8388 → 0.9203 (+0.0815)` と記録）。**セル 0–3 だけ使えば完全にクリーン** |
+| `kaiwalyaatulraut/biohub-cell-tracking-solution` | **210** | 20 / 3000 | **metric-exploit**（無条件実行） |
+| `kirneo/metric-hack-last-call-update` | 126 | 32 / 3400 | metric-exploit |
+| `boristown/dark-agi-biohub-cell-tracking-solution` | 97 | — / 1200（V8→V9 で LB 探りながら調整） | metric-exploit |
+| `outwrest/metric-hack-minimal-baseline-tta-2gpu` | 83 | 4 / — | metric-exploit |
+| `amanatar/improved-metric-hack-last-call` | 74 | 5 / — | metric-exploit |
+| `kaiwalyaatulraut/biohub-competition-solution` | 67 | 5 / 1400 | metric-exploit |
+| `yoikoarmor/biohub-modular-last-call-turned` | 65 | 4 / — | metric-exploit |
+| `xiaoleilian/biohub-ct-mix-divaug` | **237** | 5 / 1400 | **本体は CLEAN、最終セルだけ metric-exploit**（`FORKS=5`、著者自ら "METRIC EXPLOIT" と明記、`VAL 0.8388 → 0.9203 (+0.0815)` と記録）。**セル 0–3 だけ使えば完全にクリーン** |
 
 補足: `boristown/agi-biohub-cell-tracking`(72) は同じ配布群だがハック**なし**。votes だけで判断すると取り違える。
 
@@ -148,7 +148,7 @@ for i in range(FORKS):                     # divider→child + divider→continu
 | 9 | `seshurajup/lb-0-857-best-rule-base-v14` | 95 | ルールベース | 0.842 | ✅ | 不要 | **0** | **なし** | △ ds=2 で 8.8h |
 | 10 | `isakatsuyoshi/biohub-rule-based-baseline` | 86 | ルールベース | 0.826 | ✅ | 不要 | **0** | **なし** | ◎ ds=4 |
 | 11 | `xiaoleilian/biohub-cell-tracking-3d-u-net-training` | 21 | **学習** | 出力が 0.841 | ✅ | 要 | 0 | なし | 学習用 |
-| — | `kaiwalyaatulraut/biohub-cell-tracking-solution` 他 7 本 | 210他 | — | — | ❌ **HACK** | — | — | — | コピー禁止 |
+| — | `kaiwalyaatulraut/biohub-cell-tracking-solution` 他 7 本 | 210他 | — | — | ❌ **metric-exploit** | — | — | — | コピー禁止 |
 
 ---
 

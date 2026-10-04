@@ -15,7 +15,7 @@ Documents are mostly in Japanese; code and commit messages are in English.
 
 ## 結果（Public LB）
 
-主な提出のスコアです。すべて 1 因子だけを変えた比較で、変更の根拠と事前登録した採否の基準は台帳にあります。
+主な提出のスコアです。原則として 1 因子だけを変えた比較です（E38 と、公開 0.947 の設定を一括で取り込んだ E49 は複合）。変更の根拠と事前登録した採否の基準は台帳にあります。
 
 | 実験 | 変更 | Public |
 |---|---|---:|
@@ -38,7 +38,7 @@ Documents are mostly in Japanese; code and commit messages are in English.
 
 | パス | 内容 |
 |---|---|
-| `notebooks/` | Kaggle に push したカーネル（1 ディレクトリ = 1 カーネル）。最終提出は `notebooks/pub923_repro/`。出典は各ディレクトリの `SOURCE.md` |
+| `notebooks/` | Kaggle に push したカーネル（1 ディレクトリ = 1 カーネル）。最終提出は `notebooks/pub923_repro/`。`SOURCE.md` があるものは公開ノートからの派生で、出典はそこに書いてある。無いものは独自のカーネル |
 | `src/biohub/` | torch 不要の自前ツール（zarr/geff の読み込み、公式指標での採点、後処理のローカル移植 `public_postproc/` など） |
 | `scripts/` | データ取得、ローカル採点、実験用スクリプト（`scripts/experiments/<id>/`） |
 | `analysis/` | 実験台帳、競技仕様（[`competition_spec.md`](analysis/competition_spec.md)）、設計書、計画 |
@@ -105,7 +105,10 @@ uv run --frozen kaggle kernels push -p notebooks/pub923_repro
 uv run --frozen kaggle kernels status <user>/<kernel-slug>
 ```
 
-カーネルの入力（モデル重みとサポートパック）は、`kernel-metadata.json` の `dataset_sources` にある公開 Kaggle dataset です。
+カーネルの入力（モデル重みとサポートパック）は、`kernel-metadata.json` の `dataset_sources` に slug で書いてあります。
+最終提出 `pub923_repro` の入力は、pilkwang ほかの公開 Kaggle dataset です。`taichiiiii/*` の dataset と kernel
+（`biohub-divft-weights-v1`、`biohub-div-*`）はこのプロジェクトの非公開の成果物なので、それを入力にする notebook
+（`base2_dual_seed_harmonic`、`eval_train_raw`、`div_*`）はそのままでは再実行できません。
 自分のアカウントで push する場合は、`id` を自分の slug に書き換えてください。
 
 ## Credits and licenses
@@ -115,4 +118,4 @@ uv run --frozen kaggle kernels status <user>/<kernel-slug>
   出典と変更点は [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)、各 notebook の `SOURCE.md`、各ファイル先頭のヘッダにあります。
   原作者の皆さんに感謝します: yusuketogashi、kunaldesale2408、evgendvorkin、haideptry、beraterolelk。
 - **公式指標・ベースライン**: [royerlab/kaggle-cell-tracking-competition](https://github.com/royerlab/kaggle-cell-tracking-competition)（BSD-3-Clause、submodule として参照）。
-- **モデル入力**: pilkwang ほかの公開 Kaggle dataset を slug で参照しています（重みはこのリポジトリに含めていません）。
+- **モデル入力**: pilkwang ほかの公開 Kaggle dataset を slug で参照しています（重みはこのリポジトリに含めていません）。`taichiiiii/*` の dataset は非公開です。
